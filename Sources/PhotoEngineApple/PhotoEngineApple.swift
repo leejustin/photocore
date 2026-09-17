@@ -7,6 +7,7 @@ import UniformTypeIdentifiers
 import Vision
 
 import PhotoEngineCore
+import PhotoEnginePersistence
 
 public struct ImportedPhoto: Sendable {
     public let asset: PhotoAsset
@@ -47,7 +48,8 @@ public final class PhotoFolderImporter: @unchecked Sendable {
                 let asset = PhotoAsset(
                     url: url,
                     relativePath: Self.relativePath(for: url, root: folder),
-                    metadata: metadata
+                    metadata: metadata,
+                    sourceModifiedAt: (try? url.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate)
                 )
                 let thumbnail = try ImageMetadataReader.thumbnailData(url: url, maxPixelSize: thumbnailMaxPixelSize)
                 imported.append(ImportedPhoto(asset: asset, thumbnail: thumbnail))
@@ -379,13 +381,20 @@ public final class PhotoPipelineRunner: @unchecked Sendable {
         let imported = try importer.importFolder(folder)
         progress(PipelineProgress(stage: .discovering, completed: 1, total: 1, message: "Found \(imported.count) photos"))
 
+        let cache = AnalysisCache(sourceFolder: folder)
         var analyzed: [AnalyzedPhoto] = []
         analyzed.reserveCapacity(imported.count)
         for (index, item) in imported.enumerated() {
-            let signals = try analyzer.analyze(asset: item.asset)
+            let cached = cache.signals(for: item.asset)
+            let signals = try cached ?? analyzer.analyze(asset: item.asset)
+            if cached == nil {
+                cache.update(asset: item.asset, signals: signals)
+            }
             analyzed.append(AnalyzedPhoto(asset: item.asset, signals: signals))
-            progress(PipelineProgress(stage: .analyzing, completed: index + 1, total: imported.count, message: item.asset.relativePath))
+            let suffix = cached == nil ? "" : " (cached)"
+            progress(PipelineProgress(stage: .analyzing, completed: index + 1, total: imported.count, message: item.asset.relativePath + suffix))
         }
+        try cache.save()
 
         progress(PipelineProgress(stage: .grouping, completed: 0, total: 1, message: "Grouping duplicates and bursts"))
         let grouping = PhotoGroupingEngine.group(analyzed, profile: profile)

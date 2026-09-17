@@ -64,12 +64,14 @@ public struct PhotoAsset: Identifiable, Codable, Sendable, Equatable {
     public let url: URL
     public let relativePath: String
     public let metadata: PhotoMetadata
+    public let sourceModifiedAt: Date?
 
-    public init(id: PhotoID = PhotoID(), url: URL, relativePath: String, metadata: PhotoMetadata) {
+    public init(id: PhotoID = PhotoID(), url: URL, relativePath: String, metadata: PhotoMetadata, sourceModifiedAt: Date? = nil) {
         self.id = id
         self.url = url
         self.relativePath = relativePath
         self.metadata = metadata
+        self.sourceModifiedAt = sourceModifiedAt
     }
 }
 
