@@ -6,7 +6,7 @@ The first product surface is a simple native macOS application. The processing e
 
 ## Current status
 
-The repository is in the architecture and implementation-planning stage. No production engine code has been written yet.
+The first local vertical slice is implemented: folder discovery, JPEG/HEIC metadata, oriented thumbnails, exact/near-duplicate grouping, Vision feature vectors, quality signals, deterministic shortlisting, analysis caching, edited JPEG export, JSON manifests, a CLI, and a simple SwiftUI shell.
 
 Start with:
 
@@ -27,9 +27,27 @@ Start with:
 - SQLite through a narrow persistence adapter.
 - Versioned JSON manifests for portable pipeline inputs and outputs.
 
+## Try it locally
+
+Build the command-line engine:
+
+```bash
+swift build
+swift run photo-engine smoke-test
+swift run photo-engine catalog /path/to/photos
+swift run photo-engine run /path/to/photos --profile trip --target 60 --output ./exports/trip
+```
+
+Launch the simple Mac UI:
+
+```bash
+swift run photo-engine-mac
+```
+
+The current environment has Swift Command Line Tools but not the XCTest runtime from full Xcode, so verification currently uses the built-in smoke-test command. The package is structured so XCTest targets can be added when the full Xcode toolchain is available.
+
 ## Repository policy
 
 This repository is local-only. No Git remote is configured and nothing should be pushed without an explicit future decision by the owner.
 
 Source photographs, generated exports, private test fixtures, downloaded models, credentials, and application databases must not be committed.
-

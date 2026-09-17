@@ -244,7 +244,11 @@ public struct AppleAnalysisEngine: Sendable {
             }
         }
 
-        let aestheticScore = aestheticsRequest?.results?.first.map { Double($0.overallScore) }
+        let aestheticScore = aestheticsRequest?.results?.first.map {
+            // Current Vision revisions expose an overall score whose raw range
+            // can extend below zero. Keep the domain signal in [0, 1].
+            min(max((Double($0.overallScore) + 1.0) / 2.0, 0), 1)
+        }
         let aestheticUtility = aestheticsRequest?.results?.first?.isUtility
         return (faceSignals, min(max(faceQuality, 0), 1), aestheticScore, aestheticUtility)
     }

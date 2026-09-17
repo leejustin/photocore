@@ -507,7 +507,13 @@ public enum PhotoGroupingEngine {
 
         let groups = components.values
             .filter { $0.count > 1 }
-            .map { PhotoGroup(memberIDs: $0, kind: .burst) }
+            .map { memberIDs -> PhotoGroup in
+                let contentHashes = Set(memberIDs.compactMap { memberID in
+                    photos.first(where: { $0.id == memberID })?.signals.fingerprint.contentHash
+                })
+                let kind: PhotoGroup.Kind = contentHashes.count == 1 ? .exactDuplicate : .burst
+                return PhotoGroup(memberIDs: memberIDs, kind: kind)
+            }
         return PhotoGrouping(groups: groups)
     }
 }
@@ -526,7 +532,9 @@ public enum PhotoSelectionEngine {
             groupedIDs.formUnion(group.memberIDs)
             candidates.append(best)
             for alternate in members.dropFirst() {
-                decisions.append(SelectionDecision(photoID: alternate.id, bucket: .alternate, rank: nil, reasons: ["near-duplicate of a stronger candidate"], score: alternate.score.total))
+                let bucket: SelectionBucket = group.kind == .exactDuplicate ? .hidden : .alternate
+                let reason = group.kind == .exactDuplicate ? "exact duplicate of a stronger candidate" : "near-duplicate of a stronger candidate"
+                decisions.append(SelectionDecision(photoID: alternate.id, bucket: bucket, rank: nil, reasons: [reason], score: alternate.score.total))
             }
         }
 
