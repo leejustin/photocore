@@ -65,13 +65,24 @@ public struct PhotoAsset: Identifiable, Codable, Sendable, Equatable {
     public let relativePath: String
     public let metadata: PhotoMetadata
     public let sourceModifiedAt: Date?
+    /// A cheap content signature used to invalidate cached analysis even when
+    /// a file is replaced while preserving its size and modification date.
+    public let sourceSignature: String?
 
-    public init(id: PhotoID = PhotoID(), url: URL, relativePath: String, metadata: PhotoMetadata, sourceModifiedAt: Date? = nil) {
+    public init(
+        id: PhotoID = PhotoID(),
+        url: URL,
+        relativePath: String,
+        metadata: PhotoMetadata,
+        sourceModifiedAt: Date? = nil,
+        sourceSignature: String? = nil
+    ) {
         self.id = id
         self.url = url
         self.relativePath = relativePath
         self.metadata = metadata
         self.sourceModifiedAt = sourceModifiedAt
+        self.sourceSignature = sourceSignature
     }
 }
 
@@ -118,7 +129,10 @@ public struct AnalysisSignals: Codable, Sendable, Equatable {
     public var faceCount: Int
     public var aestheticScore: Double?
     public var aestheticUtility: Bool?
-    public var featureVector: [Float]?
+    /// A platform-owned, versioned visual descriptor. The core deliberately
+    /// treats this as opaque data and asks an injected distance provider to
+    /// compare it instead of making assumptions about the vector's metric.
+    public var featurePrint: Data?
     public var faces: [FaceSignal]
 
     public init(
@@ -130,7 +144,7 @@ public struct AnalysisSignals: Codable, Sendable, Equatable {
         faceCount: Int,
         aestheticScore: Double?,
         aestheticUtility: Bool?,
-        featureVector: [Float]?,
+        featurePrint: Data?,
         faces: [FaceSignal]
     ) {
         self.fingerprint = fingerprint
@@ -141,8 +155,14 @@ public struct AnalysisSignals: Codable, Sendable, Equatable {
         self.faceCount = faceCount
         self.aestheticScore = aestheticScore
         self.aestheticUtility = aestheticUtility
-        self.featureVector = featureVector
+        self.featurePrint = featurePrint
         self.faces = faces
+    }
+
+    public func removingFeaturePrint() -> AnalysisSignals {
+        var copy = self
+        copy.featurePrint = nil
+        return copy
     }
 }
 
@@ -155,6 +175,10 @@ public struct AnalyzedPhoto: Identifiable, Codable, Sendable, Equatable {
     public init(asset: PhotoAsset, signals: AnalysisSignals) {
         self.asset = asset
         self.signals = signals
+    }
+
+    public func removingFeaturePrint() -> AnalyzedPhoto {
+        AnalyzedPhoto(asset: asset, signals: signals.removingFeaturePrint())
     }
 }
 
@@ -213,13 +237,13 @@ public struct ScoringProfile: Codable, Sendable, Equatable {
     public static func `default`(for mode: CurationMode) -> ScoringProfile {
         switch mode {
         case .everyday:
-            ScoringProfile(mode: mode, sharpnessWeight: 0.30, exposureWeight: 0.22, faceWeight: 0.20, aestheticWeight: 0.28, diversityWeight: 0.55, targetCount: 40, burstWindow: 12, nearDuplicateHammingDistance: 8, nearDuplicateVisualDistance: 0.28)
+            ScoringProfile(mode: mode, sharpnessWeight: 0.30, exposureWeight: 0.22, faceWeight: 0.20, aestheticWeight: 0.28, diversityWeight: 0.55, targetCount: 40, burstWindow: 12, nearDuplicateHammingDistance: 8, nearDuplicateVisualDistance: 8)
         case .groupEvent:
-            ScoringProfile(mode: mode, sharpnessWeight: 0.24, exposureWeight: 0.16, faceWeight: 0.36, aestheticWeight: 0.24, diversityWeight: 0.70, targetCount: 50, burstWindow: 15, nearDuplicateHammingDistance: 9, nearDuplicateVisualDistance: 0.30)
+            ScoringProfile(mode: mode, sharpnessWeight: 0.24, exposureWeight: 0.16, faceWeight: 0.36, aestheticWeight: 0.24, diversityWeight: 0.70, targetCount: 50, burstWindow: 15, nearDuplicateHammingDistance: 9, nearDuplicateVisualDistance: 9)
         case .trip:
-            ScoringProfile(mode: mode, sharpnessWeight: 0.24, exposureWeight: 0.18, faceWeight: 0.10, aestheticWeight: 0.48, diversityWeight: 0.82, targetCount: 60, burstWindow: 20, nearDuplicateHammingDistance: 8, nearDuplicateVisualDistance: 0.26)
+            ScoringProfile(mode: mode, sharpnessWeight: 0.24, exposureWeight: 0.18, faceWeight: 0.10, aestheticWeight: 0.48, diversityWeight: 0.82, targetCount: 60, burstWindow: 20, nearDuplicateHammingDistance: 8, nearDuplicateVisualDistance: 8)
         case .creative:
-            ScoringProfile(mode: mode, sharpnessWeight: 0.12, exposureWeight: 0.10, faceWeight: 0.12, aestheticWeight: 0.66, diversityWeight: 0.90, targetCount: 60, burstWindow: 25, nearDuplicateHammingDistance: 10, nearDuplicateVisualDistance: 0.32)
+            ScoringProfile(mode: mode, sharpnessWeight: 0.12, exposureWeight: 0.10, faceWeight: 0.12, aestheticWeight: 0.66, diversityWeight: 0.90, targetCount: 60, burstWindow: 25, nearDuplicateHammingDistance: 10, nearDuplicateVisualDistance: 10)
         }
     }
 }
@@ -351,10 +375,11 @@ public struct PipelineManifest: Codable, Sendable, Equatable {
     public let grouping: PhotoGrouping
     public let shortlist: Shortlist
     public let exports: [ExportedPhoto]
+    public let warnings: [String]
 
     public init(
-        schemaVersion: Int = 1,
-        pipelineVersion: String = "0.1.0",
+        schemaVersion: Int = 2,
+        pipelineVersion: String = "0.2.0",
         createdAt: Date = Date(),
         sourceFolder: String,
         mode: CurationMode,
@@ -362,7 +387,8 @@ public struct PipelineManifest: Codable, Sendable, Equatable {
         analyzed: [AnalyzedPhoto],
         grouping: PhotoGrouping,
         shortlist: Shortlist,
-        exports: [ExportedPhoto]
+        exports: [ExportedPhoto],
+        warnings: [String] = []
     ) {
         self.schemaVersion = schemaVersion
         self.pipelineVersion = pipelineVersion
@@ -374,6 +400,7 @@ public struct PipelineManifest: Codable, Sendable, Equatable {
         self.grouping = grouping
         self.shortlist = shortlist
         self.exports = exports
+        self.warnings = warnings
     }
 }
 
@@ -384,6 +411,7 @@ public enum PhotoEngineError: LocalizedError, Sendable {
     case invalidArgument(String)
     case noPhotos(URL)
     case exportFailed(URL, String)
+    case unsafeOutputDirectory(source: URL, output: URL)
 
     public var errorDescription: String {
         switch self {
@@ -393,29 +421,8 @@ public enum PhotoEngineError: LocalizedError, Sendable {
         case .invalidArgument(let message): message
         case .noPhotos(let url): "No supported photos found in \(url.path)"
         case .exportFailed(let url, let message): "Could not export \(url.lastPathComponent): \(message)"
+        case .unsafeOutputDirectory(let source, let output): "Output folder \(output.path) must not be the source folder or live inside it (\(source.path))."
         }
-    }
-}
-
-public struct UnionFind: Sendable {
-    private var parents: [Int]
-
-    public init(count: Int) {
-        parents = Array(0..<count)
-    }
-
-    public mutating func find(_ value: Int) -> Int {
-        if parents[value] != value {
-            parents[value] = find(parents[value])
-        }
-        return parents[value]
-    }
-
-    public mutating func union(_ lhs: Int, _ rhs: Int) {
-        let left = find(lhs)
-        let right = find(rhs)
-        guard left != right else { return }
-        parents[right] = left
     }
 }
 
@@ -424,21 +431,21 @@ public enum PhotoSimilarity {
         (lhs ^ rhs).nonzeroBitCount
     }
 
-    public static func euclideanDistance(_ lhs: [Float], _ rhs: [Float]) -> Double? {
-        guard lhs.count == rhs.count, !lhs.isEmpty else { return nil }
-        var sum: Double = 0
-        for (left, right) in zip(lhs, rhs) {
-            let difference = Double(left) - Double(right)
-            sum += difference * difference
-        }
-        return sqrt(sum / Double(lhs.count))
+    public static func normalizedHammingDistance(_ lhs: UInt64, _ rhs: UInt64) -> Double {
+        Double(hammingDistance(lhs, rhs)) / 64.0
     }
 }
+
+public typealias VisualDistanceProvider = @Sendable (AnalysisSignals, AnalysisSignals) -> Double?
 
 public enum PhotoScoring {
     public static func score(_ photo: AnalyzedPhoto, profile: ScoringProfile) -> CompositeScore {
         let signals = photo.signals
-        let aesthetic = signals.aestheticScore ?? 0.5
+        let rawAesthetic = signals.aestheticScore ?? 0.5
+        // Vision marks receipts, screenshots, and similar documentary images as
+        // utility content. Keep them selectable, but do not let an aesthetic
+        // score make them dominate a photographic shortlist.
+        let aesthetic = signals.aestheticUtility == true ? min(rawAesthetic, 0.5) : rawAesthetic
         let face = signals.faceCount == 0 ? 0.5 : signals.faceQuality
         let total =
             signals.sharpness * profile.sharpnessWeight +
@@ -467,59 +474,118 @@ public enum PhotoScoring {
 }
 
 public enum PhotoGroupingEngine {
-    public static func group(_ photos: [AnalyzedPhoto], profile: ScoringProfile) -> PhotoGrouping {
+    private struct ContentUnit {
+        let memberIndices: [Int]
+        let representativeIndex: Int
+        let captureDate: Date?
+    }
+
+    private struct WorkingCluster {
+        var units: [ContentUnit]
+        let representativeIndex: Int
+        var latestDate: Date?
+    }
+
+    public static func group(
+        _ photos: [AnalyzedPhoto],
+        profile: ScoringProfile,
+        visualDistance: VisualDistanceProvider = { _, _ in nil }
+    ) -> PhotoGrouping {
         guard photos.count > 1 else { return PhotoGrouping(groups: []) }
 
-        var unionFind = UnionFind(count: photos.count)
-        for leftIndex in photos.indices {
-            for rightIndex in photos.index(after: leftIndex)..<photos.endIndex {
-                let left = photos[leftIndex]
-                let right = photos[rightIndex]
-                let timeClose: Bool
-                if let leftDate = left.asset.metadata.captureDate, let rightDate = right.asset.metadata.captureDate {
-                    timeClose = abs(leftDate.timeIntervalSince(rightDate)) <= profile.burstWindow
-                } else {
-                    // Without capture timestamps we cannot safely infer a burst
-                    // from visual similarity alone. Exact content hashes are
-                    // handled separately below.
-                    timeClose = false
-                }
+        // Exact copies form a content unit before any visual comparisons. This
+        // finds them globally without an O(n²) scan.
+        let indicesByHash = Dictionary(grouping: photos.indices) {
+            photos[$0].signals.fingerprint.contentHash
+        }
+        var units = indicesByHash.values.map { indices -> ContentUnit in
+            let ordered = indices.sorted { lhs, rhs in
+                let leftDate = photos[lhs].asset.metadata.captureDate ?? .distantPast
+                let rightDate = photos[rhs].asset.metadata.captureDate ?? .distantPast
+                return leftDate == rightDate ? lhs < rhs : leftDate < rightDate
+            }
+            let representative = ordered[0]
+            return ContentUnit(
+                memberIndices: ordered,
+                representativeIndex: representative,
+                captureDate: photos[representative].asset.metadata.captureDate
+            )
+        }
+        units.sort {
+            let leftDate = $0.captureDate ?? .distantFuture
+            let rightDate = $1.captureDate ?? .distantFuture
+            return leftDate == rightDate ? $0.representativeIndex < $1.representativeIndex : leftDate < rightDate
+        }
 
-                let hamming = PhotoSimilarity.hammingDistance(left.signals.fingerprint.perceptualHash, right.signals.fingerprint.perceptualHash)
-                let leftVector = left.signals.featureVector ?? []
-                let rightVector = right.signals.featureVector ?? []
-                let visualDistance = leftVector.isEmpty || rightVector.isEmpty
-                    ? nil
-                    : PhotoSimilarity.euclideanDistance(leftVector, rightVector)
-                let visuallyClose = hamming <= profile.nearDuplicateHammingDistance || (visualDistance.map { $0 <= profile.nearDuplicateVisualDistance } ?? false)
+        // Greedy, fixed-representative burst clustering prevents transitive
+        // A~B~C chains. Comparisons are restricted to recent clusters and
+        // capped so a pathological same-timestamp import remains bounded.
+        var clusters: [WorkingCluster] = []
+        let maximumCandidateClusters = 128
+        for unit in units {
+            guard let date = unit.captureDate else {
+                clusters.append(WorkingCluster(units: [unit], representativeIndex: unit.representativeIndex, latestDate: nil))
+                continue
+            }
 
-                let exactDuplicate = left.signals.fingerprint.contentHash == right.signals.fingerprint.contentHash
-                if exactDuplicate || (timeClose && visuallyClose) {
-                    unionFind.union(leftIndex, rightIndex)
+            var matchedCluster: Int?
+            var compared = 0
+            for clusterIndex in clusters.indices.reversed() {
+                guard compared < maximumCandidateClusters else { break }
+                guard let latestDate = clusters[clusterIndex].latestDate else { continue }
+                let interval = date.timeIntervalSince(latestDate)
+                if interval > profile.burstWindow { break }
+                guard interval >= -profile.burstWindow else { continue }
+                compared += 1
+
+                let left = photos[unit.representativeIndex]
+                let right = photos[clusters[clusterIndex].representativeIndex]
+                let hamming = PhotoSimilarity.hammingDistance(
+                    left.signals.fingerprint.perceptualHash,
+                    right.signals.fingerprint.perceptualHash
+                )
+                let visionDistance = visualDistance(left.signals, right.signals)
+                let close = hamming <= profile.nearDuplicateHammingDistance ||
+                    (visionDistance.map { $0 <= profile.nearDuplicateVisualDistance } ?? false)
+                if close {
+                    matchedCluster = clusterIndex
+                    break
                 }
+            }
+
+            if let matchedCluster {
+                var cluster = clusters.remove(at: matchedCluster)
+                cluster.units.append(unit)
+                cluster.latestDate = date
+                // Keep clusters ordered by their latest observation so the
+                // reverse scan can stop as soon as it leaves the burst window.
+                clusters.append(cluster)
+            } else {
+                clusters.append(WorkingCluster(units: [unit], representativeIndex: unit.representativeIndex, latestDate: date))
             }
         }
 
-        var components: [Int: [PhotoID]] = [:]
-        for index in photos.indices {
-            components[unionFind.find(index), default: []].append(photos[index].id)
+        let groups = clusters.compactMap { cluster -> PhotoGroup? in
+            let indices = cluster.units.flatMap(\.memberIndices)
+            guard indices.count > 1 else { return nil }
+            let kind: PhotoGroup.Kind = cluster.units.count == 1 ? .exactDuplicate : .burst
+            return PhotoGroup(memberIDs: indices.map { photos[$0].id }, kind: kind)
         }
-
-        let groups = components.values
-            .filter { $0.count > 1 }
-            .map { memberIDs -> PhotoGroup in
-                let contentHashes = Set(memberIDs.compactMap { memberID in
-                    photos.first(where: { $0.id == memberID })?.signals.fingerprint.contentHash
-                })
-                let kind: PhotoGroup.Kind = contentHashes.count == 1 ? .exactDuplicate : .burst
-                return PhotoGroup(memberIDs: memberIDs, kind: kind)
-            }
-        return PhotoGrouping(groups: groups)
+        return PhotoGrouping(groups: groups.sorted {
+            let left = $0.memberIDs.first?.description ?? ""
+            let right = $1.memberIDs.first?.description ?? ""
+            return left < right
+        })
     }
 }
 
 public enum PhotoSelectionEngine {
-    public static func select(_ photos: [ScoredPhoto], grouping: PhotoGrouping, profile: ScoringProfile) -> Shortlist {
+    public static func select(
+        _ photos: [ScoredPhoto],
+        grouping: PhotoGrouping,
+        profile: ScoringProfile,
+        visualDistance: VisualDistanceProvider = { _, _ in nil }
+    ) -> Shortlist {
         guard !photos.isEmpty else { return Shortlist(decisions: []) }
         let byID = Dictionary(uniqueKeysWithValues: photos.map { ($0.id, $0) })
         var groupedIDs = Set<PhotoID>()
@@ -527,14 +593,38 @@ public enum PhotoSelectionEngine {
         var candidates: [ScoredPhoto] = []
 
         for group in grouping.groups {
-            let members = group.memberIDs.compactMap { byID[$0] }.sorted { $0.score.total > $1.score.total }
-            guard let best = members.first else { continue }
+            let members = group.memberIDs.compactMap { byID[$0] }
+            let contentBuckets = Dictionary(grouping: members) {
+                $0.photo.signals.fingerprint.contentHash
+            }
+            let bucketRepresentatives = contentBuckets.values.compactMap {
+                $0.max { $0.score.total < $1.score.total }
+            }
+            guard let best = bucketRepresentatives.max(by: { $0.score.total < $1.score.total }) else { continue }
             groupedIDs.formUnion(group.memberIDs)
             candidates.append(best)
-            for alternate in members.dropFirst() {
-                let bucket: SelectionBucket = group.kind == .exactDuplicate ? .hidden : .alternate
-                let reason = group.kind == .exactDuplicate ? "exact duplicate of a stronger candidate" : "near-duplicate of a stronger candidate"
-                decisions.append(SelectionDecision(photoID: alternate.id, bucket: bucket, rank: nil, reasons: [reason], score: alternate.score.total))
+
+            for bucketMembers in contentBuckets.values {
+                let ordered = bucketMembers.sorted { $0.score.total > $1.score.total }
+                guard let representative = ordered.first else { continue }
+                if representative.id != best.id {
+                    decisions.append(SelectionDecision(
+                        photoID: representative.id,
+                        bucket: .alternate,
+                        rank: nil,
+                        reasons: ["near-duplicate of a stronger candidate"],
+                        score: representative.score.total
+                    ))
+                }
+                for duplicate in ordered.dropFirst() {
+                    decisions.append(SelectionDecision(
+                        photoID: duplicate.id,
+                        bucket: .hidden,
+                        rank: nil,
+                        reasons: ["exact duplicate of a stronger candidate"],
+                        score: duplicate.score.total
+                    ))
+                }
             }
         }
 
@@ -547,7 +637,18 @@ public enum PhotoSelectionEngine {
             var bestIndex = 0
             var bestValue = -Double.infinity
             for (index, candidate) in remaining.enumerated() {
-                let redundancy = selected.compactMap { PhotoSimilarity.euclideanDistance(candidate.photo.signals.featureVector ?? [], $0.photo.signals.featureVector ?? []) }.map { max(0, 1 - $0) }.max() ?? 0
+                let redundancy = selected.map { selectedPhoto -> Double in
+                    if let distance = visualDistance(candidate.photo.signals, selectedPhoto.photo.signals) {
+                        // Vision distances are unbounded; convert them into a
+                        // smooth 0...1 similarity for maximal-marginal relevance.
+                        return exp(-distance / max(profile.nearDuplicateVisualDistance, 0.001))
+                    }
+                    let normalized = PhotoSimilarity.normalizedHammingDistance(
+                        candidate.photo.signals.fingerprint.perceptualHash,
+                        selectedPhoto.photo.signals.fingerprint.perceptualHash
+                    )
+                    return 1 - normalized
+                }.max() ?? 0
                 let value = candidate.score.total - profile.diversityWeight * redundancy
                 if value > bestValue {
                     bestValue = value

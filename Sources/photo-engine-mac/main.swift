@@ -27,8 +27,11 @@ final class PhotoEngineViewModel: ObservableObject {
     @Published var isRunning = false
     @Published var result: PipelineResult?
     @Published var errorMessage: String?
+    @Published var progress: PipelineProgress?
+    @Published var rows: [CuratedRow] = []
 
     private let runner = PhotoPipelineRunner()
+    private var processingTask: Task<Void, Never>?
 
     var targetCountInt: Int { max(1, Int(targetCount.rounded())) }
 
@@ -42,16 +45,38 @@ final class PhotoEngineViewModel: ObservableObject {
 
         isRunning = true
         result = nil
+        rows = []
         errorMessage = nil
-        status = "Processing (selectedFolder.lastPathComponent)…"
+        progress = nil
+        status = "Processing \(selectedFolder.lastPathComponent)…"
 
         let runner = runner
-        Task.detached(priority: .userInitiated) { [weak self] in
+        let (progressUpdates, progressContinuation) = AsyncStream.makeStream(of: PipelineProgress.self)
+        Task { @MainActor [weak self] in
+            for await update in progressUpdates {
+                self?.progress = update
+                self?.status = update.message
+            }
+        }
+        processingTask = Task.detached(priority: .userInitiated) { [weak self] in
+            defer { progressContinuation.finish() }
+            let accessed = selectedFolder.startAccessingSecurityScopedResource()
+            defer {
+                if accessed { selectedFolder.stopAccessingSecurityScopedResource() }
+            }
             do {
                 var profile = ScoringProfile.default(for: mode)
                 profile.targetCount = targetCount
-                let result = try runner.run(folder: selectedFolder, outputDirectory: outputURL, profile: profile)
+                let result = try runner.run(
+                    folder: selectedFolder,
+                    outputDirectory: outputURL,
+                    profile: profile,
+                    progress: { update in progressContinuation.yield(update) },
+                    shouldCancel: { Task.isCancelled }
+                )
                 await self?.finish(result: result, outputURL: outputURL)
+            } catch is CancellationError {
+                await self?.cancelled()
             } catch {
                 await self?.fail(error)
             }
@@ -60,25 +85,71 @@ final class PhotoEngineViewModel: ObservableObject {
 
     func finish(result: PipelineResult, outputURL: URL) {
         self.result = result
+        rows = Self.makeRows(result: result)
         isRunning = false
-        status = "Selected (result.shortlist.selectedIDs.count) of (result.imported.count) photos."
+        progress = nil
+        let warningSuffix = result.warnings.isEmpty ? "" : " \(result.warnings.count) file(s) could not be read."
+        status = "Selected \(result.shortlist.selectedIDs.count) of \(result.imported.count) photos." + warningSuffix
+        processingTask = nil
     }
 
     func fail(_ error: Error) {
         isRunning = false
+        progress = nil
         errorMessage = error.localizedDescription
         status = "Processing failed."
+        processingTask = nil
+    }
+
+    func cancel() {
+        processingTask?.cancel()
+        status = "Cancelling…"
+    }
+
+    func cancelled() {
+        isRunning = false
+        progress = nil
+        status = "Processing cancelled."
+        processingTask = nil
     }
 
     func revealExports() {
         guard let result else { return }
         NSWorkspace.shared.activateFileViewerSelecting([result.manifestURL])
     }
+
+    private static func makeRows(result: PipelineResult) -> [CuratedRow] {
+        let analyzedByID = Dictionary(uniqueKeysWithValues: result.analyzed.map { ($0.id, $0) })
+        let scoreByID = Dictionary(uniqueKeysWithValues: result.scored.map { ($0.id, $0.score) })
+        return result.shortlist.decisions.compactMap { decision in
+            guard let analyzed = analyzedByID[decision.photoID] else { return nil }
+            return CuratedRow(
+                id: decision.photoID,
+                bucket: decision.bucket,
+                rank: decision.rank,
+                relativePath: analyzed.asset.relativePath,
+                reasons: scoreByID[decision.photoID]?.reasons ?? decision.reasons,
+                score: decision.score,
+                sourceURL: analyzed.asset.url
+            )
+        }
+    }
+}
+
+struct CuratedRow: Identifiable, Sendable {
+    let id: PhotoID
+    let bucket: SelectionBucket
+    let rank: Int?
+    let relativePath: String
+    let reasons: [String]
+    let score: Double
+    let sourceURL: URL
 }
 
 struct ContentView: View {
     @StateObject private var model = PhotoEngineViewModel()
     @State private var showingFolderPicker = false
+    @State private var visibleBucket: SelectionBucket = .selected
 
     var body: some View {
         VStack(spacing: 0) {
@@ -124,9 +195,13 @@ struct ContentView: View {
             Spacer()
             Button("Choose Folder…") { showingFolderPicker = true }
                 .keyboardShortcut("o", modifiers: [.command])
-            Button(model.isRunning ? "Processing…" : "Curate Photos") { model.process() }
-                .buttonStyle(.borderedProminent)
-                .disabled(model.selectedFolder == nil || model.isRunning)
+            if model.isRunning {
+                Button("Cancel", role: .cancel) { model.cancel() }
+            } else {
+                Button("Curate Photos") { model.process() }
+                    .buttonStyle(.borderedProminent)
+                    .disabled(model.selectedFolder == nil)
+            }
         }
         .padding(18)
     }
@@ -171,6 +246,15 @@ struct ContentView: View {
                     .textSelection(.enabled)
             }
 
+            if let progress = model.progress {
+                VStack(alignment: .leading, spacing: 6) {
+                    ProgressView(value: Double(progress.completed), total: Double(max(progress.total, 1)))
+                    Text(progress.stage.rawValue.capitalized)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            }
+
             Spacer()
         }
         .padding(16)
@@ -192,6 +276,21 @@ struct ContentView: View {
                     .font(.subheadline)
                     .foregroundStyle(.secondary)
 
+                if !result.warnings.isEmpty {
+                    DisclosureGroup("\(result.warnings.count) file(s) could not be imported") {
+                        ForEach(result.warnings.prefix(10), id: \.path) { warning in
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(URL(fileURLWithPath: warning.path).lastPathComponent)
+                                    .font(.caption.bold())
+                                Text(warning.message)
+                                    .font(.caption2)
+                                    .foregroundStyle(.secondary)
+                            }
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                        }
+                    }
+                }
+
                 HStack(spacing: 14) {
                     summaryStat(title: "Selected", value: result.shortlist.decisions.filter { $0.bucket == .selected }.count)
                     summaryStat(title: "Alternates", value: result.shortlist.decisions.filter { $0.bucket == .alternate }.count)
@@ -200,39 +299,36 @@ struct ContentView: View {
                     Spacer()
                 }
 
-                List(Array(result.shortlist.selectedIDs.enumerated()), id: \.element) { index, photoID in
-                    if let analyzed = result.analyzed.first(where: { $0.id == photoID }),
-                       let score = result.scored.first(where: { $0.id == photoID }) {
+                Picker("Bucket", selection: $visibleBucket) {
+                    Text("Selected").tag(SelectionBucket.selected)
+                    Text("Alternates").tag(SelectionBucket.alternate)
+                    Text("Review").tag(SelectionBucket.review)
+                    Text("Hidden").tag(SelectionBucket.hidden)
+                }
+                .pickerStyle(.segmented)
+
+                let visibleRows = model.rows
+                    .filter { $0.bucket == visibleBucket }
+                    .sorted { ($0.rank ?? .max, -$0.score) < ($1.rank ?? .max, -$1.score) }
+                List(Array(visibleRows.enumerated()), id: \.element.id) { index, row in
                         HStack(spacing: 12) {
-                            if let imported = result.imported.first(where: { $0.asset.id == photoID }),
-                               let image = NSImage(data: imported.thumbnail) {
-                                Image(nsImage: image)
-                                    .resizable()
-                                    .aspectRatio(contentMode: .fill)
-                                    .frame(width: 58, height: 58)
-                                    .clipShape(RoundedRectangle(cornerRadius: 6))
-                            } else {
-                                RoundedRectangle(cornerRadius: 6)
-                                    .fill(.quaternary)
-                                    .frame(width: 58, height: 58)
-                            }
+                            LocalPhotoThumbnail(url: row.sourceURL)
                             Text(String(format: "%02d", index + 1))
                                 .font(.caption.monospacedDigit())
                                 .foregroundStyle(.secondary)
                                 .frame(width: 24, alignment: .trailing)
                             VStack(alignment: .leading, spacing: 3) {
-                                Text(analyzed.asset.relativePath)
+                                Text(row.relativePath)
                                     .lineLimit(1)
-                                Text(score.score.reasons.joined(separator: " · "))
+                                Text(row.reasons.joined(separator: " · "))
                                     .font(.caption)
                                     .foregroundStyle(.secondary)
                             }
                             Spacer()
-                            Text(String(format: "%.2f", score.score.total))
+                            Text(String(format: "%.2f", row.score))
                                 .font(.caption.monospacedDigit())
                         }
                         .padding(.vertical, 3)
-                    }
                 }
                 .listStyle(.inset)
             } else {
@@ -253,6 +349,32 @@ struct ContentView: View {
             Text(title)
                 .font(.caption)
                 .foregroundStyle(.secondary)
+        }
+    }
+}
+
+private struct LocalPhotoThumbnail: View {
+    let url: URL
+    @State private var image: NSImage?
+
+    var body: some View {
+        Group {
+            if let image {
+                Image(nsImage: image)
+                    .resizable()
+                    .aspectRatio(contentMode: .fill)
+            } else {
+                RoundedRectangle(cornerRadius: 6)
+                    .fill(.quaternary)
+            }
+        }
+        .frame(width: 58, height: 58)
+        .clipShape(RoundedRectangle(cornerRadius: 6))
+        .task(id: url) {
+            image = await Task.detached(priority: .utility) {
+                guard let data = try? PhotoThumbnailProvider.data(for: url) else { return nil }
+                return NSImage(data: data)
+            }.value
         }
     }
 }

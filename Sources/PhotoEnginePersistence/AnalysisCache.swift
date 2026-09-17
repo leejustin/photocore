@@ -7,6 +7,7 @@ public final class AnalysisCache: @unchecked Sendable {
         var sourcePath: String
         var fileSize: Int64
         var modifiedAt: Date?
+        var sourceSignature: String?
         var analyzerVersion: String
         var signals: AnalysisSignals
     }
@@ -20,7 +21,7 @@ public final class AnalysisCache: @unchecked Sendable {
     private let sourceFolder: URL
     private let cacheURL: URL
     private var entries: [String: Entry]
-    private let analyzerVersion = "apple-analysis-0.1.0"
+    private let analyzerVersion: String
 
     public init(sourceFolder: URL, fileManager: FileManager = .default) {
         self.sourceFolder = sourceFolder.standardizedFileURL
@@ -29,12 +30,19 @@ public final class AnalysisCache: @unchecked Sendable {
         self.cacheURL = cacheRoot
             .appendingPathComponent("PhotoEngine", isDirectory: true)
             .appendingPathComponent(String(digest.prefix(32)), isDirectory: true)
-            .appendingPathComponent("analysis.json")
+            .appendingPathComponent("analysis-v2.plist")
         self.entries = [:]
+        self.analyzerVersion = [
+            "apple-analysis-0.2.1",
+            "feature-print-revision-2",
+            "face-quality-revision-3",
+            "thumbnail-512",
+            ProcessInfo.processInfo.operatingSystemVersionString
+        ].joined(separator: "|")
 
         guard let data = try? Data(contentsOf: cacheURL),
-              let file = try? JSONDecoder.photoEngine.decode(File.self, from: data),
-              file.schemaVersion == 1,
+              let file = try? PropertyListDecoder().decode(File.self, from: data),
+              file.schemaVersion == 2,
               file.sourceFolder == self.sourceFolder.path else { return }
         self.entries = Dictionary(uniqueKeysWithValues: file.entries.map { ($0.sourcePath, $0) })
     }
@@ -43,7 +51,8 @@ public final class AnalysisCache: @unchecked Sendable {
         guard let entry = entries[asset.url.standardizedFileURL.path],
               entry.analyzerVersion == analyzerVersion,
               entry.fileSize == asset.metadata.fileSize,
-              entry.modifiedAt == asset.sourceModifiedAt else {
+              entry.modifiedAt == asset.sourceModifiedAt,
+              entry.sourceSignature == asset.sourceSignature else {
             return nil
         }
         return entry.signals
@@ -55,34 +64,23 @@ public final class AnalysisCache: @unchecked Sendable {
             sourcePath: path,
             fileSize: asset.metadata.fileSize,
             modifiedAt: asset.sourceModifiedAt,
+            sourceSignature: asset.sourceSignature,
             analyzerVersion: analyzerVersion,
             signals: signals
         )
     }
 
+    public func retainAssets(_ assets: [PhotoAsset]) {
+        let currentPaths = Set(assets.map { $0.url.standardizedFileURL.path })
+        entries = entries.filter { currentPaths.contains($0.key) }
+    }
+
     public func save() throws {
-        let file = File(schemaVersion: 1, sourceFolder: sourceFolder.path, entries: Array(entries.values))
-        let encoder = JSONEncoder.photoEngine
+        let file = File(schemaVersion: 2, sourceFolder: sourceFolder.path, entries: Array(entries.values))
+        let encoder = PropertyListEncoder()
+        encoder.outputFormat = .binary
         let data = try encoder.encode(file)
         try FileManager.default.createDirectory(at: cacheURL.deletingLastPathComponent(), withIntermediateDirectories: true)
         try data.write(to: cacheURL, options: .atomic)
     }
 }
-
-private extension JSONEncoder {
-    static var photoEngine: JSONEncoder {
-        let encoder = JSONEncoder()
-        encoder.dateEncodingStrategy = .iso8601
-        encoder.outputFormatting = [.sortedKeys]
-        return encoder
-    }
-}
-
-private extension JSONDecoder {
-    static var photoEngine: JSONDecoder {
-        let decoder = JSONDecoder()
-        decoder.dateDecodingStrategy = .iso8601
-        return decoder
-    }
-}
-

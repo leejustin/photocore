@@ -21,7 +21,7 @@ struct PhotoEngineCommand {
 
         switch command {
         case "version":
-            print("photo-engine 0.1.0")
+            print("photo-engine 0.2.0")
         case "catalog":
             guard arguments.count >= 2 else { throw PhotoEngineError.invalidArgument("catalog requires a folder path") }
             let folder = URL(fileURLWithPath: arguments[1], isDirectory: true).standardizedFileURL
@@ -58,8 +58,14 @@ struct PhotoEngineCommand {
             print("[\(progress.stage.rawValue)] \(progress.message)\(suffix)")
         }
         print("\nSelected \(result.shortlist.selectedIDs.count) of \(result.imported.count) photos")
-        print("Exported to \(output.appendingPathComponent("shortlist").path)")
+        print("Exported to \(result.runDirectory.appendingPathComponent("shortlist").path)")
         print("Manifest: \(result.manifestURL.path)")
+        if !result.warnings.isEmpty {
+            print("Warnings: \(result.warnings.count) supported file(s) could not be imported")
+            for warning in result.warnings.prefix(10) {
+                print("- \(warning.path): \(warning.message)")
+            }
+        }
     }
 
     private static func option(_ arguments: [String], name: String) -> String? {
@@ -97,7 +103,7 @@ struct PhotoEngineCommand {
                     faceCount: 0,
                     aestheticScore: 0.8,
                     aestheticUtility: false,
-                    featureVector: [Float(index), 0],
+                    featurePrint: nil,
                     faces: []
                 )
             )
@@ -112,7 +118,7 @@ struct PhotoEngineCommand {
 
     private static func printUsage() {
         print("""
-        photo-engine 0.1.0
+        photo-engine 0.2.0
 
         Usage:
           photo-engine catalog <folder>
