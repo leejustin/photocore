@@ -1,0 +1,38 @@
+# macOS
+.DS_Store
+
+# Swift Package Manager
+.build/
+.swiftpm/
+Package.resolved
+
+# Xcode user and build state
+DerivedData/
+*.xcuserstate
+xcuserdata/
+*.xccheckout
+*.xcscmblueprint
+
+# Local application data and generated media
+data/
+imports/
+exports/
+benchmarks/results/
+fixtures/private/
+*.photoengine-library/
+
+# Models downloaded or converted locally
+Models/Downloaded/
+Models/Converted/
+
+# Credentials and local configuration
+.env
+.env.*
+!.env.example
+*.pem
+*.p12
+*.key
+
+# Scratch work is intentionally not part of the product repository
+work/
+
