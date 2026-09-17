@@ -724,8 +724,17 @@ public enum PhotoGroupingEngine {
                     right.signals.fingerprint.perceptualHash
                 )
                 let visionDistance = visualDistance(left.signals, right.signals)
-                let close = hamming <= profile.nearDuplicateHammingDistance ||
-                    (visionDistance.map { $0 <= profile.nearDuplicateVisualDistance } ?? false)
+                let hashClose = hamming <= profile.nearDuplicateHammingDistance
+                let close: Bool
+                if let visionDistance {
+                    // A low-detail perceptual hash is useful for candidate
+                    // generation but is not enough evidence on its own. When
+                    // both signals exist, require corroboration to avoid
+                    // collapsing distinct color-block or sky images.
+                    close = hashClose && visionDistance <= profile.nearDuplicateVisualDistance
+                } else {
+                    close = hashClose
+                }
                 if close {
                     matchedCluster = clusterIndex
                     break

@@ -50,7 +50,11 @@ public final class PhotoFolderImporter: @unchecked Sendable {
         try importFolderReport(folder, thumbnailMaxPixelSize: thumbnailMaxPixelSize).photos
     }
 
-    public func importFolderReport(_ folder: URL, thumbnailMaxPixelSize: Int = 512) throws -> ImportBatch {
+    public func importFolderReport(
+        _ folder: URL,
+        thumbnailMaxPixelSize: Int = 512,
+        shouldCancel: @Sendable () -> Bool = { false }
+    ) throws -> ImportBatch {
         var isDirectory: ObjCBool = false
         guard fileManager.fileExists(atPath: folder.path, isDirectory: &isDirectory), isDirectory.boolValue else {
             throw PhotoEngineError.invalidFolder(folder)
@@ -67,6 +71,8 @@ public final class PhotoFolderImporter: @unchecked Sendable {
         var imported: [ImportedPhoto] = []
         var issues: [ImportIssue] = []
         for case let url as URL in enumerator {
+            try Task.checkCancellation()
+            if shouldCancel() { throw CancellationError() }
             guard Self.isSupportedImage(url) else { continue }
             do {
                 let metadata = try ImageMetadataReader.read(url: url)
@@ -296,9 +302,19 @@ public struct AppleAnalysisEngine: Sendable {
             )
         }
         let measuredQualities = faceSignals.compactMap(\.captureQuality)
-        let faceQuality = measuredQualities.isEmpty
-            ? (observations.isEmpty ? 0.5 : 0.35)
-            : measuredQualities.reduce(0, +) / Double(measuredQualities.count)
+        let faceQuality: Double
+        if measuredQualities.isEmpty {
+            faceQuality = observations.isEmpty ? 0.5 : 0.35
+        } else {
+            // For group shots, an average can hide one very poor important
+            // face. Blend a lower quantile with the mean so a single weak
+            // subject is visible without making every background face
+            // dominate the ranking.
+            let sorted = measuredQualities.sorted()
+            let lowerQuantile = sorted[min(sorted.count - 1, sorted.count / 4)]
+            let average = sorted.reduce(0, +) / Double(sorted.count)
+            faceQuality = lowerQuantile * 0.60 + average * 0.40
+        }
 
         let aestheticScore = aestheticsRequest?.results?.first.map {
             min(max((Double($0.overallScore) + 1.0) / 2.0, 0), 1)
@@ -417,7 +433,13 @@ public final class ApplePhotoRenderer: @unchecked Sendable {
         }
 
         try FileManager.default.createDirectory(at: outputURL.deletingLastPathComponent(), withIntermediateDirectories: true)
-        guard let outputImage = context.createCGImage(image, from: image.extent) else {
+        let sRGB = CGColorSpace(name: CGColorSpace.sRGB)
+        guard let outputImage = context.createCGImage(
+            image,
+            from: image.extent,
+            format: .RGBA8,
+            colorSpace: sRGB
+        ) else {
             throw PhotoEngineError.exportFailed(photo.asset.url, "Could not render edited image")
         }
         try Self.writeJPEG(
@@ -603,7 +625,7 @@ public final class PhotoPipelineRunner: @unchecked Sendable {
             }
         }
         progress(PipelineProgress(stage: .discovering, completed: 0, total: 1, message: "Discovering photos"))
-        let importBatch = try importer.importFolderReport(folder)
+        let importBatch = try importer.importFolderReport(folder, shouldCancel: shouldCancel)
         let imported = importBatch.photos
         warnings.append(contentsOf: importBatch.issues)
         discoverySeconds = Date().timeIntervalSince(discoveryStartedAt)
