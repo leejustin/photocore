@@ -192,10 +192,30 @@ struct ContentView: View {
                     .font(.subheadline)
                     .foregroundStyle(.secondary)
 
+                HStack(spacing: 14) {
+                    summaryStat(title: "Selected", value: result.shortlist.decisions.filter { $0.bucket == .selected }.count)
+                    summaryStat(title: "Alternates", value: result.shortlist.decisions.filter { $0.bucket == .alternate }.count)
+                    summaryStat(title: "Review", value: result.shortlist.decisions.filter { $0.bucket == .review }.count)
+                    summaryStat(title: "Hidden", value: result.shortlist.decisions.filter { $0.bucket == .hidden }.count)
+                    Spacer()
+                }
+
                 List(Array(result.shortlist.selectedIDs.enumerated()), id: \.element) { index, photoID in
                     if let analyzed = result.analyzed.first(where: { $0.id == photoID }),
                        let score = result.scored.first(where: { $0.id == photoID }) {
                         HStack(spacing: 12) {
+                            if let imported = result.imported.first(where: { $0.asset.id == photoID }),
+                               let image = NSImage(data: imported.thumbnail) {
+                                Image(nsImage: image)
+                                    .resizable()
+                                    .aspectRatio(contentMode: .fill)
+                                    .frame(width: 58, height: 58)
+                                    .clipShape(RoundedRectangle(cornerRadius: 6))
+                            } else {
+                                RoundedRectangle(cornerRadius: 6)
+                                    .fill(.quaternary)
+                                    .frame(width: 58, height: 58)
+                            }
                             Text(String(format: "%02d", index + 1))
                                 .font(.caption.monospacedDigit())
                                 .foregroundStyle(.secondary)
@@ -225,5 +245,14 @@ struct ContentView: View {
         }
         .padding(18)
     }
-}
 
+    private func summaryStat(title: String, value: Int) -> some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text("\(value)")
+                .font(.headline.monospacedDigit())
+            Text(title)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
+    }
+}

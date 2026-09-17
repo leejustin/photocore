@@ -168,8 +168,8 @@ enum ImageMetadataReader {
 public struct AppleAnalysisEngine: Sendable {
     public init() {}
 
-    public func analyze(asset: PhotoAsset) throws -> AnalysisSignals {
-        let thumbnail = try ImageMetadataReader.thumbnailData(url: asset.url, maxPixelSize: 768)
+    public func analyze(asset: PhotoAsset, thumbnailData: Data? = nil) throws -> AnalysisSignals {
+        let thumbnail = try thumbnailData ?? ImageMetadataReader.thumbnailData(url: asset.url, maxPixelSize: 768)
         guard let imageSource = CGImageSourceCreateWithData(thumbnail as CFData, nil),
               let image = CGImageSourceCreateImageAtIndex(imageSource, 0, nil) else {
             throw PhotoEngineError.unreadableImage(asset.url)
@@ -177,7 +177,6 @@ public struct AppleAnalysisEngine: Sendable {
 
         let contentHash = try SHA256Hasher.hash(url: asset.url)
         let pixels = PixelStatistics(image: image)
-        let featureVector = try visionFeatureVector(url: asset.url, orientation: asset.metadata.orientation)
         let vision = try visionSignals(url: asset.url, orientation: asset.metadata.orientation)
         let fingerprint = PhotoFingerprint(contentHash: contentHash, perceptualHash: pixels.perceptualHash)
 
@@ -190,31 +189,17 @@ public struct AppleAnalysisEngine: Sendable {
             faceCount: vision.faces.count,
             aestheticScore: vision.aestheticScore,
             aestheticUtility: vision.aestheticUtility,
-            featureVector: featureVector,
+            featureVector: vision.featureVector,
             faces: vision.faces
         )
     }
 
-    private func visionFeatureVector(url: URL, orientation: Int) throws -> [Float]? {
-        let request = VNGenerateImageFeaturePrintRequest()
-        let handler = VNImageRequestHandler(url: url, orientation: CGImagePropertyOrientation(exifOrientation: orientation), options: [:])
-        try handler.perform([request])
-        guard let observation = request.results?.first else { return nil }
-        guard observation.elementType == .float else { return nil }
-        let data = observation.data
-        let count = observation.elementCount
-        return data.withUnsafeBytes { rawBuffer in
-            let values = rawBuffer.bindMemory(to: Float.self)
-            guard values.count >= count else { return nil }
-            return Array(values.prefix(count))
-        }
-    }
-
-    private func visionSignals(url: URL, orientation: Int) throws -> (faces: [FaceSignal], faceQuality: Double, aestheticScore: Double?, aestheticUtility: Bool?) {
+    private func visionSignals(url: URL, orientation: Int) throws -> (featureVector: [Float]?, faces: [FaceSignal], faceQuality: Double, aestheticScore: Double?, aestheticUtility: Bool?) {
+        let featureRequest = VNGenerateImageFeaturePrintRequest()
         let faceRequest = VNDetectFaceRectanglesRequest()
         let handler = VNImageRequestHandler(url: url, orientation: CGImagePropertyOrientation(exifOrientation: orientation), options: [:])
 
-        var requests: [VNRequest] = [faceRequest]
+        var requests: [VNRequest] = [featureRequest, faceRequest]
         var aestheticsRequest: VNCalculateImageAestheticsScoresRequest?
         if #available(macOS 15.0, *) {
             let request = VNCalculateImageAestheticsScoresRequest()
@@ -222,6 +207,19 @@ public struct AppleAnalysisEngine: Sendable {
             requests.append(request)
         }
         try handler.perform(requests)
+
+        let featureVector: [Float]?
+        if let observation = featureRequest.results?.first, observation.elementType == .float {
+            let data = observation.data
+            let count = observation.elementCount
+            featureVector = data.withUnsafeBytes { rawBuffer in
+                let values = rawBuffer.bindMemory(to: Float.self)
+                guard values.count >= count else { return nil }
+                return Array(values.prefix(count))
+            }
+        } else {
+            featureVector = nil
+        }
 
         let observations = faceRequest.results ?? []
         var faceSignals = observations.map {
@@ -231,7 +229,6 @@ public struct AppleAnalysisEngine: Sendable {
             )
         }
         var faceQuality: Double = observations.isEmpty ? 0.5 : 0
-
         if !observations.isEmpty {
             // The legacy VN request returns face observations without the newer
             // capture-quality payload on this SDK. Use a conservative geometric
@@ -245,13 +242,12 @@ public struct AppleAnalysisEngine: Sendable {
         }
 
         let aestheticScore = aestheticsRequest?.results?.first.map {
-            // Current Vision revisions expose an overall score whose raw range
-            // can extend below zero. Keep the domain signal in [0, 1].
             min(max((Double($0.overallScore) + 1.0) / 2.0, 0), 1)
         }
         let aestheticUtility = aestheticsRequest?.results?.first?.isUtility
-        return (faceSignals, min(max(faceQuality, 0), 1), aestheticScore, aestheticUtility)
+        return (featureVector, faceSignals, min(max(faceQuality, 0), 1), aestheticScore, aestheticUtility)
     }
+
 }
 
 public final class ApplePhotoRenderer: @unchecked Sendable {
@@ -390,7 +386,7 @@ public final class PhotoPipelineRunner: @unchecked Sendable {
         analyzed.reserveCapacity(imported.count)
         for (index, item) in imported.enumerated() {
             let cached = cache.signals(for: item.asset)
-            let signals = try cached ?? analyzer.analyze(asset: item.asset)
+            let signals = try cached ?? analyzer.analyze(asset: item.asset, thumbnailData: item.thumbnail)
             if cached == nil {
                 cache.update(asset: item.asset, signals: signals)
             }
