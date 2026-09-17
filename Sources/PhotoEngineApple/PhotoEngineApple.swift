@@ -748,6 +748,21 @@ public final class PhotoPipelineRunner: @unchecked Sendable {
         try catalog.applyOverride(override, sessionID: sessionID)
     }
 
+    public func recordCleanupPlan(_ plan: CleanupPlan) throws {
+        guard let catalog else { return }
+        try catalog.recordCleanupPlan(plan)
+    }
+
+    public func updateCleanupPlanStatus(
+        _ planID: UUID,
+        status: String,
+        approvedAt: Date? = nil,
+        completedAt: Date? = nil
+    ) throws {
+        guard let catalog else { return }
+        try catalog.updateCleanupPlanStatus(planID, status: status, approvedAt: approvedAt, completedAt: completedAt)
+    }
+
     public func run(
         folder: URL,
         outputDirectory: URL,

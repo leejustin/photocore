@@ -119,7 +119,13 @@ final class PhotoEngineViewModel: ObservableObject {
             if accessed { selectedFolder?.stopAccessingSecurityScopedResource() }
         }
         cleanupReport = nil
-        cleanupPlan = PhotoCleanupPlanner.preview(result: result, policy: .keepSelectedOriginals)
+        let plan = PhotoCleanupPlanner.preview(result: result, policy: .keepSelectedOriginals)
+        do {
+            try runner.recordCleanupPlan(plan)
+            cleanupPlan = plan
+        } catch {
+            errorMessage = error.localizedDescription
+        }
     }
 
     func executeCleanup() {
@@ -131,6 +137,12 @@ final class PhotoEngineViewModel: ObservableObject {
         cleanupReport = PhotoCleanupPlanner.moveToTrash(plan)
         let moved = cleanupReport?.movedPhotoIDs.count ?? 0
         let skipped = cleanupReport?.skipped.count ?? 0
+        try? runner.updateCleanupPlanStatus(
+            plan.id,
+            status: skipped == 0 ? "complete" : "partial",
+            approvedAt: Date(),
+            completedAt: Date()
+        )
         status = skipped == 0
             ? "Moved \(moved) exact duplicate(s) to Trash."
             : "Moved \(moved) duplicate(s); \(skipped) item(s) were skipped."
@@ -149,6 +161,7 @@ final class PhotoEngineViewModel: ObservableObject {
                 [SelectionOverride(photoID: photoID, bucket: bucket, reason: "user chose \(bucket.rawValue)")],
                 to: result.shortlist
             )
+            try Self.updateManifest(result.manifestURL, shortlist: updatedShortlist)
             self.result = PipelineResult(
                 sessionID: result.sessionID,
                 imported: result.imported,
@@ -215,6 +228,38 @@ final class PhotoEngineViewModel: ObservableObject {
                 previewURL: exportByID[decision.photoID]
             )
         }
+    }
+
+    private static func updateManifest(_ url: URL, shortlist: Shortlist) throws {
+        let data = try Data(contentsOf: url)
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        let manifest = try decoder.decode(PipelineManifest.self, from: data)
+        let updated = PipelineManifest(
+            sessionID: manifest.sessionID,
+            schemaVersion: manifest.schemaVersion,
+            pipelineVersion: manifest.pipelineVersion,
+            createdAt: manifest.createdAt,
+            sourceFolder: manifest.sourceFolder,
+            mode: manifest.mode,
+            profile: manifest.profile,
+            aggressiveness: manifest.aggressiveness,
+            style: manifest.style,
+            styleIntensity: manifest.styleIntensity,
+            targetCount: manifest.targetCount,
+            exportSpecification: manifest.exportSpecification,
+            assets: manifest.assets,
+            analyzed: manifest.analyzed,
+            grouping: manifest.grouping,
+            shortlist: shortlist,
+            exports: manifest.exports,
+            warnings: manifest.warnings,
+            metrics: manifest.metrics
+        )
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        encoder.dateEncodingStrategy = .iso8601
+        try encoder.encode(updated).write(to: url, options: .atomic)
     }
 
     private static func formatBytes(_ bytes: Int64) -> String {
