@@ -19,6 +19,7 @@ struct PhotoEngineChecks {
             ("culling controls and style recipes", cullingControlsAndStyleRecipes),
             ("Vision feature prints round-trip", visionFeaturePrintRoundTrip),
             ("catalog persists session records", catalogPersistsSession),
+            ("cleanup preview is conservative", cleanupPreviewIsConservative),
             ("import IDs and warnings", stableIDsAndImportWarnings),
             ("run directories are isolated", isolatedRunDirectories),
             ("metadata policy", metadataPolicy),
@@ -170,6 +171,41 @@ struct PhotoEngineChecks {
         try catalog.finishSession(sessionID)
         let summary = try catalog.storageSummary(sessionID: sessionID)
         try expect(summary.sourceBytes == asset.metadata.fileSize, "catalog summary did not persist source bytes")
+        let plan = CleanupPlan(sessionID: sessionID, policy: .keepSelectedOriginals, candidates: [])
+        try catalog.recordCleanupPlan(plan)
+        try catalog.updateCleanupPlanStatus(plan.id, status: "approved", approvedAt: Date())
+    }
+
+    private static func cleanupPreviewIsConservative() throws {
+        let fixture = try FixtureDirectory()
+        defer { fixture.remove() }
+        try fixture.writeJPEG(name: "one.jpg", red: 0.2)
+        let oneData = try Data(contentsOf: fixture.source.appendingPathComponent("one.jpg"))
+        try oneData.write(to: fixture.source.appendingPathComponent("one-copy.jpg"))
+        try fixture.writeJPEG(name: "two.jpg", red: 0.8)
+        var profile = ScoringProfile.default(for: .everyday)
+        profile.targetCount = 2
+        let result = try PhotoPipelineRunner().run(folder: fixture.source, outputDirectory: fixture.output, profile: profile)
+        let preserve = PhotoCleanupPlanner.preview(result: result, policy: .preserveOriginals)
+        try expect(preserve.candidates.isEmpty, "preserve-originals policy proposed deletion")
+        let plan = PhotoCleanupPlanner.preview(result: result, policy: .keepSelectedOriginals)
+        try expect(plan.candidates.count == 1, "exact duplicate was not proposed for cleanup")
+        let candidate = plan.candidates[0]
+        let stale = CleanupPlan(
+            sessionID: plan.sessionID,
+            policy: plan.policy,
+            candidates: [CleanupCandidate(
+                photoID: candidate.photoID,
+                sourcePath: candidate.sourcePath,
+                retainedPath: candidate.retainedPath,
+                contentHash: "stale",
+                bytes: candidate.bytes,
+                reason: candidate.reason
+            )]
+        )
+        let report = PhotoCleanupPlanner.moveToTrash(stale)
+        try expect(report.movedPhotoIDs.isEmpty, "stale cleanup approval moved a source")
+        try expect(FileManager.default.fileExists(atPath: candidate.sourcePath), "stale cleanup removed the source")
     }
 
     private static func visionFeaturePrintRoundTrip() throws {

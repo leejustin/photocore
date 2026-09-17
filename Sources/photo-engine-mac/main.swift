@@ -32,6 +32,8 @@ final class PhotoEngineViewModel: ObservableObject {
     @Published var errorMessage: String?
     @Published var progress: PipelineProgress?
     @Published var rows: [CuratedRow] = []
+    @Published var cleanupPlan: CleanupPlan?
+    @Published var cleanupReport: CleanupReport?
 
     private let runner = PhotoPipelineRunner()
     private var processingTask: Task<Void, Never>?
@@ -52,6 +54,8 @@ final class PhotoEngineViewModel: ObservableObject {
         isRunning = true
         result = nil
         rows = []
+        cleanupPlan = nil
+        cleanupReport = nil
         errorMessage = nil
         progress = nil
         status = "Processing \(selectedFolder.lastPathComponent)…"
@@ -103,6 +107,26 @@ final class PhotoEngineViewModel: ObservableObject {
         } ?? ""
         status = "Selected \(result.shortlist.selectedIDs.count) of \(result.imported.count) photos." + storageSuffix + warningSuffix
         processingTask = nil
+    }
+
+    func prepareCleanup() {
+        guard let result else { return }
+        cleanupReport = nil
+        cleanupPlan = PhotoCleanupPlanner.preview(result: result, policy: .keepSelectedOriginals)
+    }
+
+    func executeCleanup() {
+        guard let plan = cleanupPlan else { return }
+        let accessed = selectedFolder?.startAccessingSecurityScopedResource() ?? false
+        defer {
+            if accessed { selectedFolder?.stopAccessingSecurityScopedResource() }
+        }
+        cleanupReport = PhotoCleanupPlanner.moveToTrash(plan)
+        let moved = cleanupReport?.movedPhotoIDs.count ?? 0
+        let skipped = cleanupReport?.skipped.count ?? 0
+        status = skipped == 0
+            ? "Moved \(moved) exact duplicate(s) to Trash."
+            : "Moved \(moved) duplicate(s); \(skipped) item(s) were skipped."
     }
 
     func fail(_ error: Error) {
@@ -169,6 +193,7 @@ struct ContentView: View {
     @StateObject private var model = PhotoEngineViewModel()
     @State private var showingFolderPicker = false
     @State private var visibleBucket: SelectionBucket = .selected
+    @State private var confirmingCleanup = false
 
     var body: some View {
         VStack(spacing: 0) {
@@ -191,10 +216,18 @@ struct ContentView: View {
                 model.selectedFolder = urls.first
                 model.result = nil
                 model.errorMessage = nil
+                model.cleanupPlan = nil
+                model.cleanupReport = nil
                 model.status = "Ready to process \(urls.first?.lastPathComponent ?? "folder")."
             case .failure(let error):
                 model.errorMessage = error.localizedDescription
             }
+        }
+        .alert("Move exact duplicates to Trash?", isPresented: $confirmingCleanup) {
+            Button("Move to Trash", role: .destructive) { model.executeCleanup() }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("Only byte-identical copies with a verified retained occurrence will be moved. Near-duplicate photos are never included.")
         }
     }
 
@@ -354,6 +387,14 @@ struct ContentView: View {
                     Spacer()
                 }
 
+                if let summary = result.storageSummary {
+                    Text("Source \(formatBytes(summary.sourceBytes)) · generated \(formatBytes(summary.generatedBytes)) · analysis cache \(formatBytes(summary.cacheBytes))")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+
+                cleanupSection
+
                 Picker("Bucket", selection: $visibleBucket) {
                     Text("Selected").tag(SelectionBucket.selected)
                     Text("Alternates").tag(SelectionBucket.alternate)
@@ -414,6 +455,48 @@ struct ContentView: View {
         case .highlights: "Builds a compact set with fewer repetitive moments."
         }
     }
+
+    private var cleanupSection: some View {
+        GroupBox("Storage") {
+            VStack(alignment: .leading, spacing: 7) {
+                if let report = model.cleanupReport {
+                    Text("Moved \(report.movedPhotoIDs.count) exact duplicate(s) to Trash.")
+                        .font(.caption)
+                    if !report.skipped.isEmpty {
+                        Text("\(report.skipped.count) item(s) were skipped for safety.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                } else if let plan = model.cleanupPlan {
+                    Text("\(plan.candidates.count) byte-identical copy(s), \(formatBytes(plan.estimatedBytes)) estimated.")
+                        .font(.caption)
+                    if !plan.warnings.isEmpty {
+                        Text("\(plan.warnings.count) safety warning(s) need attention.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                    Button("Move exact copies to Trash", role: .destructive) {
+                        confirmingCleanup = true
+                    }
+                    .disabled(plan.candidates.isEmpty)
+                } else {
+                    Text("Sources are never changed automatically.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    Button("Review exact-duplicate cleanup") {
+                        model.prepareCleanup()
+                    }
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(4)
+        }
+    }
+
+    private func formatBytes(_ bytes: Int64) -> String {
+        ByteCountFormatter.string(fromByteCount: bytes, countStyle: .file)
+    }
+
 }
 
 private struct LocalPhotoThumbnail: View {

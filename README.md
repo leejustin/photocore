@@ -6,7 +6,7 @@ The first product surface is a simple native macOS application. The processing e
 
 ## Current status
 
-The local vertical slice is implemented: folder discovery, JPEG/HEIC metadata, stable asset identities, exact/near-duplicate grouping using Vision's supported feature-print distance, bounded parallel analysis, subject/face quality signals, configurable culling presets, deterministic shortlisting, versioned binary analysis caching, durable SQLite sessions and artifact accounting, five edited-JPEG looks, sanitized metadata, measured JSON manifests, a CLI, and a SwiftUI shell.
+The local vertical slice is implemented: folder discovery, JPEG/HEIC metadata, stable asset identities, exact/near-duplicate grouping using Vision's supported feature-print distance, bounded parallel analysis with exact-content reuse, subject/face quality signals, configurable culling presets, deterministic shortlisting, versioned binary analysis caching, durable SQLite sessions and artifact accounting, five edited-JPEG looks, sanitized metadata, measured JSON manifests, a conservative exact-duplicate cleanup preview with explicit system-Trash execution, a CLI, and a SwiftUI shell.
 
 Start with:
 
@@ -49,7 +49,7 @@ Each run is written beneath `<output>/runs/<timestamp>-<id>/`, so rerunning with
 
 `photo-engine-checks` is a fixture-driven regression executable that exercises grouping, bounded burst duration, deterministic selection, culling/style controls, Vision descriptor round-trips, durable catalog records, stable IDs, corrupt-file reporting, isolated outputs, metadata sanitization, warm-cache metrics, and unsafe output paths. It is deliberately runnable with the standalone Swift Command Line Tools installed on this machine; it can be migrated to XCTest/Swift Testing without changing the fixture coverage when the app moves into an Xcode project.
 
-Quality calibration against real labeled shoots, RAW/ARW support, person identity grouping, lens-profile chromatic-aberration correction, side-by-side correction tools, and approved source cleanup remain intentionally separate follow-up work. The current engine never modifies source photographs.
+Quality calibration against real labeled shoots, RAW/ARW support, person identity grouping, lens-profile chromatic-aberration correction, and side-by-side correction tools remain intentionally separate follow-up work. Automatic culling never modifies source photographs; cleanup is limited to an explicit, verified exact-duplicate Trash action.
 
 ## Repository policy
 

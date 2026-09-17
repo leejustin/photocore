@@ -208,6 +208,40 @@ public final class PhotoCatalog: @unchecked Sendable {
         return StorageSummary(sourceBytes: sourceBytes, generatedBytes: generatedBytes, cacheBytes: cacheBytes)
     }
 
+    public func recordCleanupPlan(_ plan: CleanupPlan, status: String = "preview") throws {
+        let targets = try encode(plan.candidates)
+        try execute(
+            """
+            INSERT INTO cleanup_plans (id, session_id, status, targets, created_at)
+            VALUES (?, ?, ?, ?, ?)
+            ON CONFLICT(id) DO UPDATE SET status=excluded.status, targets=excluded.targets
+            """,
+            bind: { statement in
+                bindText(statement, 1, plan.id.uuidString)
+                bindText(statement, 2, plan.sessionID.description)
+                bindText(statement, 3, status)
+                bindBlob(statement, 4, targets)
+                bindDouble(statement, 5, plan.createdAt.timeIntervalSince1970)
+            }
+        )
+    }
+
+    public func updateCleanupPlanStatus(_ planID: UUID, status: String, approvedAt: Date? = nil, completedAt: Date? = nil) throws {
+        try execute(
+            """
+            UPDATE cleanup_plans
+            SET status = ?, approved_at = COALESCE(?, approved_at), completed_at = COALESCE(?, completed_at)
+            WHERE id = ?
+            """,
+            bind: { statement in
+                bindText(statement, 1, status)
+                bindOptionalDouble(statement, 2, approvedAt?.timeIntervalSince1970)
+                bindOptionalDouble(statement, 3, completedAt?.timeIntervalSince1970)
+                bindText(statement, 4, planID.uuidString)
+            }
+        )
+    }
+
     private func migrate() throws {
         try executeScript(
             """

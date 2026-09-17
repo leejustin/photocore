@@ -591,6 +591,104 @@ public struct PipelineResult: Sendable {
     }
 }
 
+/// Produces a conservative, non-destructive cleanup preview. The first
+/// implementation only proposes byte-identical hidden copies; near-duplicate
+/// frames are never treated as safe deletion candidates.
+public enum PhotoCleanupPlanner {
+    public static func preview(result: PipelineResult, policy: CleanupPolicy) -> CleanupPlan {
+        guard policy != .preserveOriginals else {
+            return CleanupPlan(sessionID: result.sessionID, policy: policy, candidates: [])
+        }
+
+        let analyzedByID = Dictionary(uniqueKeysWithValues: result.analyzed.map { ($0.id, $0) })
+        let decisionsByID = Dictionary(uniqueKeysWithValues: result.shortlist.decisions.map { ($0.photoID, $0) })
+        var candidates: [CleanupCandidate] = []
+        var warnings: [String] = []
+
+        for group in result.grouping.groups where group.kind == .exactDuplicate {
+            let members = group.memberIDs.compactMap { analyzedByID[$0] }
+            guard let retained = members.first(where: {
+                decisionsByID[$0.id]?.bucket != .hidden
+            }) else {
+                warnings.append("No retained occurrence was recorded for exact-duplicate group \(group.id.uuidString).")
+                continue
+            }
+            for member in members where member.id != retained.id {
+                guard decisionsByID[member.id]?.bucket == .hidden else { continue }
+                guard member.signals.fingerprint.contentHash == retained.signals.fingerprint.contentHash else {
+                    warnings.append("Skipped \(member.asset.url.path): duplicate evidence changed.")
+                    continue
+                }
+                let sourceURL = member.asset.url.standardizedFileURL
+                let retainedURL = retained.asset.url.standardizedFileURL
+                guard sourceURL != retainedURL else { continue }
+                guard FileManager.default.isReadableFile(atPath: sourceURL.path) else {
+                    warnings.append("Skipped \(sourceURL.path): source is no longer readable.")
+                    continue
+                }
+                guard FileManager.default.isReadableFile(atPath: retainedURL.path) else {
+                    warnings.append("Skipped \(sourceURL.path): retained copy is no longer readable.")
+                    continue
+                }
+                candidates.append(CleanupCandidate(
+                    photoID: member.id,
+                    sourcePath: sourceURL.path,
+                    retainedPath: retainedURL.path,
+                    contentHash: member.signals.fingerprint.contentHash,
+                    bytes: member.asset.metadata.fileSize,
+                    reason: "byte-identical copy of a retained occurrence"
+                ))
+            }
+        }
+
+        candidates.sort { $0.sourcePath < $1.sourcePath }
+        return CleanupPlan(
+            sessionID: result.sessionID,
+            policy: policy,
+            candidates: candidates,
+            warnings: warnings
+        )
+    }
+
+    /// Executes an already-reviewed plan using the system Trash. Every source
+    /// is re-hashed immediately before mutation, so stale approvals become a
+    /// skipped item instead of deleting a changed file.
+    public static func moveToTrash(
+        _ plan: CleanupPlan,
+        fileManager: FileManager = .default
+    ) -> CleanupReport {
+        guard plan.policy != .preserveOriginals else {
+            return CleanupReport(planID: plan.id, movedPhotoIDs: [], skipped: ["Preserve-originals policy has no cleanup targets."])
+        }
+
+        var moved: [PhotoID] = []
+        var skipped = plan.warnings
+        for candidate in plan.candidates {
+            let sourceURL = URL(fileURLWithPath: candidate.sourcePath)
+            let retainedURL = URL(fileURLWithPath: candidate.retainedPath)
+            guard fileManager.isReadableFile(atPath: sourceURL.path) else {
+                skipped.append("Skipped \(candidate.sourcePath): source is missing or unreadable.")
+                continue
+            }
+            guard fileManager.isReadableFile(atPath: retainedURL.path) else {
+                skipped.append("Skipped \(candidate.sourcePath): retained copy is missing or unreadable.")
+                continue
+            }
+            do {
+                guard try SHA256Hasher.hash(url: sourceURL) == candidate.contentHash else {
+                    skipped.append("Skipped \(candidate.sourcePath): source content changed since approval.")
+                    continue
+                }
+                try fileManager.trashItem(at: sourceURL, resultingItemURL: nil)
+                moved.append(candidate.photoID)
+            } catch {
+                skipped.append("Skipped \(candidate.sourcePath): \(error.localizedDescription)")
+            }
+        }
+        return CleanupReport(planID: plan.id, movedPhotoIDs: moved, skipped: skipped)
+    }
+}
+
 public final class PhotoPipelineRunner: @unchecked Sendable {
     private let importer: PhotoFolderImporter
     private let analyzer: AppleAnalysisEngine

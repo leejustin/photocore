@@ -393,6 +393,89 @@ public enum SelectionBucket: String, Codable, Sendable {
     case hidden
 }
 
+public enum CleanupPolicy: String, Codable, CaseIterable, Sendable {
+    case preserveOriginals
+    case keepSelectedOriginals
+    case compactMemories
+
+    public var displayName: String {
+        switch self {
+        case .preserveOriginals: "Preserve originals"
+        case .keepSelectedOriginals: "Keep selected originals"
+        case .compactMemories: "Compact memories"
+        }
+    }
+}
+
+public struct CleanupCandidate: Identifiable, Codable, Sendable, Equatable {
+    public let id: UUID
+    public let photoID: PhotoID
+    public let sourcePath: String
+    public let retainedPath: String
+    public let contentHash: String
+    public let bytes: Int64
+    public let reason: String
+
+    public init(
+        id: UUID? = nil,
+        photoID: PhotoID,
+        sourcePath: String,
+        retainedPath: String,
+        contentHash: String,
+        bytes: Int64,
+        reason: String
+    ) {
+        self.id = id ?? photoID.rawValue
+        self.photoID = photoID
+        self.sourcePath = sourcePath
+        self.retainedPath = retainedPath
+        self.contentHash = contentHash
+        self.bytes = bytes
+        self.reason = reason
+    }
+}
+
+public struct CleanupPlan: Identifiable, Codable, Sendable, Equatable {
+    public let id: UUID
+    public let sessionID: SessionID
+    public let policy: CleanupPolicy
+    public let createdAt: Date
+    public let candidates: [CleanupCandidate]
+    public let warnings: [String]
+
+    public var estimatedBytes: Int64 {
+        candidates.reduce(0) { $0 + $1.bytes }
+    }
+
+    public init(
+        id: UUID = UUID(),
+        sessionID: SessionID,
+        policy: CleanupPolicy,
+        createdAt: Date = Date(),
+        candidates: [CleanupCandidate],
+        warnings: [String] = []
+    ) {
+        self.id = id
+        self.sessionID = sessionID
+        self.policy = policy
+        self.createdAt = createdAt
+        self.candidates = candidates
+        self.warnings = warnings
+    }
+}
+
+public struct CleanupReport: Codable, Sendable, Equatable {
+    public let planID: UUID
+    public let movedPhotoIDs: [PhotoID]
+    public let skipped: [String]
+
+    public init(planID: UUID, movedPhotoIDs: [PhotoID], skipped: [String]) {
+        self.planID = planID
+        self.movedPhotoIDs = movedPhotoIDs
+        self.skipped = skipped
+    }
+}
+
 public struct SelectionDecision: Identifiable, Codable, Sendable, Equatable {
     public let id: UUID
     public let photoID: PhotoID
