@@ -388,6 +388,7 @@ public struct PhotoGrouping: Codable, Sendable, Equatable {
 
 public enum SelectionBucket: String, Codable, Sendable {
     case selected
+    case protected
     case alternate
     case review
     case hidden
@@ -498,9 +499,26 @@ public struct SelectionDecision: Identifiable, Codable, Sendable, Equatable {
     }
 }
 
+public struct SelectionOverride: Codable, Sendable, Equatable {
+    public let photoID: PhotoID
+    public let bucket: SelectionBucket
+    public let reason: String
+
+    public init(photoID: PhotoID, bucket: SelectionBucket, reason: String = "user override") {
+        self.photoID = photoID
+        self.bucket = bucket
+        self.reason = reason
+    }
+}
+
 public struct Shortlist: Codable, Sendable, Equatable {
     public var decisions: [SelectionDecision]
-    public var selectedIDs: [PhotoID] { decisions.filter { $0.bucket == .selected }.sorted { ($0.rank ?? .max) < ($1.rank ?? .max) }.map(\.photoID) }
+    public var selectedIDs: [PhotoID] {
+        decisions
+            .filter { $0.bucket == .selected || $0.bucket == .protected }
+            .sorted { ($0.rank ?? .max) < ($1.rank ?? .max) }
+            .map(\.photoID)
+    }
 
     public init(decisions: [SelectionDecision]) {
         self.decisions = decisions
@@ -861,6 +879,24 @@ public enum PhotoGroupingEngine {
 }
 
 public enum PhotoSelectionEngine {
+    public static func applying(_ overrides: [SelectionOverride], to shortlist: Shortlist) -> Shortlist {
+        guard !overrides.isEmpty else { return shortlist }
+        let byID = Dictionary(uniqueKeysWithValues: overrides.map { ($0.photoID, $0) })
+        let decisions = shortlist.decisions.map { decision -> SelectionDecision in
+            guard let override = byID[decision.photoID] else { return decision }
+            let rank = override.bucket == .selected || override.bucket == .protected ? decision.rank : nil
+            return SelectionDecision(
+                id: decision.id,
+                photoID: decision.photoID,
+                bucket: override.bucket,
+                rank: rank,
+                reasons: [override.reason] + decision.reasons,
+                score: decision.score
+            )
+        }
+        return Shortlist(decisions: decisions)
+    }
+
     public static func select(
         _ photos: [ScoredPhoto],
         grouping: PhotoGrouping,

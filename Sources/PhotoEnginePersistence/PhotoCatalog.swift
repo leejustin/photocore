@@ -329,11 +329,78 @@ public final class PhotoCatalog: @unchecked Sendable {
         return values
     }
 
+    public func saveOverride(_ override: SelectionOverride) throws {
+        try execute(
+            """
+            INSERT INTO overrides (photo_id, bucket, reason, updated_at)
+            VALUES (?, ?, ?, ?)
+            ON CONFLICT(photo_id) DO UPDATE SET bucket=excluded.bucket,
+                reason=excluded.reason, updated_at=excluded.updated_at
+            """,
+            bind: { statement in
+                bindText(statement, 1, override.photoID.description)
+                bindText(statement, 2, override.bucket.rawValue)
+                bindText(statement, 3, override.reason)
+                bindDouble(statement, 4, Date().timeIntervalSince1970)
+            }
+        )
+    }
+
+    public func applyOverride(_ override: SelectionOverride, sessionID: SessionID) throws {
+        let reasons = try encode([override.reason])
+        try execute(
+            """
+            UPDATE decisions
+            SET bucket = ?, rank = NULL, reasons = ?, is_override = 1
+            WHERE session_id = ? AND photo_id = ?
+            """,
+            bind: { statement in
+                bindText(statement, 1, override.bucket.rawValue)
+                bindBlob(statement, 2, reasons)
+                bindText(statement, 3, sessionID.description)
+                bindText(statement, 4, override.photoID.description)
+            }
+        )
+    }
+
+    public func deleteOverride(photoID: PhotoID) throws {
+        try execute(
+            "DELETE FROM overrides WHERE photo_id = ?",
+            bind: { bindText($0, 1, photoID.description) }
+        )
+    }
+
+    public func overrides(for photoIDs: [PhotoID]) throws -> [SelectionOverride] {
+        guard !photoIDs.isEmpty else { return [] }
+        let placeholders = Array(repeating: "?", count: photoIDs.count).joined(separator: ",")
+        var statement: OpaquePointer?
+        let sql = "SELECT photo_id, bucket, reason FROM overrides WHERE photo_id IN (\(placeholders))"
+        guard sqlite3_prepare_v2(database, sql, -1, &statement, nil) == SQLITE_OK, let statement else {
+            throw CatalogError.statementFailed(String(cString: sqlite3_errmsg(database)))
+        }
+        defer { sqlite3_finalize(statement) }
+        for (index, photoID) in photoIDs.enumerated() {
+            bindText(statement, Int32(index + 1), photoID.description)
+        }
+        var values: [SelectionOverride] = []
+        while sqlite3_step(statement) == SQLITE_ROW {
+            guard let photoCString = sqlite3_column_text(statement, 0),
+                  let bucketCString = sqlite3_column_text(statement, 1),
+                  let photoUUID = UUID(uuidString: String(cString: photoCString)),
+                  let bucket = SelectionBucket(rawValue: String(cString: bucketCString)) else {
+                throw CatalogError.statementFailed("Stored override has invalid identity")
+            }
+            let reason = sqlite3_column_text(statement, 2).map { String(cString: $0) } ?? "user override"
+            values.append(SelectionOverride(photoID: PhotoID(photoUUID), bucket: bucket, reason: reason))
+        }
+        return values
+    }
+
     private func migrate() throws {
         let schemaVersion = try scalarInt64("PRAGMA user_version;")
-        guard schemaVersion < 1 else { return }
-        try executeScript(
-            """
+        if schemaVersion < 1 {
+            try executeScript(
+                """
             CREATE TABLE IF NOT EXISTS sessions (
                 id TEXT PRIMARY KEY,
                 source_folder TEXT NOT NULL,
@@ -392,8 +459,22 @@ public final class PhotoCatalog: @unchecked Sendable {
                 completed_at REAL
             );
             """
-        )
-        try executeScript("PRAGMA user_version = 1;")
+            )
+            try executeScript("PRAGMA user_version = 1;")
+        }
+        if schemaVersion < 2 {
+            try executeScript(
+                """
+                CREATE TABLE IF NOT EXISTS overrides (
+                    photo_id TEXT PRIMARY KEY,
+                    bucket TEXT NOT NULL,
+                    reason TEXT NOT NULL,
+                    updated_at REAL NOT NULL
+                );
+                """
+            )
+            try executeScript("PRAGMA user_version = 2;")
+        }
     }
 
     private func executeScript(_ sql: String) throws {

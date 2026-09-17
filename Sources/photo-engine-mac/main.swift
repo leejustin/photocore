@@ -133,6 +133,42 @@ final class PhotoEngineViewModel: ObservableObject {
             : "Moved \(moved) duplicate(s); \(skipped) item(s) were skipped."
     }
 
+    func override(photoID: PhotoID, bucket: SelectionBucket) {
+        guard let result else { return }
+        do {
+            try runner.setOverride(
+                sessionID: result.sessionID,
+                photoID: photoID,
+                bucket: bucket,
+                reason: "user chose \(bucket.rawValue)"
+            )
+            let updatedShortlist = PhotoSelectionEngine.applying(
+                [SelectionOverride(photoID: photoID, bucket: bucket, reason: "user chose \(bucket.rawValue)")],
+                to: result.shortlist
+            )
+            self.result = PipelineResult(
+                sessionID: result.sessionID,
+                imported: result.imported,
+                analyzed: result.analyzed,
+                grouping: result.grouping,
+                scored: result.scored,
+                shortlist: updatedShortlist,
+                exports: result.exports,
+                manifestURL: result.manifestURL,
+                warnings: result.warnings,
+                runDirectory: result.runDirectory,
+                storageSummary: result.storageSummary,
+                metrics: result.metrics
+            )
+            rows = Self.makeRows(result: self.result!)
+            cleanupPlan = nil
+            cleanupReport = nil
+            status = "Saved your \(bucket.rawValue) override."
+        } catch {
+            errorMessage = error.localizedDescription
+        }
+    }
+
     func fail(_ error: Error) {
         isRunning = false
         progress = nil
@@ -388,6 +424,7 @@ struct ContentView: View {
 
                 HStack(spacing: 14) {
                     summaryStat(title: "Selected", value: result.shortlist.decisions.filter { $0.bucket == .selected }.count)
+                    summaryStat(title: "Protected", value: result.shortlist.decisions.filter { $0.bucket == .protected }.count)
                     summaryStat(title: "Alternates", value: result.shortlist.decisions.filter { $0.bucket == .alternate }.count)
                     summaryStat(title: "Review", value: result.shortlist.decisions.filter { $0.bucket == .review }.count)
                     summaryStat(title: "Hidden", value: result.shortlist.decisions.filter { $0.bucket == .hidden }.count)
@@ -404,6 +441,7 @@ struct ContentView: View {
 
                 Picker("Bucket", selection: $visibleBucket) {
                     Text("Selected").tag(SelectionBucket.selected)
+                    Text("Protected").tag(SelectionBucket.protected)
                     Text("Alternates").tag(SelectionBucket.alternate)
                     Text("Review").tag(SelectionBucket.review)
                     Text("Hidden").tag(SelectionBucket.hidden)
@@ -430,6 +468,17 @@ struct ContentView: View {
                             Spacer()
                             Text(String(format: "%.2f", row.score))
                                 .font(.caption.monospacedDigit())
+                        }
+                        .contextMenu {
+                            Button("Keep in shortlist") {
+                                model.override(photoID: row.id, bucket: .selected)
+                            }
+                            Button("Protect") {
+                                model.override(photoID: row.id, bucket: .protected)
+                            }
+                            Button("Exclude", role: .destructive) {
+                                model.override(photoID: row.id, bucket: .hidden)
+                            }
                         }
                         .padding(.vertical, 3)
                 }

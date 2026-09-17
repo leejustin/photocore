@@ -702,6 +702,20 @@ public final class PhotoPipelineRunner: @unchecked Sendable {
         self.catalog = catalog ?? (try? PhotoCatalog())
     }
 
+    public func setOverride(
+        sessionID: SessionID,
+        photoID: PhotoID,
+        bucket: SelectionBucket,
+        reason: String = "user override"
+    ) throws {
+        guard let catalog else {
+            throw PhotoEngineError.invalidArgument("The local catalog is unavailable; this override could not be saved.")
+        }
+        let override = SelectionOverride(photoID: photoID, bucket: bucket, reason: reason)
+        try catalog.saveOverride(override)
+        try catalog.applyOverride(override, sessionID: sessionID)
+    }
+
     public func run(
         folder: URL,
         outputDirectory: URL,
@@ -878,8 +892,17 @@ public final class PhotoPipelineRunner: @unchecked Sendable {
         let scored = analyzed.map { ScoredPhoto(photo: $0, score: PhotoScoring.score($0, profile: profile)) }
         progress(PipelineProgress(stage: .selecting, completed: 0, total: 1, message: "Building shortlist"))
         let selectionStartedAt = Date()
-        let shortlist = PhotoSelectionEngine.select(scored, grouping: grouping, profile: profile, visualDistance: visualDistance)
+        var shortlist = PhotoSelectionEngine.select(scored, grouping: grouping, profile: profile, visualDistance: visualDistance)
         selectionSeconds = Date().timeIntervalSince(selectionStartedAt)
+        if let catalog, catalogHealthy {
+            do {
+                let overrides = try catalog.overrides(for: analyzed.map(\.id))
+                shortlist = PhotoSelectionEngine.applying(overrides, to: shortlist)
+            } catch {
+                catalogHealthy = false
+                warnings.append(ImportIssue(path: PhotoCatalog.defaultURL().path, message: error.localizedDescription))
+            }
+        }
         progress(PipelineProgress(stage: .selecting, completed: 1, total: 1, message: "Selected \(shortlist.selectedIDs.count) photos"))
         if let catalog, catalogHealthy {
             do {
