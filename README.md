@@ -1,6 +1,6 @@
 # Photo Engine
 
-Photo Engine is a local-first photo culling and editing system designed for Apple Silicon. It will import folders of JPEG/HEIC photographs, identify exact and near duplicates, group bursts and scenes, compute explainable quality signals, produce a diverse shortlist, apply restrained edits, and export finished JPEGs without modifying the source files.
+Photo Engine is a local-first photo culling and editing system designed for Apple Silicon. It imports folders of JPEG/HEIC photographs, identifies exact and near duplicates, groups timestamped bursts, computes explainable quality signals, produces a diverse shortlist, applies restrained edits, and exports finished JPEGs.
 
 The first product surface is a simple native macOS application. The processing engine is split into independent Swift modules so the same pipeline can later power personal camera workflows, venue capture systems, and command-line batch processing.
 
@@ -21,7 +21,7 @@ Start with:
 - Swift Package Manager for the engine, CLI, and tests.
 - SwiftUI for the macOS interface.
 - Image I/O for metadata and downsampled previews.
-- Vision for similarity, faces, quality, saliency, and aesthetics.
+- Vision for similarity, faces, capture quality, and aesthetics.
 - Core ML for optional replaceable scoring models.
 - Core Image and Accelerate for editing and image statistics.
 - A narrow persistence adapter backed by SQLite for durable sessions/artifacts plus a compact binary property-list analysis cache that can be evicted.
@@ -45,7 +45,7 @@ Launch the simple Mac UI:
 swift run photo-engine-mac
 ```
 
-Each run is written beneath `<output>/runs/<timestamp>-<id>/`, so rerunning with a smaller target cannot leave stale JPEGs in the current shortlist. Source files are never modified. Camera, lens, exposure, and capture metadata are retained in exports while GPS metadata is removed by default.
+Each run is written beneath `<output>/runs/<timestamp>-<id>/`, so rerunning with a smaller target cannot leave stale JPEGs in the current shortlist. Analysis and export never modify source files. Camera, lens, exposure, and capture metadata are retained in exports while GPS and XMP location metadata are removed by default. The optional cleanup action is separate and only proposes verified byte-identical copies.
 
 `photo-engine-checks` is a fixture-driven regression executable that exercises grouping, bounded burst duration, deterministic selection, culling/style controls, Vision descriptor round-trips, durable catalog records, stable IDs, corrupt-file reporting, isolated outputs, metadata sanitization, warm-cache metrics, and unsafe output paths. It is deliberately runnable with the standalone Swift Command Line Tools installed on this machine; it can be migrated to XCTest/Swift Testing without changing the fixture coverage when the app moves into an Xcode project.
 
