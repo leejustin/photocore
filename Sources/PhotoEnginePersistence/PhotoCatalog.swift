@@ -6,6 +6,24 @@ import SQLite3
 /// artifacts. The fast analysis cache remains separate because it is
 /// recreatable and can be evicted without affecting a user's session history.
 public final class PhotoCatalog: @unchecked Sendable {
+    public struct SessionSnapshot: Codable, Sendable, Equatable {
+        public let id: SessionID
+        public let sourceFolder: URL
+        public let mode: CurationMode
+        public let status: String
+        public let createdAt: Date
+        public let completedAt: Date?
+
+        public init(id: SessionID, sourceFolder: URL, mode: CurationMode, status: String, createdAt: Date, completedAt: Date?) {
+            self.id = id
+            self.sourceFolder = sourceFolder
+            self.mode = mode
+            self.status = status
+            self.createdAt = createdAt
+            self.completedAt = completedAt
+        }
+    }
+
     public struct StorageSummary: Codable, Sendable, Equatable {
         public let sourceBytes: Int64
         public let generatedBytes: Int64
@@ -242,6 +260,75 @@ public final class PhotoCatalog: @unchecked Sendable {
         )
     }
 
+    public func session(id: SessionID) throws -> SessionSnapshot? {
+        var statement: OpaquePointer?
+        guard sqlite3_prepare_v2(
+            database,
+            "SELECT source_folder, mode, status, created_at, completed_at FROM sessions WHERE id = ?",
+            -1,
+            &statement,
+            nil
+        ) == SQLITE_OK, let statement else {
+            throw CatalogError.statementFailed(String(cString: sqlite3_errmsg(database)))
+        }
+        defer { sqlite3_finalize(statement) }
+        bindText(statement, 1, id.description)
+        guard sqlite3_step(statement) == SQLITE_ROW else { return nil }
+        guard let sourceCString = sqlite3_column_text(statement, 0),
+              let modeCString = sqlite3_column_text(statement, 1),
+              let statusCString = sqlite3_column_text(statement, 2),
+              let mode = CurationMode(rawValue: String(cString: modeCString)) else {
+            throw CatalogError.statementFailed("Stored session has invalid fields")
+        }
+        let createdAt = Date(timeIntervalSince1970: sqlite3_column_double(statement, 3))
+        let completedAt = sqlite3_column_type(statement, 4) == SQLITE_NULL
+            ? nil
+            : Date(timeIntervalSince1970: sqlite3_column_double(statement, 4))
+        return SessionSnapshot(
+            id: id,
+            sourceFolder: URL(fileURLWithPath: String(cString: sourceCString), isDirectory: true),
+            mode: mode,
+            status: String(cString: statusCString),
+            createdAt: createdAt,
+            completedAt: completedAt
+        )
+    }
+
+    public func decisions(sessionID: SessionID) throws -> [SelectionDecision] {
+        var statement: OpaquePointer?
+        guard sqlite3_prepare_v2(
+            database,
+            "SELECT photo_id, bucket, rank, score, reasons FROM decisions WHERE session_id = ? ORDER BY COALESCE(rank, 2147483647), photo_id",
+            -1,
+            &statement,
+            nil
+        ) == SQLITE_OK, let statement else {
+            throw CatalogError.statementFailed(String(cString: sqlite3_errmsg(database)))
+        }
+        defer { sqlite3_finalize(statement) }
+        bindText(statement, 1, sessionID.description)
+        var values: [SelectionDecision] = []
+        while sqlite3_step(statement) == SQLITE_ROW {
+            guard let photoCString = sqlite3_column_text(statement, 0),
+                  let bucketCString = sqlite3_column_text(statement, 1),
+                  let photoUUID = UUID(uuidString: String(cString: photoCString)),
+                  let bucket = SelectionBucket(rawValue: String(cString: bucketCString)) else {
+                throw CatalogError.statementFailed("Stored decision has invalid identity")
+            }
+            let reasonsData = blobData(statement, column: 4)
+            let reasons = (try? JSONDecoder().decode([String].self, from: reasonsData)) ?? []
+            let rank = sqlite3_column_type(statement, 2) == SQLITE_NULL ? nil : Int(sqlite3_column_int(statement, 2))
+            values.append(SelectionDecision(
+                photoID: PhotoID(photoUUID),
+                bucket: bucket,
+                rank: rank,
+                reasons: reasons,
+                score: sqlite3_column_double(statement, 3)
+            ))
+        }
+        return values
+    }
+
     private func migrate() throws {
         let schemaVersion = try scalarInt64("PRAGMA user_version;")
         guard schemaVersion < 1 else { return }
@@ -388,4 +475,10 @@ private func bindBlob(_ statement: OpaquePointer, _ index: Int32, _ value: Data)
 private func bindOptionalBlob(_ statement: OpaquePointer, _ index: Int32, _ value: Data?) {
     guard let value else { sqlite3_bind_null(statement, index); return }
     bindBlob(statement, index, value)
+}
+
+private func blobData(_ statement: OpaquePointer, column: Int32) -> Data {
+    let count = Int(sqlite3_column_bytes(statement, column))
+    guard count > 0, let pointer = sqlite3_column_blob(statement, column) else { return Data() }
+    return Data(bytes: pointer, count: count)
 }

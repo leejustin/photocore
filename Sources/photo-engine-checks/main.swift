@@ -158,22 +158,29 @@ struct PhotoEngineChecks {
         let fixture = try FixtureDirectory()
         defer { fixture.remove() }
         let catalogURL = fixture.root.appendingPathComponent("catalog.sqlite")
-        let catalog = try PhotoCatalog(url: catalogURL)
         let sessionID = SessionID()
         let profile = ScoringProfile.default(for: .everyday)
-        try catalog.beginSession(id: sessionID, sourceFolder: fixture.source, settings: profile)
         let asset = analyzed(index: 0, hash: "catalog", perceptualHash: 0, date: nil).asset
-        try catalog.upsert(asset: asset, sessionID: sessionID, contentHash: "catalog")
-        try catalog.upsert(analysis: analyzed(index: 0, hash: "catalog", perceptualHash: 0, date: nil).signals, for: asset.id, analyzerVersion: "checks")
-        try catalog.replaceDecisions([
-            SelectionDecision(photoID: asset.id, bucket: .selected, rank: 0, reasons: ["test"], score: 1)
-        ], sessionID: sessionID)
-        try catalog.finishSession(sessionID)
-        let summary = try catalog.storageSummary(sessionID: sessionID)
+        do {
+            let catalog = try PhotoCatalog(url: catalogURL)
+            try catalog.beginSession(id: sessionID, sourceFolder: fixture.source, settings: profile)
+            try catalog.upsert(asset: asset, sessionID: sessionID, contentHash: "catalog")
+            try catalog.upsert(analysis: analyzed(index: 0, hash: "catalog", perceptualHash: 0, date: nil).signals, for: asset.id, analyzerVersion: "checks")
+            try catalog.replaceDecisions([
+                SelectionDecision(photoID: asset.id, bucket: .selected, rank: 0, reasons: ["test"], score: 1)
+            ], sessionID: sessionID)
+            try catalog.finishSession(sessionID)
+        }
+        let reopened = try PhotoCatalog(url: catalogURL)
+        let summary = try reopened.storageSummary(sessionID: sessionID)
         try expect(summary.sourceBytes == asset.metadata.fileSize, "catalog summary did not persist source bytes")
+        let snapshot = try PhotoEngineChecks.require(reopened.session(id: sessionID), "catalog session could not be reopened")
+        try expect(snapshot.status == "complete", "reopened session status was not complete")
+        let persistedDecisions = try reopened.decisions(sessionID: sessionID)
+        try expect(persistedDecisions.count == 1, "reopened decisions were not persisted")
         let plan = CleanupPlan(sessionID: sessionID, policy: .keepSelectedOriginals, candidates: [])
-        try catalog.recordCleanupPlan(plan)
-        try catalog.updateCleanupPlanStatus(plan.id, status: "approved", approvedAt: Date())
+        try reopened.recordCleanupPlan(plan)
+        try reopened.updateCleanupPlanStatus(plan.id, status: "approved", approvedAt: Date())
     }
 
     private static func cleanupPreviewIsConservative() throws {
