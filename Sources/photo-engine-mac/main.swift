@@ -101,7 +101,7 @@ final class PhotoEngineViewModel: ObservableObject {
         rows = Self.makeRows(result: result)
         isRunning = false
         progress = nil
-        let warningSuffix = result.warnings.isEmpty ? "" : " \(result.warnings.count) file(s) could not be read."
+        let warningSuffix = result.warnings.isEmpty ? "" : " \(result.warnings.count) warning(s)."
         let storageSuffix = result.storageSummary.map {
             " Generated \(Self.formatBytes($0.generatedBytes)); cache \(Self.formatBytes($0.cacheBytes))."
         } ?? ""
@@ -408,7 +408,7 @@ struct ContentView: View {
                     .foregroundStyle(.secondary)
 
                 if !result.warnings.isEmpty {
-                    DisclosureGroup("\(result.warnings.count) file(s) could not be imported") {
+                    DisclosureGroup("\(result.warnings.count) warning(s)") {
                         ForEach(result.warnings.prefix(10), id: \.path) { warning in
                             VStack(alignment: .leading, spacing: 2) {
                                 Text(URL(fileURLWithPath: warning.path).lastPathComponent)

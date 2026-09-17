@@ -699,12 +699,24 @@ public final class PhotoPipelineRunner: @unchecked Sendable {
     private let analyzer: AppleAnalysisEngine
     private let renderer: ApplePhotoRenderer
     private let catalog: PhotoCatalog?
+    private let catalogInitializationMessage: String?
 
     public init(importer: PhotoFolderImporter = PhotoFolderImporter(), analyzer: AppleAnalysisEngine = AppleAnalysisEngine(), renderer: ApplePhotoRenderer = ApplePhotoRenderer(), catalog: PhotoCatalog? = nil) {
         self.importer = importer
         self.analyzer = analyzer
         self.renderer = renderer
-        self.catalog = catalog ?? (try? PhotoCatalog())
+        if let catalog {
+            self.catalog = catalog
+            self.catalogInitializationMessage = nil
+        } else {
+            do {
+                self.catalog = try PhotoCatalog()
+                self.catalogInitializationMessage = nil
+            } catch {
+                self.catalog = nil
+                self.catalogInitializationMessage = error.localizedDescription
+            }
+        }
     }
 
     public func setOverride(
@@ -734,6 +746,12 @@ public final class PhotoPipelineRunner: @unchecked Sendable {
         let sessionID = SessionID()
         var warnings = [ImportIssue]()
         var catalogHealthy = catalog != nil
+        if let catalogInitializationMessage {
+            warnings.append(ImportIssue(
+                path: PhotoCatalog.defaultURL().path,
+                message: "Local catalog unavailable: \(catalogInitializationMessage)"
+            ))
+        }
         var sessionFinished = false
         var cacheHits = 0
         var workerCount = 0

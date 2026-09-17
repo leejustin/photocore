@@ -91,7 +91,7 @@ struct PhotoEngineCommand {
             print("Storage: \(formatBytes(summary.sourceBytes)) source + \(formatBytes(summary.generatedBytes)) generated + \(formatBytes(summary.cacheBytes)) cache")
         }
         if !result.warnings.isEmpty {
-            print("Warnings: \(result.warnings.count) supported file(s) could not be imported")
+            print("Warnings: \(result.warnings.count)")
             for warning in result.warnings.prefix(10) {
                 print("- \(warning.path): \(warning.message)")
             }
