@@ -273,7 +273,11 @@ public final class PhotoCatalog: @unchecked Sendable {
         }
         defer { sqlite3_finalize(statement) }
         bindText(statement, 1, id.description)
-        guard sqlite3_step(statement) == SQLITE_ROW else { return nil }
+        let step = sqlite3_step(statement)
+        if step == SQLITE_DONE { return nil }
+        guard step == SQLITE_ROW else {
+            throw CatalogError.statementFailed(String(cString: sqlite3_errmsg(database)))
+        }
         guard let sourceCString = sqlite3_column_text(statement, 0),
               let modeCString = sqlite3_column_text(statement, 1),
               let statusCString = sqlite3_column_text(statement, 2),
