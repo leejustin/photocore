@@ -78,6 +78,10 @@ public struct PhotoAsset: Identifiable, Codable, Sendable, Equatable {
     /// A cheap content signature used to invalidate cached analysis even when
     /// a file is replaced while preserving its size and modification date.
     public let sourceSignature: String?
+    /// A verified full-file digest when discovery has already paid for it.
+    /// This enables exact-content analysis reuse without making the core
+    /// depend on a particular hashing implementation.
+    public let contentHash: String?
 
     public init(
         id: PhotoID = PhotoID(),
@@ -85,7 +89,8 @@ public struct PhotoAsset: Identifiable, Codable, Sendable, Equatable {
         relativePath: String,
         metadata: PhotoMetadata,
         sourceModifiedAt: Date? = nil,
-        sourceSignature: String? = nil
+        sourceSignature: String? = nil,
+        contentHash: String? = nil
     ) {
         self.id = id
         self.url = url
@@ -93,6 +98,7 @@ public struct PhotoAsset: Identifiable, Codable, Sendable, Equatable {
         self.metadata = metadata
         self.sourceModifiedAt = sourceModifiedAt
         self.sourceSignature = sourceSignature
+        self.contentHash = contentHash
     }
 }
 
@@ -549,6 +555,7 @@ public struct PipelineMetrics: Codable, Sendable, Equatable {
     public let selectionSeconds: Double
     public let exportSeconds: Double
     public let cacheHits: Int
+    public let exactContentReuses: Int
     public let analyzedCount: Int
     public let workerCount: Int
 
@@ -560,6 +567,7 @@ public struct PipelineMetrics: Codable, Sendable, Equatable {
         selectionSeconds: Double = 0,
         exportSeconds: Double = 0,
         cacheHits: Int = 0,
+        exactContentReuses: Int = 0,
         analyzedCount: Int = 0,
         workerCount: Int = 1
     ) {
@@ -570,6 +578,7 @@ public struct PipelineMetrics: Codable, Sendable, Equatable {
         self.selectionSeconds = selectionSeconds
         self.exportSeconds = exportSeconds
         self.cacheHits = cacheHits
+        self.exactContentReuses = exactContentReuses
         self.analyzedCount = analyzedCount
         self.workerCount = workerCount
     }

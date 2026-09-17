@@ -79,13 +79,15 @@ public final class PhotoFolderImporter: @unchecked Sendable {
                 let relativePath = Self.relativePath(for: url, root: folder)
                 let sourceModifiedAt = (try? url.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate)
                 let sourceSignature = try SHA256Hasher.quickSignature(url: url)
+                let contentHash = try SHA256Hasher.hash(url: url)
                 let asset = PhotoAsset(
-                    id: PhotoID(Self.stableUUID(relativePath: relativePath, metadata: metadata, sourceSignature: sourceSignature)),
+                    id: PhotoID(Self.stableUUID(relativePath: relativePath, metadata: metadata, sourceFingerprint: contentHash)),
                     url: url,
                     relativePath: relativePath,
                     metadata: metadata,
                     sourceModifiedAt: sourceModifiedAt,
-                    sourceSignature: sourceSignature
+                    sourceSignature: sourceSignature,
+                    contentHash: contentHash
                 )
                 let thumbnail = try ImageMetadataReader.thumbnailData(url: url, maxPixelSize: thumbnailMaxPixelSize)
                 imported.append(ImportedPhoto(asset: asset, thumbnail: thumbnail))
@@ -119,8 +121,8 @@ public final class PhotoFolderImporter: @unchecked Sendable {
         return path.hasPrefix(rootPath) ? String(path.dropFirst(rootPath.count)) : url.lastPathComponent
     }
 
-    private static func stableUUID(relativePath: String, metadata: PhotoMetadata, sourceSignature: String) -> UUID {
-        let material = "\(relativePath.precomposedStringWithCanonicalMapping)\u{0}\(metadata.fileSize)\u{0}\(sourceSignature)"
+    private static func stableUUID(relativePath: String, metadata: PhotoMetadata, sourceFingerprint: String) -> UUID {
+        let material = "\(relativePath.precomposedStringWithCanonicalMapping)\u{0}\(metadata.fileSize)\u{0}\(sourceFingerprint)"
         var bytes = Array(SHA256.hash(data: Data(material.utf8)).prefix(16))
         // RFC 9562 variant and custom/version-8 bits for a deterministic
         // application-defined identifier derived from SHA-256.
@@ -247,7 +249,12 @@ public struct AppleAnalysisEngine: Sendable {
             throw PhotoEngineError.unreadableImage(asset.url)
         }
 
-        let contentHash = try SHA256Hasher.hash(url: asset.url)
+        let contentHash: String
+        if let existingHash = asset.contentHash {
+            contentHash = existingHash
+        } else {
+            contentHash = try SHA256Hasher.hash(url: asset.url)
+        }
         let pixels = PixelStatistics(image: image)
         let vision = try visionSignals(url: asset.url, orientation: asset.metadata.orientation)
         let subject = SubjectFocusAssessment(image: image, faces: vision.faces)
@@ -645,9 +652,13 @@ public final class PhotoPipelineRunner: @unchecked Sendable {
         let cache = AnalysisCache(sourceFolder: folder)
         let accumulator = ConcurrentAnalysisAccumulator(count: imported.count)
         var uncachedIndices: [Int] = []
+        var cachedSignalsByContentHash: [String: AnalysisSignals] = [:]
         for (index, item) in imported.enumerated() {
             if let cached = cache.signals(for: item.asset) {
                 cacheHits += 1
+                if let contentHash = item.asset.contentHash {
+                    cachedSignalsByContentHash[contentHash] = cached
+                }
                 accumulator.record(cached, at: index) { completed in
                     progress(PipelineProgress(
                         stage: .analyzing,
@@ -661,8 +672,37 @@ public final class PhotoPipelineRunner: @unchecked Sendable {
             }
         }
 
-        if !uncachedIndices.isEmpty {
-            let pendingIndices = uncachedIndices
+        var exactReuseCount = 0
+        var duplicateIndicesByRepresentative: [Int: [Int]] = [:]
+        var analysisRepresentatives: [Int] = []
+        for indices in Dictionary(grouping: uncachedIndices, by: { index in
+            imported[index].asset.contentHash ?? imported[index].asset.url.standardizedFileURL.path
+        }).values {
+            let ordered = indices.sorted()
+            guard let representative = ordered.first else { continue }
+            if let contentHash = imported[representative].asset.contentHash,
+               let cached = cachedSignalsByContentHash[contentHash] {
+                for index in ordered {
+                    exactReuseCount += 1
+                    let item = imported[index]
+                    accumulator.record(cached, at: index) { completed in
+                        progress(PipelineProgress(
+                            stage: .analyzing,
+                            completed: completed,
+                            total: imported.count,
+                            message: item.asset.relativePath + " (exact-content reuse)"
+                        ))
+                    }
+                }
+            } else {
+                analysisRepresentatives.append(representative)
+                duplicateIndicesByRepresentative[representative] = Array(ordered.dropFirst())
+            }
+        }
+        analysisRepresentatives.sort()
+
+        if !analysisRepresentatives.isEmpty {
+            let pendingIndices = analysisRepresentatives
             let workers = min(max(ProcessInfo.processInfo.activeProcessorCount / 2, 1), 4, pendingIndices.count)
             workerCount = workers
             let analysisStartedAt = Date()
@@ -684,6 +724,21 @@ public final class PhotoPipelineRunner: @unchecked Sendable {
                     } catch {
                         accumulator.record(error: error)
                         return
+                    }
+                }
+            }
+            for representative in analysisRepresentatives {
+                guard let signals = accumulator.result(at: representative) else { continue }
+                for index in duplicateIndicesByRepresentative[representative] ?? [] {
+                    exactReuseCount += 1
+                    let item = imported[index]
+                    accumulator.record(signals, at: index) { completed in
+                        progress(PipelineProgress(
+                            stage: .analyzing,
+                            completed: completed,
+                            total: imported.count,
+                            message: item.asset.relativePath + " (exact-content reuse)"
+                        ))
                     }
                 }
             }
@@ -806,6 +861,7 @@ public final class PhotoPipelineRunner: @unchecked Sendable {
                 selectionSeconds: selectionSeconds,
                 exportSeconds: exportSeconds,
                 cacheHits: cacheHits,
+                exactContentReuses: exactReuseCount,
                 analyzedCount: analyzed.count,
                 workerCount: max(workerCount, 1)
             )
@@ -882,6 +938,10 @@ private final class ConcurrentAnalysisAccumulator: @unchecked Sendable {
 
     var firstError: Error? {
         lock.withLock { error }
+    }
+
+    func result(at index: Int) -> AnalysisSignals? {
+        lock.withLock { results[index] }
     }
 
     func record(

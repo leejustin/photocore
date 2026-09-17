@@ -189,6 +189,8 @@ struct PhotoEngineChecks {
         let fixture = try FixtureDirectory()
         defer { fixture.remove() }
         try fixture.writeJPEG(name: "one.jpg", red: 0.2)
+        let oneData = try Data(contentsOf: fixture.source.appendingPathComponent("one.jpg"))
+        try oneData.write(to: fixture.source.appendingPathComponent("one-copy.jpg"))
         try fixture.writeJPEG(name: "two.jpg", red: 0.5)
         try fixture.writeJPEG(name: "three.jpg", red: 0.8)
         let runner = PhotoPipelineRunner()
@@ -201,6 +203,7 @@ struct PhotoEngineChecks {
         let secondCount = try jpegCount(in: second.runDirectory.appendingPathComponent("shortlist"))
         try expect(first.runDirectory != second.runDirectory, "runs shared an output directory")
         try expect(firstCount == 3, "first run lost exports")
+        try expect(first.metrics.exactContentReuses == 1, "exact-content analysis was not reused")
         try expect(secondCount == 1, "second run contains stale exports")
         try expect(second.exports.count == 1, "manifest/export count mismatch")
         let manifestData = try Data(contentsOf: second.manifestURL)
@@ -209,7 +212,7 @@ struct PhotoEngineChecks {
         let manifest = try decoder.decode(PipelineManifest.self, from: manifestData)
         try expect(manifest.pipelineVersion == "0.3.0", "manifest version was not updated")
         try expect(manifest.targetCount == 1, "manifest did not persist target count")
-        try expect(manifest.metrics.cacheHits == 3, "warm run did not reuse analysis cache")
+        try expect(manifest.metrics.cacheHits == 4, "warm run did not reuse analysis cache")
     }
 
     private static func metadataPolicy() throws {

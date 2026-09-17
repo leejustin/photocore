@@ -8,6 +8,7 @@ public final class AnalysisCache: @unchecked Sendable {
         var fileSize: Int64
         var modifiedAt: Date?
         var sourceSignature: String?
+        var contentHash: String?
         var analyzerVersion: String
         var signals: AnalysisSignals
     }
@@ -53,7 +54,8 @@ public final class AnalysisCache: @unchecked Sendable {
               entry.analyzerVersion == analyzerVersion,
               entry.fileSize == asset.metadata.fileSize,
               entry.modifiedAt == asset.sourceModifiedAt,
-              entry.sourceSignature == asset.sourceSignature else {
+              entry.sourceSignature == asset.sourceSignature,
+              entry.contentHash == asset.contentHash else {
             return nil
         }
         return entry.signals
@@ -66,6 +68,7 @@ public final class AnalysisCache: @unchecked Sendable {
             fileSize: asset.metadata.fileSize,
             modifiedAt: asset.sourceModifiedAt,
             sourceSignature: asset.sourceSignature,
+            contentHash: asset.contentHash,
             analyzerVersion: analyzerVersion,
             signals: signals
         )

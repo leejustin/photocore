@@ -86,7 +86,7 @@ struct PhotoEngineCommand {
         print("Session: \(result.sessionID)")
         print("Exported to \(result.runDirectory.appendingPathComponent("shortlist").path)")
         print("Manifest: \(result.manifestURL.path)")
-        print(String(format: "Timing: %.2fs total, %.2fs analysis, %d cache hits", result.metrics.totalSeconds, result.metrics.analysisSeconds, result.metrics.cacheHits))
+        print(String(format: "Timing: %.2fs total, %.2fs analysis, %d cache hits, %d exact-content reuses", result.metrics.totalSeconds, result.metrics.analysisSeconds, result.metrics.cacheHits, result.metrics.exactContentReuses))
         if let summary = result.storageSummary {
             print("Storage: \(formatBytes(summary.sourceBytes)) source + \(formatBytes(summary.generatedBytes)) generated + \(formatBytes(summary.cacheBytes)) cache")
         }

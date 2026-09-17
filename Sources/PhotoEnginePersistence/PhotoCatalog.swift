@@ -109,7 +109,7 @@ public final class PhotoCatalog: @unchecked Sendable {
                 bindText(statement, 2, sessionID.description)
                 bindText(statement, 3, asset.url.standardizedFileURL.path)
                 bindText(statement, 4, asset.relativePath)
-                bindText(statement, 5, contentHash ?? "")
+                bindText(statement, 5, contentHash ?? asset.contentHash ?? "")
                 bindOptionalText(statement, 6, asset.sourceSignature)
                 bindInt64(statement, 7, asset.metadata.fileSize)
                 bindOptionalDouble(statement, 8, asset.sourceModifiedAt?.timeIntervalSince1970)
