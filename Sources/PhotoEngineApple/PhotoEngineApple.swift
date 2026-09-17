@@ -985,6 +985,7 @@ public final class PhotoPipelineRunner: @unchecked Sendable {
             pipelineVersion: "0.3.0",
             sourceFolder: folder.path,
             mode: profile.mode,
+            profile: profile,
             aggressiveness: profile.aggressiveness,
             style: profile.style,
             styleIntensity: profile.styleIntensity,

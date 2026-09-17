@@ -262,6 +262,7 @@ struct PhotoEngineChecks {
         let manifest = try decoder.decode(PipelineManifest.self, from: manifestData)
         try expect(manifest.pipelineVersion == "0.3.0", "manifest version was not updated")
         try expect(manifest.targetCount == 1, "manifest did not persist target count")
+        try expect(manifest.profile.targetCount == 1, "manifest did not persist the complete profile")
         try expect(manifest.metrics.cacheHits == 4, "warm run did not reuse analysis cache")
     }
 

@@ -570,6 +570,7 @@ public struct PipelineManifest: Codable, Sendable, Equatable {
     public let createdAt: Date
     public let sourceFolder: String
     public let mode: CurationMode
+    public let profile: ScoringProfile
     public let aggressiveness: CullingAggressiveness
     public let style: StylePreset
     public let styleIntensity: Double
@@ -589,6 +590,7 @@ public struct PipelineManifest: Codable, Sendable, Equatable {
         createdAt: Date = Date(),
         sourceFolder: String,
         mode: CurationMode,
+        profile: ScoringProfile? = nil,
         aggressiveness: CullingAggressiveness = .balanced,
         style: StylePreset = .natural,
         styleIntensity: Double = 0.65,
@@ -607,6 +609,7 @@ public struct PipelineManifest: Codable, Sendable, Equatable {
         self.createdAt = createdAt
         self.sourceFolder = sourceFolder
         self.mode = mode
+        self.profile = profile ?? ScoringProfile.default(for: mode)
         self.aggressiveness = aggressiveness
         self.style = style
         self.styleIntensity = styleIntensity
@@ -623,7 +626,7 @@ public struct PipelineManifest: Codable, Sendable, Equatable {
     private enum CodingKeys: String, CodingKey {
         case sessionID, schemaVersion, pipelineVersion, createdAt, sourceFolder,
              mode, aggressiveness, style, styleIntensity, targetCount, assets,
-             analyzed, grouping, shortlist, exports, warnings, metrics
+             profile, analyzed, grouping, shortlist, exports, warnings, metrics
     }
 
     public init(from decoder: Decoder) throws {
@@ -634,6 +637,7 @@ public struct PipelineManifest: Codable, Sendable, Equatable {
         createdAt = try container.decodeIfPresent(Date.self, forKey: .createdAt) ?? Date.distantPast
         sourceFolder = try container.decode(String.self, forKey: .sourceFolder)
         mode = try container.decodeIfPresent(CurationMode.self, forKey: .mode) ?? .everyday
+        profile = try container.decodeIfPresent(ScoringProfile.self, forKey: .profile) ?? ScoringProfile.default(for: mode)
         aggressiveness = try container.decodeIfPresent(CullingAggressiveness.self, forKey: .aggressiveness) ?? .balanced
         style = try container.decodeIfPresent(StylePreset.self, forKey: .style) ?? .natural
         styleIntensity = try container.decodeIfPresent(Double.self, forKey: .styleIntensity) ?? 0.65
