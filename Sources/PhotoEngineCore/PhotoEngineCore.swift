@@ -325,12 +325,14 @@ public struct ScoringProfile: Codable, Sendable, Equatable {
             nearDuplicateHammingDistance = max(nearDuplicateHammingDistance - 2, 3)
             nearDuplicateVisualDistance = max(nearDuplicateVisualDistance - 1.5, 4)
             burstWindow *= 0.8
+            maxBurstDuration *= 0.8
         case .balanced:
             break
         case .highlights:
             nearDuplicateHammingDistance += 2
             nearDuplicateVisualDistance += 1.5
             burstWindow *= 1.25
+            maxBurstDuration *= 1.25
         }
         maxBurstDuration = max(maxBurstDuration, burstWindow)
     }
