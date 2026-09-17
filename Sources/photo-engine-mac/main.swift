@@ -21,12 +21,24 @@ struct PhotoEngineMacApp: App {
 @MainActor
 final class PhotoEngineViewModel: ObservableObject {
     @Published var selectedFolder: URL?
-    @Published var mode: CurationMode = .everyday
-    @Published var aggressiveness: CullingAggressiveness = .balanced
-    @Published var style: StylePreset = .natural
-    @Published var styleIntensity: Double = 0.65
-    @Published var exportPreset: ExportPreset = .full
-    @Published var targetCount: Double = 40
+    @Published var mode: CurationMode = .everyday {
+        didSet { UserDefaults.standard.set(mode.rawValue, forKey: "PhotoEngine.mode") }
+    }
+    @Published var aggressiveness: CullingAggressiveness = .balanced {
+        didSet { UserDefaults.standard.set(aggressiveness.rawValue, forKey: "PhotoEngine.aggressiveness") }
+    }
+    @Published var style: StylePreset = .natural {
+        didSet { UserDefaults.standard.set(style.rawValue, forKey: "PhotoEngine.style") }
+    }
+    @Published var styleIntensity: Double = 0.65 {
+        didSet { UserDefaults.standard.set(styleIntensity, forKey: "PhotoEngine.styleIntensity") }
+    }
+    @Published var exportPreset: ExportPreset = .full {
+        didSet { UserDefaults.standard.set(exportPreset.rawValue, forKey: "PhotoEngine.exportPreset") }
+    }
+    @Published var targetCount: Double = 40 {
+        didSet { UserDefaults.standard.set(targetCount, forKey: "PhotoEngine.targetCount") }
+    }
     @Published var status = "Choose a folder of photos to begin."
     @Published var isRunning = false
     @Published var result: PipelineResult?
@@ -38,6 +50,28 @@ final class PhotoEngineViewModel: ObservableObject {
 
     private let runner = PhotoPipelineRunner()
     private var processingTask: Task<Void, Never>?
+
+    init() {
+        let defaults = UserDefaults.standard
+        if let raw = defaults.string(forKey: "PhotoEngine.mode"), let value = CurationMode(rawValue: raw) {
+            mode = value
+        }
+        if let raw = defaults.string(forKey: "PhotoEngine.aggressiveness"), let value = CullingAggressiveness(rawValue: raw) {
+            aggressiveness = value
+        }
+        if let raw = defaults.string(forKey: "PhotoEngine.style"), let value = StylePreset(rawValue: raw) {
+            style = value
+        }
+        if defaults.object(forKey: "PhotoEngine.styleIntensity") != nil {
+            styleIntensity = min(max(defaults.double(forKey: "PhotoEngine.styleIntensity"), 0), 1)
+        }
+        if let raw = defaults.string(forKey: "PhotoEngine.exportPreset"), let value = ExportPreset(rawValue: raw) {
+            exportPreset = value
+        }
+        if defaults.object(forKey: "PhotoEngine.targetCount") != nil {
+            targetCount = min(max(defaults.double(forKey: "PhotoEngine.targetCount"), 5), 150)
+        }
+    }
 
     var targetCountInt: Int { max(1, Int(targetCount.rounded())) }
 
