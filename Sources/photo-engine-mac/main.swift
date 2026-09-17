@@ -111,6 +111,10 @@ final class PhotoEngineViewModel: ObservableObject {
 
     func prepareCleanup() {
         guard let result else { return }
+        let accessed = selectedFolder?.startAccessingSecurityScopedResource() ?? false
+        defer {
+            if accessed { selectedFolder?.stopAccessingSecurityScopedResource() }
+        }
         cleanupReport = nil
         cleanupPlan = PhotoCleanupPlanner.preview(result: result, policy: .keepSelectedOriginals)
     }
@@ -259,7 +263,8 @@ struct ContentView: View {
     }
 
     private var sidebar: some View {
-        VStack(alignment: .leading, spacing: 18) {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 18) {
             GroupBox("Source") {
                 VStack(alignment: .leading, spacing: 8) {
                     Label(model.selectedFolder?.lastPathComponent ?? "No folder selected", systemImage: "folder")
@@ -343,9 +348,11 @@ struct ContentView: View {
                 }
             }
 
-            Spacer()
+                Spacer(minLength: 8)
+            }
+            .padding(16)
         }
-        .padding(16)
+        .scrollIndicators(.hidden)
     }
 
     private var shortlist: some View {
