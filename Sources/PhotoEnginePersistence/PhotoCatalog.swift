@@ -243,6 +243,8 @@ public final class PhotoCatalog: @unchecked Sendable {
     }
 
     private func migrate() throws {
+        let schemaVersion = try scalarInt64("PRAGMA user_version;")
+        guard schemaVersion < 1 else { return }
         try executeScript(
             """
             CREATE TABLE IF NOT EXISTS sessions (
@@ -304,6 +306,7 @@ public final class PhotoCatalog: @unchecked Sendable {
             );
             """
         )
+        try executeScript("PRAGMA user_version = 1;")
     }
 
     private func executeScript(_ sql: String) throws {
