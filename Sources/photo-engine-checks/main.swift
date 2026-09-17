@@ -5,6 +5,7 @@ import UniformTypeIdentifiers
 
 import PhotoEngineApple
 import PhotoEngineCore
+import PhotoEnginePersistence
 
 @main
 struct PhotoEngineChecks {
@@ -12,8 +13,12 @@ struct PhotoEngineChecks {
         let checks: [(String, () throws -> Void)] = [
             ("exact copies group globally", exactCopiesGroupGlobally),
             ("burst groups do not chain", burstGroupingUsesFixedRepresentative),
+            ("burst duration is bounded", burstDurationIsBounded),
             ("selection honors its target", selectionHonorsTarget),
+            ("selection is deterministic", selectionIsDeterministic),
+            ("culling controls and style recipes", cullingControlsAndStyleRecipes),
             ("Vision feature prints round-trip", visionFeaturePrintRoundTrip),
+            ("catalog persists session records", catalogPersistsSession),
             ("import IDs and warnings", stableIDsAndImportWarnings),
             ("run directories are isolated", isolatedRunDirectories),
             ("metadata policy", metadataPolicy),
@@ -84,6 +89,57 @@ struct PhotoEngineChecks {
         try expect(shortlist.decisions.filter { $0.bucket == .review }.count == 3, "review count was wrong")
     }
 
+    private static func burstDurationIsBounded() throws {
+        let start = Date(timeIntervalSince1970: 10_000)
+        let photos = (0..<5).map {
+            analyzed(index: $0, hash: "duration-\($0)", perceptualHash: UInt64($0), date: start.addingTimeInterval(Double($0) * 10))
+        }
+        var profile = ScoringProfile.default(for: .everyday)
+        profile.burstWindow = 12
+        profile.maxBurstDuration = 20
+        profile.nearDuplicateHammingDistance = 64
+        let grouping = PhotoGroupingEngine.group(photos, profile: profile)
+        try expect(grouping.groups.count == 2, "bounded burst should split into two groups")
+        try expect(grouping.groups.allSatisfy { $0.memberIDs.count <= 3 }, "burst exceeded its total duration")
+    }
+
+    private static func selectionIsDeterministic() throws {
+        let analyzedPhotos = (0..<6).map {
+            analyzed(index: $0, hash: "deterministic-\($0)", perceptualHash: UInt64($0), date: nil)
+        }
+        var profile = ScoringProfile.default(for: .everyday)
+        profile.targetCount = 3
+        let score = { (photo: AnalyzedPhoto) in
+            ScoredPhoto(photo: photo, score: PhotoEngineCore.PhotoScoring.score(photo, profile: profile))
+        }
+        let first = PhotoSelectionEngine.select(
+            analyzedPhotos.map(score),
+            grouping: PhotoGrouping(groups: []),
+            profile: profile
+        )
+        let second = PhotoSelectionEngine.select(
+            analyzedPhotos.reversed().map(score),
+            grouping: PhotoGrouping(groups: []),
+            profile: profile
+        )
+        try expect(first.decisions == second.decisions, "input order changed deterministic decisions")
+    }
+
+    private static func cullingControlsAndStyleRecipes() throws {
+        var gentle = ScoringProfile.default(for: .everyday)
+        gentle.apply(aggressiveness: .gentle)
+        var highlights = ScoringProfile.default(for: .everyday)
+        highlights.apply(aggressiveness: .highlights)
+        try expect(gentle.nearDuplicateHammingDistance < highlights.nearDuplicateHammingDistance, "culling presets did not change duplicate strictness")
+        try expect(gentle.maxBurstDuration >= gentle.burstWindow, "gentle burst bounds became invalid")
+
+        let photo = analyzed(index: 0, hash: "style", perceptualHash: 0, date: nil)
+        let monochrome = ApplePhotoRenderer.recipe(for: photo, style: .blackAndWhite, intensity: 0.5)
+        try expect(monochrome.style == .blackAndWhite, "style was not recorded")
+        try expect(monochrome.styleIntensity == 0.5, "style intensity was not recorded")
+        try expect(monochrome.saturation == 0, "black and white recipe applied intensity twice")
+    }
+
     private static func stableIDsAndImportWarnings() throws {
         let fixture = try FixtureDirectory()
         defer { fixture.remove() }
@@ -95,6 +151,25 @@ struct PhotoEngineChecks {
         try expect(first.photos.count == 1, "valid photo was not imported")
         try expect(first.issues.count == 1, "corrupt photo was not reported")
         try expect(first.photos[0].asset.id == second.photos[0].asset.id, "photo ID changed between imports")
+    }
+
+    private static func catalogPersistsSession() throws {
+        let fixture = try FixtureDirectory()
+        defer { fixture.remove() }
+        let catalogURL = fixture.root.appendingPathComponent("catalog.sqlite")
+        let catalog = try PhotoCatalog(url: catalogURL)
+        let sessionID = SessionID()
+        let profile = ScoringProfile.default(for: .everyday)
+        try catalog.beginSession(id: sessionID, sourceFolder: fixture.source, settings: profile)
+        let asset = analyzed(index: 0, hash: "catalog", perceptualHash: 0, date: nil).asset
+        try catalog.upsert(asset: asset, sessionID: sessionID, contentHash: "catalog")
+        try catalog.upsert(analysis: analyzed(index: 0, hash: "catalog", perceptualHash: 0, date: nil).signals, for: asset.id, analyzerVersion: "checks")
+        try catalog.replaceDecisions([
+            SelectionDecision(photoID: asset.id, bucket: .selected, rank: 0, reasons: ["test"], score: 1)
+        ], sessionID: sessionID)
+        try catalog.finishSession(sessionID)
+        let summary = try catalog.storageSummary(sessionID: sessionID)
+        try expect(summary.sourceBytes == asset.metadata.fileSize, "catalog summary did not persist source bytes")
     }
 
     private static func visionFeaturePrintRoundTrip() throws {
@@ -128,6 +203,13 @@ struct PhotoEngineChecks {
         try expect(firstCount == 3, "first run lost exports")
         try expect(secondCount == 1, "second run contains stale exports")
         try expect(second.exports.count == 1, "manifest/export count mismatch")
+        let manifestData = try Data(contentsOf: second.manifestURL)
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        let manifest = try decoder.decode(PipelineManifest.self, from: manifestData)
+        try expect(manifest.pipelineVersion == "0.3.0", "manifest version was not updated")
+        try expect(manifest.targetCount == 1, "manifest did not persist target count")
+        try expect(manifest.metrics.cacheHits == 3, "warm run did not reuse analysis cache")
     }
 
     private static func metadataPolicy() throws {

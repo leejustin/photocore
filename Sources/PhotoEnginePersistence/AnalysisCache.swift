@@ -33,9 +33,10 @@ public final class AnalysisCache: @unchecked Sendable {
             .appendingPathComponent("analysis-v2.plist")
         self.entries = [:]
         self.analyzerVersion = [
-            "apple-analysis-0.2.1",
+            "apple-analysis-0.2.2",
             "feature-print-revision-2",
             "face-quality-revision-3",
+            "subject-crop-v1",
             "thumbnail-512",
             ProcessInfo.processInfo.operatingSystemVersionString
         ].joined(separator: "|")
@@ -82,5 +83,11 @@ public final class AnalysisCache: @unchecked Sendable {
         let data = try encoder.encode(file)
         try FileManager.default.createDirectory(at: cacheURL.deletingLastPathComponent(), withIntermediateDirectories: true)
         try data.write(to: cacheURL, options: .atomic)
+    }
+
+    /// The cache is recreatable and may be evicted, but exposing its current
+    /// size lets the UI explain where local storage is going.
+    public var fileSize: Int64 {
+        (try? cacheURL.resourceValues(forKeys: [.fileSizeKey]).fileSize).map(Int64.init) ?? 0
     }
 }

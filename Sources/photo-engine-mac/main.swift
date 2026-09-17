@@ -22,6 +22,9 @@ struct PhotoEngineMacApp: App {
 final class PhotoEngineViewModel: ObservableObject {
     @Published var selectedFolder: URL?
     @Published var mode: CurationMode = .everyday
+    @Published var aggressiveness: CullingAggressiveness = .balanced
+    @Published var style: StylePreset = .natural
+    @Published var styleIntensity: Double = 0.65
     @Published var targetCount: Double = 40
     @Published var status = "Choose a folder of photos to begin."
     @Published var isRunning = false
@@ -38,6 +41,9 @@ final class PhotoEngineViewModel: ObservableObject {
     func process() {
         guard let selectedFolder else { return }
         let mode = mode
+        let aggressiveness = aggressiveness
+        let style = style
+        let styleIntensity = styleIntensity
         let targetCount = targetCountInt
         let outputURL = FileManager.default.homeDirectoryForCurrentUser
             .appendingPathComponent("PhotoEngine Exports", isDirectory: true)
@@ -66,6 +72,9 @@ final class PhotoEngineViewModel: ObservableObject {
             }
             do {
                 var profile = ScoringProfile.default(for: mode)
+                profile.apply(aggressiveness: aggressiveness)
+                profile.style = style
+                profile.styleIntensity = styleIntensity
                 profile.targetCount = targetCount
                 let result = try runner.run(
                     folder: selectedFolder,
@@ -89,7 +98,10 @@ final class PhotoEngineViewModel: ObservableObject {
         isRunning = false
         progress = nil
         let warningSuffix = result.warnings.isEmpty ? "" : " \(result.warnings.count) file(s) could not be read."
-        status = "Selected \(result.shortlist.selectedIDs.count) of \(result.imported.count) photos." + warningSuffix
+        let storageSuffix = result.storageSummary.map {
+            " Generated \(Self.formatBytes($0.generatedBytes)); cache \(Self.formatBytes($0.cacheBytes))."
+        } ?? ""
+        status = "Selected \(result.shortlist.selectedIDs.count) of \(result.imported.count) photos." + storageSuffix + warningSuffix
         processingTask = nil
     }
 
@@ -121,6 +133,7 @@ final class PhotoEngineViewModel: ObservableObject {
     private static func makeRows(result: PipelineResult) -> [CuratedRow] {
         let analyzedByID = Dictionary(uniqueKeysWithValues: result.analyzed.map { ($0.id, $0) })
         let scoreByID = Dictionary(uniqueKeysWithValues: result.scored.map { ($0.id, $0.score) })
+        let exportByID = Dictionary(uniqueKeysWithValues: result.exports.map { ($0.photoID, URL(fileURLWithPath: $0.outputPath)) })
         return result.shortlist.decisions.compactMap { decision in
             guard let analyzed = analyzedByID[decision.photoID] else { return nil }
             return CuratedRow(
@@ -130,9 +143,14 @@ final class PhotoEngineViewModel: ObservableObject {
                 relativePath: analyzed.asset.relativePath,
                 reasons: scoreByID[decision.photoID]?.reasons ?? decision.reasons,
                 score: decision.score,
-                sourceURL: analyzed.asset.url
+                sourceURL: analyzed.asset.url,
+                previewURL: exportByID[decision.photoID]
             )
         }
+    }
+
+    private static func formatBytes(_ bytes: Int64) -> String {
+        ByteCountFormatter.string(fromByteCount: bytes, countStyle: .file)
     }
 }
 
@@ -144,6 +162,7 @@ struct CuratedRow: Identifiable, Sendable {
     let reasons: [String]
     let score: Double
     let sourceURL: URL
+    let previewURL: URL?
 }
 
 struct ContentView: View {
@@ -239,6 +258,42 @@ struct ContentView: View {
                 .padding(4)
             }
 
+            GroupBox("Culling") {
+                VStack(alignment: .leading, spacing: 8) {
+                    Picker("Aggressiveness", selection: $model.aggressiveness) {
+                        ForEach(CullingAggressiveness.allCases, id: \.self) { value in
+                            Text(value.displayName).tag(value)
+                        }
+                    }
+                    .labelsHidden()
+                    Text(cullingDescription)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                .padding(4)
+            }
+
+            GroupBox("Look") {
+                VStack(alignment: .leading, spacing: 8) {
+                    Picker("Style", selection: $model.style) {
+                        ForEach(StylePreset.allCases, id: \.self) { value in
+                            Text(value.displayName).tag(value)
+                        }
+                    }
+                    .labelsHidden()
+                    HStack {
+                        Text("Intensity")
+                            .font(.caption)
+                        Slider(value: $model.styleIntensity, in: 0...1)
+                        Text(String(format: "%.0f%%", model.styleIntensity * 100))
+                            .font(.caption.monospacedDigit())
+                            .frame(width: 36, alignment: .trailing)
+                    }
+                }
+                .padding(4)
+            }
+
             if let errorMessage = model.errorMessage {
                 Text(errorMessage)
                     .font(.caption)
@@ -312,7 +367,7 @@ struct ContentView: View {
                     .sorted { ($0.rank ?? .max, -$0.score) < ($1.rank ?? .max, -$1.score) }
                 List(Array(visibleRows.enumerated()), id: \.element.id) { index, row in
                         HStack(spacing: 12) {
-                            LocalPhotoThumbnail(url: row.sourceURL)
+                            LocalPhotoThumbnail(url: row.previewURL ?? row.sourceURL)
                             Text(String(format: "%02d", index + 1))
                                 .font(.caption.monospacedDigit())
                                 .foregroundStyle(.secondary)
@@ -349,6 +404,14 @@ struct ContentView: View {
             Text(title)
                 .font(.caption)
                 .foregroundStyle(.secondary)
+        }
+    }
+
+    private var cullingDescription: String {
+        switch model.aggressiveness {
+        case .gentle: "Keeps more useful variations and uncertain moments."
+        case .balanced: "Balances quality, coverage, and variety."
+        case .highlights: "Builds a compact set with fewer repetitive moments."
         }
     }
 }

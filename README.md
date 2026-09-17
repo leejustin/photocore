@@ -6,7 +6,7 @@ The first product surface is a simple native macOS application. The processing e
 
 ## Current status
 
-The local vertical slice is implemented: folder discovery, JPEG/HEIC metadata, stable asset identities, exact/near-duplicate grouping using Vision's supported feature-print distance, face capture quality, bounded parallel analysis, explainable scoring, diverse shortlisting, versioned binary analysis caching, edited JPEG export, sanitized metadata, JSON manifests, a CLI, and a SwiftUI shell.
+The local vertical slice is implemented: folder discovery, JPEG/HEIC metadata, stable asset identities, exact/near-duplicate grouping using Vision's supported feature-print distance, bounded parallel analysis, subject/face quality signals, configurable culling presets, deterministic shortlisting, versioned binary analysis caching, durable SQLite sessions and artifact accounting, five edited-JPEG looks, sanitized metadata, measured JSON manifests, a CLI, and a SwiftUI shell.
 
 Start with:
 
@@ -24,7 +24,7 @@ Start with:
 - Vision for similarity, faces, quality, saliency, and aesthetics.
 - Core ML for optional replaceable scoring models.
 - Core Image and Accelerate for editing and image statistics.
-- A narrow persistence adapter currently backed by a compact binary property-list cache; SQLite remains an option when a durable user catalog is added.
+- A narrow persistence adapter backed by SQLite for durable sessions/artifacts plus a compact binary property-list analysis cache that can be evicted.
 - Versioned JSON manifests for portable pipeline inputs and outputs.
 
 ## Try it locally
@@ -36,7 +36,7 @@ swift build
 swift run photo-engine smoke-test
 swift run photo-engine-checks
 swift run photo-engine catalog /path/to/photos
-swift run photo-engine run /path/to/photos --profile trip --target 60 --output ./exports/trip
+swift run photo-engine run /path/to/photos --profile trip --cull balanced --target 60 --style natural --output ./exports/trip
 ```
 
 Launch the simple Mac UI:
@@ -47,7 +47,9 @@ swift run photo-engine-mac
 
 Each run is written beneath `<output>/runs/<timestamp>-<id>/`, so rerunning with a smaller target cannot leave stale JPEGs in the current shortlist. Source files are never modified. Camera, lens, exposure, and capture metadata are retained in exports while GPS metadata is removed by default.
 
-`photo-engine-checks` is a fixture-driven regression executable that exercises grouping, selection, stable IDs, corrupt-file reporting, isolated outputs, metadata sanitization, and unsafe output paths. It is deliberately runnable with the standalone Swift Command Line Tools installed on this machine; it can be migrated to XCTest/Swift Testing without changing the fixture coverage when the app moves into an Xcode project.
+`photo-engine-checks` is a fixture-driven regression executable that exercises grouping, bounded burst duration, deterministic selection, culling/style controls, Vision descriptor round-trips, durable catalog records, stable IDs, corrupt-file reporting, isolated outputs, metadata sanitization, warm-cache metrics, and unsafe output paths. It is deliberately runnable with the standalone Swift Command Line Tools installed on this machine; it can be migrated to XCTest/Swift Testing without changing the fixture coverage when the app moves into an Xcode project.
+
+Quality calibration against real labeled shoots, RAW/ARW support, person identity grouping, lens-profile chromatic-aberration correction, side-by-side correction tools, and approved source cleanup remain intentionally separate follow-up work. The current engine never modifies source photographs.
 
 ## Repository policy
 

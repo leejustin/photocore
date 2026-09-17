@@ -45,10 +45,35 @@ struct PhotoEngineCommand {
     private static func runPipeline(arguments: [String]) throws {
         guard let folderPath = arguments.first else { throw PhotoEngineError.invalidArgument("run requires a folder path") }
         let folder = URL(fileURLWithPath: folderPath, isDirectory: true).standardizedFileURL
-        let mode = CurationMode(rawValue: option(arguments, name: "--profile") ?? "everyday") ?? .everyday
-        let targetCount = Int(option(arguments, name: "--target") ?? "")
+        let rawMode = option(arguments, name: "--profile") ?? "everyday"
+        guard let mode = CurationMode(rawValue: rawMode) else {
+            throw PhotoEngineError.invalidArgument("Unknown profile '\(rawMode)'.")
+        }
+        let rawTarget = option(arguments, name: "--target")
+        let targetCount = rawTarget.flatMap(Int.init)
+        if rawTarget != nil && (targetCount ?? 0) <= 0 {
+            throw PhotoEngineError.invalidArgument("Target must be a positive integer.")
+        }
         var profile = ScoringProfile.default(for: mode)
         if let targetCount, targetCount > 0 { profile.targetCount = targetCount }
+        if let rawAggressiveness = option(arguments, name: "--cull") {
+            guard let aggressiveness = CullingAggressiveness(rawValue: rawAggressiveness) else {
+                throw PhotoEngineError.invalidArgument("Unknown culling preset '\(rawAggressiveness)'. Use gentle, balanced, or highlights.")
+            }
+            profile.apply(aggressiveness: aggressiveness)
+        }
+        if let rawStyle = option(arguments, name: "--style") {
+            guard let style = StylePreset(rawValue: rawStyle) else {
+                throw PhotoEngineError.invalidArgument("Unknown style '\(rawStyle)'. Use natural, warm, vibrant, soft, or blackAndWhite.")
+            }
+            profile.style = style
+        }
+        if let rawIntensity = option(arguments, name: "--intensity") {
+            guard let intensity = Double(rawIntensity), intensity.isFinite, (0...1).contains(intensity) else {
+                throw PhotoEngineError.invalidArgument("Style intensity must be a number between 0 and 1.")
+            }
+            profile.styleIntensity = intensity
+        }
 
         let outputPath = option(arguments, name: "--output") ?? "./exports/\(folder.lastPathComponent)-curated"
         let output = URL(fileURLWithPath: outputPath, isDirectory: true).standardizedFileURL
@@ -58,8 +83,13 @@ struct PhotoEngineCommand {
             print("[\(progress.stage.rawValue)] \(progress.message)\(suffix)")
         }
         print("\nSelected \(result.shortlist.selectedIDs.count) of \(result.imported.count) photos")
+        print("Session: \(result.sessionID)")
         print("Exported to \(result.runDirectory.appendingPathComponent("shortlist").path)")
         print("Manifest: \(result.manifestURL.path)")
+        print(String(format: "Timing: %.2fs total, %.2fs analysis, %d cache hits", result.metrics.totalSeconds, result.metrics.analysisSeconds, result.metrics.cacheHits))
+        if let summary = result.storageSummary {
+            print("Storage: \(formatBytes(summary.sourceBytes)) source + \(formatBytes(summary.generatedBytes)) generated + \(formatBytes(summary.cacheBytes)) cache")
+        }
         if !result.warnings.isEmpty {
             print("Warnings: \(result.warnings.count) supported file(s) could not be imported")
             for warning in result.warnings.prefix(10) {
@@ -71,6 +101,10 @@ struct PhotoEngineCommand {
     private static func option(_ arguments: [String], name: String) -> String? {
         guard let index = arguments.firstIndex(of: name), arguments.indices.contains(index + 1) else { return nil }
         return arguments[index + 1]
+    }
+
+    private static func formatBytes(_ bytes: Int64) -> String {
+        ByteCountFormatter.string(fromByteCount: bytes, countStyle: .file)
     }
 
     private static func runSmokeTests() throws {
@@ -122,7 +156,7 @@ struct PhotoEngineCommand {
 
         Usage:
           photo-engine catalog <folder>
-          photo-engine run <folder> [--profile everyday|groupEvent|trip|creative] [--target N] [--output folder]
+          photo-engine run <folder> [--profile everyday|groupEvent|trip|creative] [--cull gentle|balanced|highlights] [--target N] [--style natural|warm|vibrant|soft|blackAndWhite] [--intensity 0...1] [--output folder]
           photo-engine smoke-test
           photo-engine version
         """)

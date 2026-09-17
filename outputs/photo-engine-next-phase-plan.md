@@ -1,6 +1,6 @@
 # Photo Engine: dependable culling, simple review, and storage reduction
 
-Status: implementation handoff; no features in this document have been implemented by writing this plan.
+Status: implementation handoff; the repository now contains a verified first vertical slice of the work described here. Remaining items are called out honestly in the README and final handoff.
 
 ## 1. Product objective
 

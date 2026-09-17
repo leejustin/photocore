@@ -21,6 +21,6 @@ let package = Package(
         .target(name: "PhotoEngineApple", dependencies: ["PhotoEngineCore", "PhotoEnginePersistence"]),
         .executableTarget(name: "photo-engine", dependencies: ["PhotoEngineApple", "PhotoEngineCore"]),
         .executableTarget(name: "photo-engine-mac", dependencies: ["PhotoEngineApple", "PhotoEngineCore"]),
-        .executableTarget(name: "photo-engine-checks", dependencies: ["PhotoEngineApple", "PhotoEngineCore"])
+        .executableTarget(name: "photo-engine-checks", dependencies: ["PhotoEngineApple", "PhotoEngineCore", "PhotoEnginePersistence"])
     ]
 )

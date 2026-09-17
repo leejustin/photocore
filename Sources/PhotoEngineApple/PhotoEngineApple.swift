@@ -244,6 +244,11 @@ public struct AppleAnalysisEngine: Sendable {
         let contentHash = try SHA256Hasher.hash(url: asset.url)
         let pixels = PixelStatistics(image: image)
         let vision = try visionSignals(url: asset.url, orientation: asset.metadata.orientation)
+        let subject = SubjectFocusAssessment(image: image, faces: vision.faces)
+        var qualityFlags = subject.flags
+        if vision.faces.count > 0 && vision.faceQuality < 0.35 {
+            qualityFlags.append("face quality low")
+        }
         let fingerprint = PhotoFingerprint(contentHash: contentHash, perceptualHash: pixels.perceptualHash)
 
         return AnalysisSignals(
@@ -251,12 +256,15 @@ public struct AppleAnalysisEngine: Sendable {
             brightness: pixels.brightness,
             exposureQuality: pixels.exposureQuality,
             sharpness: pixels.sharpness,
+            subjectSharpness: subject.sharpness,
+            subjectConfidence: subject.confidence,
             faceQuality: vision.faceQuality,
             faceCount: vision.faces.count,
             aestheticScore: vision.aestheticScore,
             aestheticUtility: vision.aestheticUtility,
             featurePrint: vision.featurePrint,
-            faces: vision.faces
+            faces: vision.faces,
+            qualityFlags: qualityFlags
         )
     }
 
@@ -313,6 +321,37 @@ public enum AppleVisualDistance {
             return nil
         }
     }
+
+    /// Creates a run-scoped provider that decodes each serialized Vision
+    /// descriptor at most once. Vision's observation type is reference based,
+    /// so the cache is intentionally short-lived and confined to one run.
+    public static func cachedProvider() -> VisualDistanceProvider {
+        let cache = DecodedFeaturePrintCache()
+        return { lhs, rhs in cache.distance(lhs, rhs) }
+    }
+
+    private final class DecodedFeaturePrintCache: @unchecked Sendable {
+        private let lock = NSLock()
+        private var observations: [Data: Vision.FeaturePrintObservation] = [:]
+
+        func distance(_ lhs: AnalysisSignals, _ rhs: AnalysisSignals) -> Double? {
+            guard let leftData = lhs.featurePrint, let rightData = rhs.featurePrint else { return nil }
+            do {
+                let left = try observation(for: leftData)
+                let right = try observation(for: rightData)
+                return try left.distance(to: right)
+            } catch {
+                return nil
+            }
+        }
+
+        private func observation(for data: Data) throws -> Vision.FeaturePrintObservation {
+            if let cached = lock.withLock({ observations[data] }) { return cached }
+            let decoded = try JSONDecoder().decode(Vision.FeaturePrintObservation.self, from: data)
+            lock.withLock { observations[data] = decoded }
+            return decoded
+        }
+    }
 }
 
 public final class ApplePhotoRenderer: @unchecked Sendable {
@@ -322,8 +361,13 @@ public final class ApplePhotoRenderer: @unchecked Sendable {
         context = CIContext(options: [CIContextOption.cacheIntermediates: false])
     }
 
-    public func render(photo: AnalyzedPhoto, outputURL: URL) throws -> ExportedPhoto {
-        let recipe = Self.recipe(for: photo)
+    public func render(
+        photo: AnalyzedPhoto,
+        outputURL: URL,
+        style: StylePreset = .natural,
+        styleIntensity: Double = 0.65
+    ) throws -> ExportedPhoto {
+        let recipe = Self.recipe(for: photo, style: style, intensity: styleIntensity)
         guard let input = CIImage(contentsOf: photo.asset.url, options: [.applyOrientationProperty: true]) else {
             throw PhotoEngineError.exportFailed(photo.asset.url, "Could not create Core Image input")
         }
@@ -340,6 +384,20 @@ public final class ApplePhotoRenderer: @unchecked Sendable {
             filter.setValue(image, forKey: kCIInputImageKey)
             filter.setValue(1 + recipe.saturation, forKey: kCIInputSaturationKey)
             filter.setValue(1 + recipe.contrast, forKey: kCIInputContrastKey)
+            image = filter.outputImage ?? image
+        }
+        if recipe.style == .warm {
+            let filter = CIFilter(name: "CITemperatureAndTint")!
+            filter.setValue(image, forKey: kCIInputImageKey)
+            let amount = min(max(recipe.styleIntensity, 0), 1)
+            filter.setValue(CIVector(x: 6500, y: 0), forKey: "inputNeutral")
+            filter.setValue(CIVector(x: 6500 - 700 * amount, y: 0), forKey: "inputTargetNeutral")
+            image = filter.outputImage ?? image
+        }
+        if recipe.style == .blackAndWhite {
+            let filter = CIFilter(name: "CIColorControls")!
+            filter.setValue(image, forKey: kCIInputImageKey)
+            filter.setValue(1 - min(max(recipe.styleIntensity, 0), 1), forKey: kCIInputSaturationKey)
             image = filter.outputImage ?? image
         }
         if abs(recipe.highlights) > 0.01 || abs(recipe.shadows) > 0.01 {
@@ -372,15 +430,46 @@ public final class ApplePhotoRenderer: @unchecked Sendable {
         return ExportedPhoto(photoID: photo.id, sourcePath: photo.asset.url.path, outputPath: outputURL.path, recipe: recipe)
     }
 
-    public static func recipe(for photo: AnalyzedPhoto) -> EditRecipe {
+    public static func recipe(for photo: AnalyzedPhoto, style: StylePreset = .natural, intensity: Double = 0.65) -> EditRecipe {
+        let intensity = min(max(intensity, 0), 1)
         let brightnessDelta = 0.5 - photo.signals.brightness
         let exposure = min(max(brightnessDelta * 1.2, -0.45), 0.45)
         let highlights = photo.signals.exposureQuality < 0.45 ? -0.10 : 0
         let shadows = photo.signals.brightness < 0.38 ? 0.14 : 0
-        let saturation = photo.signals.aestheticScore.map { $0 < 0.48 ? 0.04 : 0.015 } ?? 0.02
-        let contrast = photo.signals.exposureQuality > 0.60 ? 0.025 : 0
-        let sharpening = photo.signals.sharpness < 0.55 ? 0.16 : 0.08
-        return EditRecipe(exposure: exposure, contrast: contrast, saturation: saturation, highlights: highlights, shadows: shadows, sharpening: sharpening)
+        let baseSaturation = photo.signals.aestheticScore.map { $0 < 0.48 ? 0.04 : 0.015 } ?? 0.02
+        let baseContrast = photo.signals.exposureQuality > 0.60 ? 0.025 : 0
+        let styleSaturation: Double
+        let styleContrast: Double
+        let styleHighlights: Double
+        let styleShadows: Double
+        let styleSharpening: Double
+        switch style {
+        case .natural:
+            styleSaturation = 0; styleContrast = 0; styleHighlights = 0; styleShadows = 0; styleSharpening = 0
+        case .warm:
+            styleSaturation = 0.035; styleContrast = 0.015; styleHighlights = 0; styleShadows = 0.02; styleSharpening = 0
+        case .vibrant:
+            styleSaturation = 0.12; styleContrast = 0.04; styleHighlights = -0.04; styleShadows = 0.02; styleSharpening = 0.01
+        case .soft:
+            styleSaturation = 0.015; styleContrast = -0.055; styleHighlights = -0.08; styleShadows = 0.08; styleSharpening = -0.03
+        case .blackAndWhite:
+            styleSaturation = -1; styleContrast = 0.02; styleHighlights = 0; styleShadows = 0; styleSharpening = 0
+        }
+        let scaled = { (value: Double) in value * intensity }
+        let sharpening = max(0, (photo.signals.sharpness < 0.55 ? 0.16 : 0.08) + scaled(styleSharpening))
+        return EditRecipe(
+            style: style,
+            styleIntensity: intensity,
+            exposure: exposure,
+            contrast: baseContrast + scaled(styleContrast),
+            // Black & white is applied in a separate intensity-aware filter;
+            // keeping this technical saturation neutral makes a 0…1 look
+            // slider genuinely reversible.
+            saturation: style == .blackAndWhite ? 0 : baseSaturation + scaled(styleSaturation),
+            highlights: highlights + scaled(styleHighlights),
+            shadows: shadows + scaled(styleShadows),
+            sharpening: sharpening
+        )
     }
 
     private static func writeJPEG(image: CGImage, sourceURL: URL, outputURL: URL, quality: Double) throws {
@@ -442,6 +531,7 @@ public struct PipelineProgress: Sendable {
 }
 
 public struct PipelineResult: Sendable {
+    public let sessionID: SessionID
     /// Assets only: analysis thumbnails are intentionally released after a run
     /// so large libraries do not remain resident in the UI process.
     public let imported: [PhotoAsset]
@@ -453,8 +543,11 @@ public struct PipelineResult: Sendable {
     public let manifestURL: URL
     public let warnings: [ImportIssue]
     public let runDirectory: URL
+    public let storageSummary: PhotoCatalog.StorageSummary?
+    public let metrics: PipelineMetrics
 
-    public init(imported: [PhotoAsset], analyzed: [AnalyzedPhoto], grouping: PhotoGrouping, scored: [ScoredPhoto], shortlist: Shortlist, exports: [ExportedPhoto], manifestURL: URL, warnings: [ImportIssue], runDirectory: URL) {
+    public init(sessionID: SessionID, imported: [PhotoAsset], analyzed: [AnalyzedPhoto], grouping: PhotoGrouping, scored: [ScoredPhoto], shortlist: Shortlist, exports: [ExportedPhoto], manifestURL: URL, warnings: [ImportIssue], runDirectory: URL, storageSummary: PhotoCatalog.StorageSummary?, metrics: PipelineMetrics = PipelineMetrics()) {
+        self.sessionID = sessionID
         self.imported = imported
         self.analyzed = analyzed
         self.grouping = grouping
@@ -464,6 +557,8 @@ public struct PipelineResult: Sendable {
         self.manifestURL = manifestURL
         self.warnings = warnings
         self.runDirectory = runDirectory
+        self.storageSummary = storageSummary
+        self.metrics = metrics
     }
 }
 
@@ -471,11 +566,13 @@ public final class PhotoPipelineRunner: @unchecked Sendable {
     private let importer: PhotoFolderImporter
     private let analyzer: AppleAnalysisEngine
     private let renderer: ApplePhotoRenderer
+    private let catalog: PhotoCatalog?
 
-    public init(importer: PhotoFolderImporter = PhotoFolderImporter(), analyzer: AppleAnalysisEngine = AppleAnalysisEngine(), renderer: ApplePhotoRenderer = ApplePhotoRenderer()) {
+    public init(importer: PhotoFolderImporter = PhotoFolderImporter(), analyzer: AppleAnalysisEngine = AppleAnalysisEngine(), renderer: ApplePhotoRenderer = ApplePhotoRenderer(), catalog: PhotoCatalog? = nil) {
         self.importer = importer
         self.analyzer = analyzer
         self.renderer = renderer
+        self.catalog = catalog ?? (try? PhotoCatalog())
     }
 
     public func run(
@@ -487,9 +584,40 @@ public final class PhotoPipelineRunner: @unchecked Sendable {
     ) throws -> PipelineResult {
         try Self.validateOutput(source: folder, output: outputDirectory)
         try Self.checkCancellation(shouldCancel)
+        let runStartedAt = Date()
+        let sessionID = SessionID()
+        var warnings = [ImportIssue]()
+        var catalogHealthy = catalog != nil
+        var sessionFinished = false
+        var cacheHits = 0
+        var workerCount = 0
+        let discoveryStartedAt = Date()
+        var discoverySeconds = 0.0
+        var analysisSeconds = 0.0
+        var groupingSeconds = 0.0
+        var selectionSeconds = 0.0
+        var exportSeconds = 0.0
+        defer {
+            if !sessionFinished, let catalog {
+                try? catalog.finishSession(sessionID, status: "failed")
+            }
+        }
         progress(PipelineProgress(stage: .discovering, completed: 0, total: 1, message: "Discovering photos"))
         let importBatch = try importer.importFolderReport(folder)
         let imported = importBatch.photos
+        warnings.append(contentsOf: importBatch.issues)
+        discoverySeconds = Date().timeIntervalSince(discoveryStartedAt)
+        if let catalog, catalogHealthy {
+            do {
+                try catalog.beginSession(id: sessionID, sourceFolder: folder, settings: profile)
+                for item in imported {
+                    try catalog.upsert(asset: item.asset, sessionID: sessionID)
+                }
+            } catch {
+                catalogHealthy = false
+                warnings.append(ImportIssue(path: PhotoCatalog.defaultURL().path, message: error.localizedDescription))
+            }
+        }
         progress(PipelineProgress(stage: .discovering, completed: 1, total: 1, message: "Found \(imported.count) photos"))
 
         let cache = AnalysisCache(sourceFolder: folder)
@@ -497,6 +625,7 @@ public final class PhotoPipelineRunner: @unchecked Sendable {
         var uncachedIndices: [Int] = []
         for (index, item) in imported.enumerated() {
             if let cached = cache.signals(for: item.asset) {
+                cacheHits += 1
                 accumulator.record(cached, at: index) { completed in
                     progress(PipelineProgress(
                         stage: .analyzing,
@@ -512,9 +641,11 @@ public final class PhotoPipelineRunner: @unchecked Sendable {
 
         if !uncachedIndices.isEmpty {
             let pendingIndices = uncachedIndices
-            let workerCount = min(max(ProcessInfo.processInfo.activeProcessorCount / 2, 1), 4, pendingIndices.count)
-            DispatchQueue.concurrentPerform(iterations: workerCount) { worker in
-                for position in stride(from: worker, to: pendingIndices.count, by: workerCount) {
+            let workers = min(max(ProcessInfo.processInfo.activeProcessorCount / 2, 1), 4, pendingIndices.count)
+            workerCount = workers
+            let analysisStartedAt = Date()
+            DispatchQueue.concurrentPerform(iterations: workers) { worker in
+                for position in stride(from: worker, to: pendingIndices.count, by: workers) {
                     guard !accumulator.hasError, !shouldCancel() else { return }
                     let index = pendingIndices[position]
                     let item = imported[index]
@@ -534,6 +665,9 @@ public final class PhotoPipelineRunner: @unchecked Sendable {
                     }
                 }
             }
+            analysisSeconds = Date().timeIntervalSince(analysisStartedAt)
+        } else {
+            analysisSeconds = 0
         }
         try Self.checkCancellation(shouldCancel)
         if let error = accumulator.firstError { throw error }
@@ -545,17 +679,41 @@ public final class PhotoPipelineRunner: @unchecked Sendable {
         for index in uncachedIndices {
             cache.update(asset: imported[index].asset, signals: signalsByIndex[index])
         }
+        if let catalog, catalogHealthy {
+            do {
+                for (asset, signals) in zip(imported.map(\.asset), signalsByIndex) {
+                    try catalog.upsert(asset: asset, sessionID: sessionID, contentHash: signals.fingerprint.contentHash)
+                    try catalog.upsert(analysis: signals, for: asset.id, analyzerVersion: "apple-analysis-0.2.2")
+                }
+            } catch {
+                catalogHealthy = false
+                warnings.append(ImportIssue(path: PhotoCatalog.defaultURL().path, message: error.localizedDescription))
+            }
+        }
         cache.retainAssets(imported.map(\.asset))
         try cache.save()
 
         progress(PipelineProgress(stage: .grouping, completed: 0, total: 1, message: "Grouping duplicates and bursts"))
-        let grouping = PhotoGroupingEngine.group(analyzed, profile: profile, visualDistance: AppleVisualDistance.distance)
+        let visualDistance = AppleVisualDistance.cachedProvider()
+        let groupingStartedAt = Date()
+        let grouping = PhotoGroupingEngine.group(analyzed, profile: profile, visualDistance: visualDistance)
+        groupingSeconds = Date().timeIntervalSince(groupingStartedAt)
         progress(PipelineProgress(stage: .grouping, completed: 1, total: 1, message: "Found \(grouping.groups.count) groups"))
 
         let scored = analyzed.map { ScoredPhoto(photo: $0, score: PhotoScoring.score($0, profile: profile)) }
         progress(PipelineProgress(stage: .selecting, completed: 0, total: 1, message: "Building shortlist"))
-        let shortlist = PhotoSelectionEngine.select(scored, grouping: grouping, profile: profile, visualDistance: AppleVisualDistance.distance)
+        let selectionStartedAt = Date()
+        let shortlist = PhotoSelectionEngine.select(scored, grouping: grouping, profile: profile, visualDistance: visualDistance)
+        selectionSeconds = Date().timeIntervalSince(selectionStartedAt)
         progress(PipelineProgress(stage: .selecting, completed: 1, total: 1, message: "Selected \(shortlist.selectedIDs.count) photos"))
+        if let catalog, catalogHealthy {
+            do {
+                try catalog.replaceDecisions(shortlist.decisions, sessionID: sessionID)
+            } catch {
+                catalogHealthy = false
+                warnings.append(ImportIssue(path: PhotoCatalog.defaultURL().path, message: error.localizedDescription))
+            }
+        }
 
         let runDirectory = Self.makeRunDirectory(root: outputDirectory)
         var completedRun = false
@@ -566,19 +724,50 @@ public final class PhotoPipelineRunner: @unchecked Sendable {
         }
         let exportDirectory = runDirectory.appendingPathComponent("shortlist", isDirectory: true)
         var exports: [ExportedPhoto] = []
+        let exportStartedAt = Date()
         for (index, photoID) in shortlist.selectedIDs.enumerated() {
             try Self.checkCancellation(shouldCancel)
             guard let analyzedPhoto = analyzed.first(where: { $0.id == photoID }) else { continue }
             let fileName = String(format: "%03d-%@.jpg", index + 1, safeFileStem(analyzedPhoto.asset.url.deletingPathExtension().lastPathComponent))
             let outputURL = exportDirectory.appendingPathComponent(fileName)
-            let exported = try renderer.render(photo: analyzedPhoto, outputURL: outputURL)
+            let exported = try renderer.render(
+                photo: analyzedPhoto,
+                outputURL: outputURL,
+                style: profile.style,
+                styleIntensity: profile.styleIntensity
+            )
             exports.append(exported)
+            if let catalog, catalogHealthy {
+                do {
+                    try catalog.recordArtifact(sessionID: sessionID, photoID: photoID, kind: "jpeg-export", url: outputURL, recipe: exported.recipe)
+                } catch {
+                    catalogHealthy = false
+                    warnings.append(ImportIssue(path: PhotoCatalog.defaultURL().path, message: error.localizedDescription))
+                }
+            }
             progress(PipelineProgress(stage: .exporting, completed: index + 1, total: shortlist.selectedIDs.count, message: fileName))
         }
+        exportSeconds = Date().timeIntervalSince(exportStartedAt)
 
+        var storageSummary: PhotoCatalog.StorageSummary?
+        if let catalog, catalogHealthy {
+            do {
+                try catalog.finishSession(sessionID)
+                storageSummary = try catalog.storageSummary(sessionID: sessionID, cacheBytes: cache.fileSize)
+            } catch {
+                warnings.append(ImportIssue(path: PhotoCatalog.defaultURL().path, message: error.localizedDescription))
+            }
+        }
         let manifest = PipelineManifest(
+            sessionID: sessionID,
+            schemaVersion: 3,
+            pipelineVersion: "0.3.0",
             sourceFolder: folder.path,
             mode: profile.mode,
+            aggressiveness: profile.aggressiveness,
+            style: profile.style,
+            styleIntensity: profile.styleIntensity,
+            targetCount: profile.targetCount,
             assets: imported.map(\.asset),
             // Feature prints remain in the compact analysis cache. They are
             // implementation details and would dominate the portable manifest.
@@ -586,7 +775,18 @@ public final class PhotoPipelineRunner: @unchecked Sendable {
             grouping: grouping,
             shortlist: shortlist,
             exports: exports,
-            warnings: importBatch.issues.map { "\($0.path): \($0.message)" }
+            warnings: warnings.map { "\($0.path): \($0.message)" },
+            metrics: PipelineMetrics(
+                totalSeconds: Date().timeIntervalSince(runStartedAt),
+                discoverySeconds: discoverySeconds,
+                analysisSeconds: analysisSeconds,
+                groupingSeconds: groupingSeconds,
+                selectionSeconds: selectionSeconds,
+                exportSeconds: exportSeconds,
+                cacheHits: cacheHits,
+                analyzedCount: analyzed.count,
+                workerCount: max(workerCount, 1)
+            )
         )
         try FileManager.default.createDirectory(at: runDirectory, withIntermediateDirectories: true)
         let manifestURL = runDirectory.appendingPathComponent("manifest.json")
@@ -594,10 +794,12 @@ public final class PhotoPipelineRunner: @unchecked Sendable {
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
         encoder.dateEncodingStrategy = .iso8601
         try encoder.encode(manifest).write(to: manifestURL, options: .atomic)
+        sessionFinished = true
         progress(PipelineProgress(stage: .complete, completed: 1, total: 1, message: "Complete"))
         completedRun = true
 
         return PipelineResult(
+            sessionID: sessionID,
             imported: imported.map(\.asset),
             analyzed: analyzed,
             grouping: grouping,
@@ -605,8 +807,10 @@ public final class PhotoPipelineRunner: @unchecked Sendable {
             shortlist: shortlist,
             exports: exports,
             manifestURL: manifestURL,
-            warnings: importBatch.issues,
-            runDirectory: runDirectory
+            warnings: warnings,
+            runDirectory: runDirectory,
+            storageSummary: storageSummary,
+            metrics: manifest.metrics
         )
     }
 
@@ -712,6 +916,55 @@ private enum SHA256Hasher {
             if let tail = try handle.read(upToCount: 65_536) { hasher.update(data: tail) }
         }
         return hasher.finalize().map { String(format: "%02x", $0) }.joined()
+    }
+}
+
+private struct SubjectFocusAssessment {
+    let sharpness: Double?
+    let confidence: Double
+    let flags: [String]
+
+    init(image: CGImage, faces: [FaceSignal]) {
+        guard !faces.isEmpty else {
+            sharpness = nil
+            confidence = 0
+            flags = []
+            return
+        }
+
+        let width = CGFloat(image.width)
+        let height = CGFloat(image.height)
+        let measurements: [(score: Double, area: Double)] = faces.compactMap { face in
+            let box = face.boundingBox
+            guard box.width > 0.01, box.height > 0.01 else { return nil }
+            let margin = 0.18
+            let x = max(0, box.x - box.width * margin) * width
+            let y = max(0, 1 - box.y - box.height * (1 + margin)) * height
+            let cropWidth = min(width - x, box.width * (1 + margin * 2) * width)
+            let cropHeight = min(height - y, box.height * (1 + margin * 2) * height)
+            guard cropWidth >= 8, cropHeight >= 8,
+                  let crop = image.cropping(to: CGRect(x: x, y: y, width: cropWidth, height: cropHeight)) else { return nil }
+            return (PixelStatistics(image: crop).sharpness, box.width * box.height)
+        }
+
+        guard !measurements.isEmpty else {
+            sharpness = nil
+            confidence = 0.15
+            flags = ["subject focus unavailable"]
+            return
+        }
+
+        let totalArea = measurements.reduce(0) { $0 + $1.area }
+        let weightedAverage = measurements.reduce(0) { $0 + $1.score * $1.area } / max(totalArea, 0.0001)
+        let weakest = measurements.map(\.score).min() ?? weightedAverage
+        sharpness = weakest * 0.65 + weightedAverage * 0.35
+        confidence = min(max(measurements.map(\.area).reduce(0, +) * 2.0, 0.25), 1)
+
+        var computedFlags: [String] = []
+        if let sharpness, sharpness < 0.30 {
+            computedFlags.append("subject appears soft")
+        }
+        flags = computedFlags
     }
 }
 

@@ -18,6 +18,16 @@ public struct ImportID: Hashable, Codable, Sendable {
     }
 }
 
+public struct SessionID: Hashable, Codable, Sendable, CustomStringConvertible {
+    public let rawValue: UUID
+
+    public init(_ rawValue: UUID = UUID()) {
+        self.rawValue = rawValue
+    }
+
+    public var description: String { rawValue.uuidString }
+}
+
 public enum PhotoFormat: String, Codable, Sendable {
     case jpeg
     case heic
@@ -125,6 +135,8 @@ public struct AnalysisSignals: Codable, Sendable, Equatable {
     public var brightness: Double
     public var exposureQuality: Double
     public var sharpness: Double
+    public var subjectSharpness: Double?
+    public var subjectConfidence: Double
     public var faceQuality: Double
     public var faceCount: Int
     public var aestheticScore: Double?
@@ -134,29 +146,36 @@ public struct AnalysisSignals: Codable, Sendable, Equatable {
     /// compare it instead of making assumptions about the vector's metric.
     public var featurePrint: Data?
     public var faces: [FaceSignal]
+    public var qualityFlags: [String]
 
     public init(
         fingerprint: PhotoFingerprint,
         brightness: Double,
         exposureQuality: Double,
         sharpness: Double,
+        subjectSharpness: Double? = nil,
+        subjectConfidence: Double = 0,
         faceQuality: Double,
         faceCount: Int,
         aestheticScore: Double?,
         aestheticUtility: Bool?,
         featurePrint: Data?,
-        faces: [FaceSignal]
+        faces: [FaceSignal],
+        qualityFlags: [String] = []
     ) {
         self.fingerprint = fingerprint
         self.brightness = brightness
         self.exposureQuality = exposureQuality
         self.sharpness = sharpness
+        self.subjectSharpness = subjectSharpness
+        self.subjectConfidence = subjectConfidence
         self.faceQuality = faceQuality
         self.faceCount = faceCount
         self.aestheticScore = aestheticScore
         self.aestheticUtility = aestheticUtility
         self.featurePrint = featurePrint
         self.faces = faces
+        self.qualityFlags = qualityFlags
     }
 
     public func removingFeaturePrint() -> AnalysisSignals {
@@ -198,8 +217,43 @@ public enum CurationMode: String, Codable, CaseIterable, Sendable {
     }
 }
 
+public enum CullingAggressiveness: String, Codable, CaseIterable, Sendable {
+    case gentle
+    case balanced
+    case highlights
+
+    public var displayName: String {
+        switch self {
+        case .gentle: "Gentle"
+        case .balanced: "Balanced"
+        case .highlights: "Highlights"
+        }
+    }
+}
+
+public enum StylePreset: String, Codable, CaseIterable, Sendable {
+    case natural
+    case warm
+    case vibrant
+    case soft
+    case blackAndWhite
+
+    public var displayName: String {
+        switch self {
+        case .natural: "Natural"
+        case .warm: "Warm"
+        case .vibrant: "Vibrant"
+        case .soft: "Soft"
+        case .blackAndWhite: "Black & white"
+        }
+    }
+}
+
 public struct ScoringProfile: Codable, Sendable, Equatable {
     public var mode: CurationMode
+    public var aggressiveness: CullingAggressiveness
+    public var style: StylePreset
+    public var styleIntensity: Double
     public var sharpnessWeight: Double
     public var exposureWeight: Double
     public var faceWeight: Double
@@ -207,6 +261,9 @@ public struct ScoringProfile: Codable, Sendable, Equatable {
     public var diversityWeight: Double
     public var targetCount: Int
     public var burstWindow: TimeInterval
+    /// Hard upper bound for a moment cluster. This prevents a long sequence of
+    /// individually similar frames from becoming one unbounded burst.
+    public var maxBurstDuration: TimeInterval
     public var nearDuplicateHammingDistance: Int
     public var nearDuplicateVisualDistance: Double
 
@@ -220,9 +277,16 @@ public struct ScoringProfile: Codable, Sendable, Equatable {
         targetCount: Int,
         burstWindow: TimeInterval,
         nearDuplicateHammingDistance: Int,
-        nearDuplicateVisualDistance: Double
+        nearDuplicateVisualDistance: Double,
+        maxBurstDuration: TimeInterval? = nil,
+        aggressiveness: CullingAggressiveness = .balanced,
+        style: StylePreset = .natural,
+        styleIntensity: Double = 0.65
     ) {
         self.mode = mode
+        self.aggressiveness = aggressiveness
+        self.style = style
+        self.styleIntensity = styleIntensity
         self.sharpnessWeight = sharpnessWeight
         self.exposureWeight = exposureWeight
         self.faceWeight = faceWeight
@@ -230,6 +294,7 @@ public struct ScoringProfile: Codable, Sendable, Equatable {
         self.diversityWeight = diversityWeight
         self.targetCount = targetCount
         self.burstWindow = burstWindow
+        self.maxBurstDuration = maxBurstDuration ?? burstWindow * 4
         self.nearDuplicateHammingDistance = nearDuplicateHammingDistance
         self.nearDuplicateVisualDistance = nearDuplicateVisualDistance
     }
@@ -245,6 +310,23 @@ public struct ScoringProfile: Codable, Sendable, Equatable {
         case .creative:
             ScoringProfile(mode: mode, sharpnessWeight: 0.12, exposureWeight: 0.10, faceWeight: 0.12, aestheticWeight: 0.66, diversityWeight: 0.90, targetCount: 60, burstWindow: 25, nearDuplicateHammingDistance: 10, nearDuplicateVisualDistance: 10)
         }
+    }
+
+    public mutating func apply(aggressiveness: CullingAggressiveness) {
+        self.aggressiveness = aggressiveness
+        switch aggressiveness {
+        case .gentle:
+            nearDuplicateHammingDistance = max(nearDuplicateHammingDistance - 2, 3)
+            nearDuplicateVisualDistance = max(nearDuplicateVisualDistance - 1.5, 4)
+            burstWindow *= 0.8
+        case .balanced:
+            break
+        case .highlights:
+            nearDuplicateHammingDistance += 2
+            nearDuplicateVisualDistance += 1.5
+            burstWindow *= 1.25
+        }
+        maxBurstDuration = max(maxBurstDuration, burstWindow)
     }
 }
 
@@ -313,8 +395,12 @@ public struct SelectionDecision: Identifiable, Codable, Sendable, Equatable {
     public let reasons: [String]
     public let score: Double
 
-    public init(id: UUID = UUID(), photoID: PhotoID, bucket: SelectionBucket, rank: Int?, reasons: [String], score: Double) {
-        self.id = id
+    public init(id: UUID? = nil, photoID: PhotoID, bucket: SelectionBucket, rank: Int?, reasons: [String], score: Double) {
+        // One photo can have only one automatic decision in a shortlist, so
+        // using its stable asset identity keeps manifests and UI diffs
+        // deterministic across repeated runs. Callers may still provide an
+        // explicit ID for a separately tracked manual event.
+        self.id = id ?? photoID.rawValue
         self.photoID = photoID
         self.bucket = bucket
         self.rank = rank
@@ -333,6 +419,8 @@ public struct Shortlist: Codable, Sendable, Equatable {
 }
 
 public struct EditRecipe: Codable, Sendable, Equatable {
+    public var style: StylePreset
+    public var styleIntensity: Double
     public var exposure: Double
     public var contrast: Double
     public var saturation: Double
@@ -340,7 +428,9 @@ public struct EditRecipe: Codable, Sendable, Equatable {
     public var shadows: Double
     public var sharpening: Double
 
-    public init(exposure: Double = 0, contrast: Double = 0, saturation: Double = 0, highlights: Double = 0, shadows: Double = 0, sharpening: Double = 0) {
+    public init(style: StylePreset = .natural, styleIntensity: Double = 0.65, exposure: Double = 0, contrast: Double = 0, saturation: Double = 0, highlights: Double = 0, shadows: Double = 0, sharpening: Double = 0) {
+        self.style = style
+        self.styleIntensity = styleIntensity
         self.exposure = exposure
         self.contrast = contrast
         self.saturation = saturation
@@ -365,42 +455,123 @@ public struct ExportedPhoto: Codable, Sendable, Equatable {
 }
 
 public struct PipelineManifest: Codable, Sendable, Equatable {
+    public let sessionID: SessionID
     public let schemaVersion: Int
     public let pipelineVersion: String
     public let createdAt: Date
     public let sourceFolder: String
     public let mode: CurationMode
+    public let aggressiveness: CullingAggressiveness
+    public let style: StylePreset
+    public let styleIntensity: Double
+    public let targetCount: Int
     public let assets: [PhotoAsset]
     public let analyzed: [AnalyzedPhoto]
     public let grouping: PhotoGrouping
     public let shortlist: Shortlist
     public let exports: [ExportedPhoto]
     public let warnings: [String]
+    public let metrics: PipelineMetrics
 
     public init(
+        sessionID: SessionID = SessionID(),
         schemaVersion: Int = 2,
         pipelineVersion: String = "0.2.0",
         createdAt: Date = Date(),
         sourceFolder: String,
         mode: CurationMode,
+        aggressiveness: CullingAggressiveness = .balanced,
+        style: StylePreset = .natural,
+        styleIntensity: Double = 0.65,
+        targetCount: Int = 0,
         assets: [PhotoAsset],
         analyzed: [AnalyzedPhoto],
         grouping: PhotoGrouping,
         shortlist: Shortlist,
         exports: [ExportedPhoto],
-        warnings: [String] = []
+        warnings: [String] = [],
+        metrics: PipelineMetrics = PipelineMetrics()
     ) {
+        self.sessionID = sessionID
         self.schemaVersion = schemaVersion
         self.pipelineVersion = pipelineVersion
         self.createdAt = createdAt
         self.sourceFolder = sourceFolder
         self.mode = mode
+        self.aggressiveness = aggressiveness
+        self.style = style
+        self.styleIntensity = styleIntensity
+        self.targetCount = targetCount
         self.assets = assets
         self.analyzed = analyzed
         self.grouping = grouping
         self.shortlist = shortlist
         self.exports = exports
         self.warnings = warnings
+        self.metrics = metrics
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case sessionID, schemaVersion, pipelineVersion, createdAt, sourceFolder,
+             mode, aggressiveness, style, styleIntensity, targetCount, assets,
+             analyzed, grouping, shortlist, exports, warnings, metrics
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        sessionID = try container.decodeIfPresent(SessionID.self, forKey: .sessionID) ?? SessionID()
+        schemaVersion = try container.decodeIfPresent(Int.self, forKey: .schemaVersion) ?? 1
+        pipelineVersion = try container.decodeIfPresent(String.self, forKey: .pipelineVersion) ?? "0.1.0"
+        createdAt = try container.decodeIfPresent(Date.self, forKey: .createdAt) ?? Date.distantPast
+        sourceFolder = try container.decode(String.self, forKey: .sourceFolder)
+        mode = try container.decodeIfPresent(CurationMode.self, forKey: .mode) ?? .everyday
+        aggressiveness = try container.decodeIfPresent(CullingAggressiveness.self, forKey: .aggressiveness) ?? .balanced
+        style = try container.decodeIfPresent(StylePreset.self, forKey: .style) ?? .natural
+        styleIntensity = try container.decodeIfPresent(Double.self, forKey: .styleIntensity) ?? 0.65
+        targetCount = try container.decodeIfPresent(Int.self, forKey: .targetCount) ?? 0
+        assets = try container.decodeIfPresent([PhotoAsset].self, forKey: .assets) ?? []
+        analyzed = try container.decodeIfPresent([AnalyzedPhoto].self, forKey: .analyzed) ?? []
+        grouping = try container.decodeIfPresent(PhotoGrouping.self, forKey: .grouping) ?? PhotoGrouping(groups: [])
+        shortlist = try container.decodeIfPresent(Shortlist.self, forKey: .shortlist) ?? Shortlist(decisions: [])
+        exports = try container.decodeIfPresent([ExportedPhoto].self, forKey: .exports) ?? []
+        warnings = try container.decodeIfPresent([String].self, forKey: .warnings) ?? []
+        metrics = try container.decodeIfPresent(PipelineMetrics.self, forKey: .metrics) ?? PipelineMetrics()
+    }
+}
+
+/// Lightweight local diagnostics included in a manifest so performance claims
+/// can be measured on real libraries without uploading telemetry.
+public struct PipelineMetrics: Codable, Sendable, Equatable {
+    public let totalSeconds: Double
+    public let discoverySeconds: Double
+    public let analysisSeconds: Double
+    public let groupingSeconds: Double
+    public let selectionSeconds: Double
+    public let exportSeconds: Double
+    public let cacheHits: Int
+    public let analyzedCount: Int
+    public let workerCount: Int
+
+    public init(
+        totalSeconds: Double = 0,
+        discoverySeconds: Double = 0,
+        analysisSeconds: Double = 0,
+        groupingSeconds: Double = 0,
+        selectionSeconds: Double = 0,
+        exportSeconds: Double = 0,
+        cacheHits: Int = 0,
+        analyzedCount: Int = 0,
+        workerCount: Int = 1
+    ) {
+        self.totalSeconds = totalSeconds
+        self.discoverySeconds = discoverySeconds
+        self.analysisSeconds = analysisSeconds
+        self.groupingSeconds = groupingSeconds
+        self.selectionSeconds = selectionSeconds
+        self.exportSeconds = exportSeconds
+        self.cacheHits = cacheHits
+        self.analyzedCount = analyzedCount
+        self.workerCount = workerCount
     }
 }
 
@@ -447,14 +618,18 @@ public enum PhotoScoring {
         // score make them dominate a photographic shortlist.
         let aesthetic = signals.aestheticUtility == true ? min(rawAesthetic, 0.5) : rawAesthetic
         let face = signals.faceCount == 0 ? 0.5 : signals.faceQuality
+        let sharpness = signals.faceCount > 0 && signals.subjectSharpness != nil
+            ? (signals.subjectSharpness! * 0.70 + signals.sharpness * 0.30)
+            : signals.sharpness
         let total =
-            signals.sharpness * profile.sharpnessWeight +
+            sharpness * profile.sharpnessWeight +
             signals.exposureQuality * profile.exposureWeight +
             face * profile.faceWeight +
             aesthetic * profile.aestheticWeight
 
         var reasons: [String] = []
-        if signals.sharpness >= 0.65 { reasons.append("sharp") }
+        if sharpness >= 0.65 { reasons.append("sharp") }
+        if signals.qualityFlags.contains("subject appears soft") { reasons.append("subject appears soft") }
         if signals.exposureQuality >= 0.65 { reasons.append("well exposed") }
         if signals.faceCount > 0 && face >= 0.65 { reasons.append("strong faces") }
         if aesthetic >= 0.65 { reasons.append("aesthetic") }
@@ -463,7 +638,8 @@ public enum PhotoScoring {
         return CompositeScore(
             total: min(max(total, 0), 1),
             components: [
-                "sharpness": signals.sharpness,
+                "sharpness": sharpness,
+                "subjectSharpness": signals.subjectSharpness ?? signals.sharpness,
                 "exposure": signals.exposureQuality,
                 "faceQuality": face,
                 "aesthetic": aesthetic
@@ -483,6 +659,7 @@ public enum PhotoGroupingEngine {
     private struct WorkingCluster {
         var units: [ContentUnit]
         let representativeIndex: Int
+        let firstDate: Date?
         var latestDate: Date?
     }
 
@@ -524,7 +701,7 @@ public enum PhotoGroupingEngine {
         let maximumCandidateClusters = 128
         for unit in units {
             guard let date = unit.captureDate else {
-                clusters.append(WorkingCluster(units: [unit], representativeIndex: unit.representativeIndex, latestDate: nil))
+                clusters.append(WorkingCluster(units: [unit], representativeIndex: unit.representativeIndex, firstDate: nil, latestDate: nil))
                 continue
             }
 
@@ -536,6 +713,8 @@ public enum PhotoGroupingEngine {
                 let interval = date.timeIntervalSince(latestDate)
                 if interval > profile.burstWindow { break }
                 guard interval >= -profile.burstWindow else { continue }
+                guard let firstDate = clusters[clusterIndex].firstDate,
+                      date.timeIntervalSince(firstDate) <= profile.maxBurstDuration else { continue }
                 compared += 1
 
                 let left = photos[unit.representativeIndex]
@@ -561,7 +740,7 @@ public enum PhotoGroupingEngine {
                 // reverse scan can stop as soon as it leaves the burst window.
                 clusters.append(cluster)
             } else {
-                clusters.append(WorkingCluster(units: [unit], representativeIndex: unit.representativeIndex, latestDate: date))
+                clusters.append(WorkingCluster(units: [unit], representativeIndex: unit.representativeIndex, firstDate: date, latestDate: date))
             }
         }
 
@@ -569,7 +748,8 @@ public enum PhotoGroupingEngine {
             let indices = cluster.units.flatMap(\.memberIndices)
             guard indices.count > 1 else { return nil }
             let kind: PhotoGroup.Kind = cluster.units.count == 1 ? .exactDuplicate : .burst
-            return PhotoGroup(memberIDs: indices.map { photos[$0].id }, kind: kind)
+            let memberIDs = indices.map { photos[$0].id }
+            return PhotoGroup(id: memberIDs[0].rawValue, memberIDs: memberIDs, kind: kind)
         }
         return PhotoGrouping(groups: groups.sorted {
             let left = $0.memberIDs.first?.description ?? ""
@@ -597,15 +777,16 @@ public enum PhotoSelectionEngine {
             let contentBuckets = Dictionary(grouping: members) {
                 $0.photo.signals.fingerprint.contentHash
             }
-            let bucketRepresentatives = contentBuckets.values.compactMap {
-                $0.max { $0.score.total < $1.score.total }
+            let orderedBuckets = contentBuckets.keys.sorted().compactMap { contentBuckets[$0] }
+            let bucketRepresentatives = orderedBuckets.compactMap { bucket in
+                bucket.max { lhs, rhs in Self.isPreferred(rhs, over: lhs) }
             }
-            guard let best = bucketRepresentatives.max(by: { $0.score.total < $1.score.total }) else { continue }
+            guard let best = bucketRepresentatives.max(by: { Self.isPreferred($1, over: $0) }) else { continue }
             groupedIDs.formUnion(group.memberIDs)
             candidates.append(best)
 
-            for bucketMembers in contentBuckets.values {
-                let ordered = bucketMembers.sorted { $0.score.total > $1.score.total }
+            for bucketMembers in orderedBuckets {
+                let ordered = bucketMembers.sorted { Self.isPreferred($0, over: $1) }
                 guard let representative = ordered.first else { continue }
                 if representative.id != best.id {
                     decisions.append(SelectionDecision(
@@ -629,33 +810,39 @@ public enum PhotoSelectionEngine {
         }
 
         candidates.append(contentsOf: photos.filter { !groupedIDs.contains($0.id) })
-        candidates.sort { $0.score.total > $1.score.total }
+        candidates.sort { Self.isPreferred($0, over: $1) }
 
         var selected: [ScoredPhoto] = []
         var remaining = candidates
+        var maximumSimilarity: [PhotoID: Double] = [:]
         while selected.count < profile.targetCount, !remaining.isEmpty {
             var bestIndex = 0
             var bestValue = -Double.infinity
             for (index, candidate) in remaining.enumerated() {
-                let redundancy = selected.map { selectedPhoto -> Double in
-                    if let distance = visualDistance(candidate.photo.signals, selectedPhoto.photo.signals) {
-                        // Vision distances are unbounded; convert them into a
-                        // smooth 0...1 similarity for maximal-marginal relevance.
-                        return exp(-distance / max(profile.nearDuplicateVisualDistance, 0.001))
-                    }
-                    let normalized = PhotoSimilarity.normalizedHammingDistance(
-                        candidate.photo.signals.fingerprint.perceptualHash,
-                        selectedPhoto.photo.signals.fingerprint.perceptualHash
-                    )
-                    return 1 - normalized
-                }.max() ?? 0
+                let redundancy = maximumSimilarity[candidate.id] ?? 0
                 let value = candidate.score.total - profile.diversityWeight * redundancy
-                if value > bestValue {
+                if value > bestValue || (value == bestValue && Self.isPreferred(candidate, over: remaining[bestIndex])) {
                     bestValue = value
                     bestIndex = index
                 }
             }
-            selected.append(remaining.remove(at: bestIndex))
+            let chosen = remaining.remove(at: bestIndex)
+            selected.append(chosen)
+            for candidate in remaining {
+                let similarity: Double
+                if let distance = visualDistance(candidate.photo.signals, chosen.photo.signals) {
+                    // Vision distances are unbounded; convert them into a
+                    // smooth 0...1 similarity for maximal-marginal relevance.
+                    similarity = exp(-distance / max(profile.nearDuplicateVisualDistance, 0.001))
+                } else {
+                    let normalized = PhotoSimilarity.normalizedHammingDistance(
+                        candidate.photo.signals.fingerprint.perceptualHash,
+                        chosen.photo.signals.fingerprint.perceptualHash
+                    )
+                    similarity = 1 - normalized
+                }
+                maximumSimilarity[candidate.id] = max(maximumSimilarity[candidate.id] ?? 0, similarity)
+            }
         }
 
         for (rank, photo) in selected.enumerated() {
@@ -667,5 +854,10 @@ public enum PhotoSelectionEngine {
         }
 
         return Shortlist(decisions: decisions)
+    }
+
+    private static func isPreferred(_ lhs: ScoredPhoto, over rhs: ScoredPhoto) -> Bool {
+        if lhs.score.total != rhs.score.total { return lhs.score.total > rhs.score.total }
+        return lhs.id.description < rhs.id.description
     }
 }
