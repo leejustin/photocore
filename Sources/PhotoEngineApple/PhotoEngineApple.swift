@@ -542,6 +542,10 @@ public final class ApplePhotoRenderer: @unchecked Sendable {
         guard let destination = CGImageDestinationCreateWithData(data, UTType.jpeg.identifier as CFString, 1, nil) else {
             throw PhotoEngineError.exportFailed(outputURL, "Could not create JPEG destination")
         }
+        CGImageDestinationSetProperties(destination, [
+            kCGImageMetadataShouldExcludeGPS: true,
+            kCGImageMetadataShouldExcludeXMP: true
+        ] as CFDictionary)
         CGImageDestinationAddImage(destination, image, properties)
         guard CGImageDestinationFinalize(destination) else {
             throw PhotoEngineError.exportFailed(outputURL, "Could not encode JPEG")

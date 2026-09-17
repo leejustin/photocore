@@ -21,7 +21,7 @@ struct PhotoEngineCommand {
 
         switch command {
         case "version":
-            print("photo-engine 0.2.0")
+            print("photo-engine 0.3.0")
         case "catalog":
             guard arguments.count >= 2 else { throw PhotoEngineError.invalidArgument("catalog requires a folder path") }
             let folder = URL(fileURLWithPath: arguments[1], isDirectory: true).standardizedFileURL
@@ -166,7 +166,7 @@ struct PhotoEngineCommand {
 
     private static func printUsage() {
         print("""
-        photo-engine 0.2.0
+        photo-engine 0.3.0
 
         Usage:
           photo-engine catalog <folder>
