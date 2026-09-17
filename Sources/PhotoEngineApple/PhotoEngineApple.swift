@@ -81,7 +81,12 @@ public final class PhotoFolderImporter: @unchecked Sendable {
                 let sourceSignature = try SHA256Hasher.quickSignature(url: url)
                 let contentHash = try SHA256Hasher.hash(url: url)
                 let asset = PhotoAsset(
-                    id: PhotoID(Self.stableUUID(relativePath: relativePath, metadata: metadata, sourceFingerprint: contentHash)),
+                    id: PhotoID(Self.stableUUID(
+                        rootPath: folder.standardizedFileURL.path,
+                        relativePath: relativePath,
+                        metadata: metadata,
+                        sourceFingerprint: contentHash
+                    )),
                     url: url,
                     relativePath: relativePath,
                     metadata: metadata,
@@ -121,8 +126,8 @@ public final class PhotoFolderImporter: @unchecked Sendable {
         return path.hasPrefix(rootPath) ? String(path.dropFirst(rootPath.count)) : url.lastPathComponent
     }
 
-    private static func stableUUID(relativePath: String, metadata: PhotoMetadata, sourceFingerprint: String) -> UUID {
-        let material = "\(relativePath.precomposedStringWithCanonicalMapping)\u{0}\(metadata.fileSize)\u{0}\(sourceFingerprint)"
+    private static func stableUUID(rootPath: String, relativePath: String, metadata: PhotoMetadata, sourceFingerprint: String) -> UUID {
+        let material = "\(rootPath.precomposedStringWithCanonicalMapping)\u{0}\(relativePath.precomposedStringWithCanonicalMapping)\u{0}\(metadata.fileSize)\u{0}\(sourceFingerprint)"
         var bytes = Array(SHA256.hash(data: Data(material.utf8)).prefix(16))
         // RFC 9562 variant and custom/version-8 bits for a deterministic
         // application-defined identifier derived from SHA-256.

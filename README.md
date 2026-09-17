@@ -6,7 +6,7 @@ The first product surface is a simple native macOS application. The processing e
 
 ## Current status
 
-The local vertical slice is implemented: folder discovery, JPEG/HEIC metadata, stable asset identities, exact/near-duplicate grouping using Vision's supported feature-print distance, bounded parallel analysis with exact-content reuse, subject/face quality signals, configurable culling presets, deterministic shortlisting, versioned binary analysis caching, durable SQLite sessions and artifact accounting, five edited-JPEG looks, sanitized metadata, measured JSON manifests, a conservative exact-duplicate cleanup preview with explicit system-Trash execution, a CLI, and a SwiftUI shell.
+The local vertical slice is implemented: folder discovery, JPEG/HEIC metadata, stable asset identities, exact/near-duplicate grouping using Vision's supported feature-print distance, bounded parallel analysis with exact-content reuse, subject/face quality signals, configurable culling presets, deterministic shortlisting, persistent keep/protect/exclude overrides, versioned binary analysis caching, durable SQLite sessions and artifact accounting, five edited-JPEG looks, sanitized metadata, measured JSON manifests, a conservative exact-duplicate cleanup preview with explicit system-Trash execution, a CLI, and a SwiftUI shell.
 
 Start with:
 

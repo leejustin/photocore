@@ -372,26 +372,33 @@ public final class PhotoCatalog: @unchecked Sendable {
 
     public func overrides(for photoIDs: [PhotoID]) throws -> [SelectionOverride] {
         guard !photoIDs.isEmpty else { return [] }
-        let placeholders = Array(repeating: "?", count: photoIDs.count).joined(separator: ",")
-        var statement: OpaquePointer?
-        let sql = "SELECT photo_id, bucket, reason FROM overrides WHERE photo_id IN (\(placeholders))"
-        guard sqlite3_prepare_v2(database, sql, -1, &statement, nil) == SQLITE_OK, let statement else {
-            throw CatalogError.statementFailed(String(cString: sqlite3_errmsg(database)))
-        }
-        defer { sqlite3_finalize(statement) }
-        for (index, photoID) in photoIDs.enumerated() {
-            bindText(statement, Int32(index + 1), photoID.description)
-        }
         var values: [SelectionOverride] = []
-        while sqlite3_step(statement) == SQLITE_ROW {
-            guard let photoCString = sqlite3_column_text(statement, 0),
-                  let bucketCString = sqlite3_column_text(statement, 1),
-                  let photoUUID = UUID(uuidString: String(cString: photoCString)),
-                  let bucket = SelectionBucket(rawValue: String(cString: bucketCString)) else {
-                throw CatalogError.statementFailed("Stored override has invalid identity")
+        // SQLite's default host-parameter limit is commonly 999. Chunking
+        // keeps a large shoot's re-curation path reliable without changing
+        // the catalog schema or requiring a temporary table.
+        for start in stride(from: 0, to: photoIDs.count, by: 900) {
+            let end = min(start + 900, photoIDs.count)
+            let chunk = Array(photoIDs[start..<end])
+            let placeholders = Array(repeating: "?", count: chunk.count).joined(separator: ",")
+            var statement: OpaquePointer?
+            let sql = "SELECT photo_id, bucket, reason FROM overrides WHERE photo_id IN (\(placeholders))"
+            guard sqlite3_prepare_v2(database, sql, -1, &statement, nil) == SQLITE_OK, let statement else {
+                throw CatalogError.statementFailed(String(cString: sqlite3_errmsg(database)))
             }
-            let reason = sqlite3_column_text(statement, 2).map { String(cString: $0) } ?? "user override"
-            values.append(SelectionOverride(photoID: PhotoID(photoUUID), bucket: bucket, reason: reason))
+            defer { sqlite3_finalize(statement) }
+            for (index, photoID) in chunk.enumerated() {
+                bindText(statement, Int32(index + 1), photoID.description)
+            }
+            while sqlite3_step(statement) == SQLITE_ROW {
+                guard let photoCString = sqlite3_column_text(statement, 0),
+                      let bucketCString = sqlite3_column_text(statement, 1),
+                      let photoUUID = UUID(uuidString: String(cString: photoCString)),
+                      let bucket = SelectionBucket(rawValue: String(cString: bucketCString)) else {
+                    throw CatalogError.statementFailed("Stored override has invalid identity")
+                }
+                let reason = sqlite3_column_text(statement, 2).map { String(cString: $0) } ?? "user override"
+                values.append(SelectionOverride(photoID: PhotoID(photoUUID), bucket: bucket, reason: reason))
+            }
         }
         return values
     }
