@@ -36,7 +36,7 @@ swift build
 swift run photo-engine smoke-test
 swift run photo-engine-checks
 swift run photo-engine catalog /path/to/photos
-swift run photo-engine run /path/to/photos --profile trip --cull balanced --target 60 --style natural --output ./exports/trip
+swift run photo-engine run /path/to/photos --profile trip --cull balanced --target 60 --style natural --size compact --output ./exports/trip
 ```
 
 Launch the simple Mac UI:
