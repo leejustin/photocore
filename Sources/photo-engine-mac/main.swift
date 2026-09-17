@@ -25,6 +25,7 @@ final class PhotoEngineViewModel: ObservableObject {
     @Published var aggressiveness: CullingAggressiveness = .balanced
     @Published var style: StylePreset = .natural
     @Published var styleIntensity: Double = 0.65
+    @Published var exportPreset: ExportPreset = .full
     @Published var targetCount: Double = 40
     @Published var status = "Choose a folder of photos to begin."
     @Published var isRunning = false
@@ -46,6 +47,7 @@ final class PhotoEngineViewModel: ObservableObject {
         let aggressiveness = aggressiveness
         let style = style
         let styleIntensity = styleIntensity
+        let exportSpecification = ExportSpecification(preset: exportPreset)
         let targetCount = targetCountInt
         let outputURL = FileManager.default.homeDirectoryForCurrentUser
             .appendingPathComponent("PhotoEngine Exports", isDirectory: true)
@@ -84,6 +86,7 @@ final class PhotoEngineViewModel: ObservableObject {
                     folder: selectedFolder,
                     outputDirectory: outputURL,
                     profile: profile,
+                    exportSpecification: exportSpecification,
                     progress: { update in progressContinuation.yield(update) },
                     shouldCancel: { Task.isCancelled }
                 )
@@ -158,7 +161,8 @@ final class PhotoEngineViewModel: ObservableObject {
                 warnings: result.warnings,
                 runDirectory: result.runDirectory,
                 storageSummary: result.storageSummary,
-                metrics: result.metrics
+                metrics: result.metrics,
+                exportSpecification: result.exportSpecification
             )
             rows = Self.makeRows(result: self.result!)
             cleanupPlan = nil
@@ -364,6 +368,24 @@ struct ContentView: View {
                             .font(.caption.monospacedDigit())
                             .frame(width: 36, alignment: .trailing)
                     }
+                }
+                .padding(4)
+            }
+
+            GroupBox("Output") {
+                VStack(alignment: .leading, spacing: 6) {
+                    Picker("Export size", selection: $model.exportPreset) {
+                        ForEach(ExportPreset.allCases, id: \.self) { value in
+                            Text(value.displayName).tag(value)
+                        }
+                    }
+                    .labelsHidden()
+                    Text(model.exportPreset == .full
+                         ? "Original dimensions, optimized for editing."
+                         : "2048px long edge, smaller for sharing.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
                 }
                 .padding(4)
             }

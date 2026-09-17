@@ -23,6 +23,7 @@ struct PhotoEngineChecks {
             ("import IDs and warnings", stableIDsAndImportWarnings),
             ("run directories are isolated", isolatedRunDirectories),
             ("metadata policy", metadataPolicy),
+            ("compact export preset", compactExportScalesOutput),
             ("nested output is rejected", rejectsNestedOutput)
         ]
 
@@ -286,6 +287,27 @@ struct PhotoEngineChecks {
         let expectedDate = ISO8601DateFormatter().date(from: "2024-05-06T04:38:09Z")!
         let capturedDate = try require(result.imported.first?.metadata.captureDate, "capture date was not parsed")
         try expect(abs(capturedDate.timeIntervalSince(expectedDate) - 0.25) < 0.001, "offset/subsecond capture date was parsed incorrectly")
+    }
+
+    private static func compactExportScalesOutput() throws {
+        let fixture = try FixtureDirectory()
+        defer { fixture.remove() }
+        try fixture.writeJPEG(name: "large-enough.jpg", red: 0.4)
+        var profile = ScoringProfile.default(for: .everyday)
+        profile.targetCount = 1
+        let result = try PhotoPipelineRunner().run(
+            folder: fixture.source,
+            outputDirectory: fixture.output,
+            profile: profile,
+            exportSpecification: ExportSpecification(preset: .compact, maxLongEdge: 16, quality: 0.8)
+        )
+        let export = try require(result.exports.first, "missing compact export")
+        let source = try require(CGImageSourceCreateWithURL(URL(fileURLWithPath: export.outputPath) as CFURL, nil), "could not open compact export")
+        let properties = try require(CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as NSDictionary?, "missing compact metadata")
+        let width = (properties[kCGImagePropertyPixelWidth] as? NSNumber)?.intValue ?? 0
+        let height = (properties[kCGImagePropertyPixelHeight] as? NSNumber)?.intValue ?? 0
+        try expect(max(width, height) == 16, "compact preset did not scale the long edge")
+        try expect(result.exportSpecification.preset == .compact, "compact export was not recorded")
     }
 
     private static func rejectsNestedOutput() throws {

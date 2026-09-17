@@ -74,11 +74,25 @@ struct PhotoEngineCommand {
             }
             profile.styleIntensity = intensity
         }
+        let exportPreset: ExportPreset
+        if let rawSize = option(arguments, name: "--size") {
+            guard let parsed = ExportPreset(rawValue: rawSize) else {
+                throw PhotoEngineError.invalidArgument("Unknown export size '\(rawSize)'. Use full or compact.")
+            }
+            exportPreset = parsed
+        } else {
+            exportPreset = .full
+        }
 
         let outputPath = option(arguments, name: "--output") ?? "./exports/\(folder.lastPathComponent)-curated"
         let output = URL(fileURLWithPath: outputPath, isDirectory: true).standardizedFileURL
         let runner = PhotoPipelineRunner()
-        let result = try runner.run(folder: folder, outputDirectory: output, profile: profile) { progress in
+        let result = try runner.run(
+            folder: folder,
+            outputDirectory: output,
+            profile: profile,
+            exportSpecification: ExportSpecification(preset: exportPreset)
+        ) { progress in
             let suffix = progress.total > 0 ? " (\(progress.completed)/\(progress.total))" : ""
             print("[\(progress.stage.rawValue)] \(progress.message)\(suffix)")
         }
@@ -156,7 +170,7 @@ struct PhotoEngineCommand {
 
         Usage:
           photo-engine catalog <folder>
-          photo-engine run <folder> [--profile everyday|groupEvent|trip|creative] [--cull gentle|balanced|highlights] [--target N] [--style natural|warm|vibrant|soft|blackAndWhite] [--intensity 0...1] [--output folder]
+          photo-engine run <folder> [--profile everyday|groupEvent|trip|creative] [--cull gentle|balanced|highlights] [--target N] [--style natural|warm|vibrant|soft|blackAndWhite] [--intensity 0...1] [--size full|compact] [--output folder]
           photo-engine smoke-test
           photo-engine version
         """)

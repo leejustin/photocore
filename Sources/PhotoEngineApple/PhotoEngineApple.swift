@@ -393,7 +393,8 @@ public final class ApplePhotoRenderer: @unchecked Sendable {
         photo: AnalyzedPhoto,
         outputURL: URL,
         style: StylePreset = .natural,
-        styleIntensity: Double = 0.65
+        styleIntensity: Double = 0.65,
+        exportSpecification: ExportSpecification = ExportSpecification()
     ) throws -> ExportedPhoto {
         let recipe = Self.recipe(for: photo, style: style, intensity: styleIntensity)
         guard let input = CIImage(contentsOf: photo.asset.url, options: [.applyOrientationProperty: true]) else {
@@ -445,10 +446,22 @@ public final class ApplePhotoRenderer: @unchecked Sendable {
         }
 
         try FileManager.default.createDirectory(at: outputURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+        let renderedImage: CIImage
+        if let maxLongEdge = exportSpecification.maxLongEdge, maxLongEdge > 0 {
+            let longEdge = max(image.extent.width, image.extent.height)
+            if longEdge > CGFloat(maxLongEdge) {
+                let scale = CGFloat(maxLongEdge) / longEdge
+                renderedImage = image.transformed(by: CGAffineTransform(scaleX: scale, y: scale))
+            } else {
+                renderedImage = image
+            }
+        } else {
+            renderedImage = image
+        }
         let sRGB = CGColorSpace(name: CGColorSpace.sRGB)
         guard let outputImage = context.createCGImage(
-            image,
-            from: image.extent,
+            renderedImage,
+            from: renderedImage.extent,
             format: .RGBA8,
             colorSpace: sRGB
         ) else {
@@ -458,7 +471,7 @@ public final class ApplePhotoRenderer: @unchecked Sendable {
             image: outputImage,
             sourceURL: photo.asset.url,
             outputURL: outputURL,
-            quality: 0.92
+            quality: exportSpecification.quality
         )
 
         return ExportedPhoto(photoID: photo.id, sourcePath: photo.asset.url.path, outputPath: outputURL.path, recipe: recipe)
@@ -579,8 +592,9 @@ public struct PipelineResult: Sendable {
     public let runDirectory: URL
     public let storageSummary: PhotoCatalog.StorageSummary?
     public let metrics: PipelineMetrics
+    public let exportSpecification: ExportSpecification
 
-    public init(sessionID: SessionID, imported: [PhotoAsset], analyzed: [AnalyzedPhoto], grouping: PhotoGrouping, scored: [ScoredPhoto], shortlist: Shortlist, exports: [ExportedPhoto], manifestURL: URL, warnings: [ImportIssue], runDirectory: URL, storageSummary: PhotoCatalog.StorageSummary?, metrics: PipelineMetrics = PipelineMetrics()) {
+    public init(sessionID: SessionID, imported: [PhotoAsset], analyzed: [AnalyzedPhoto], grouping: PhotoGrouping, scored: [ScoredPhoto], shortlist: Shortlist, exports: [ExportedPhoto], manifestURL: URL, warnings: [ImportIssue], runDirectory: URL, storageSummary: PhotoCatalog.StorageSummary?, metrics: PipelineMetrics = PipelineMetrics(), exportSpecification: ExportSpecification = ExportSpecification()) {
         self.sessionID = sessionID
         self.imported = imported
         self.analyzed = analyzed
@@ -593,6 +607,7 @@ public struct PipelineResult: Sendable {
         self.runDirectory = runDirectory
         self.storageSummary = storageSummary
         self.metrics = metrics
+        self.exportSpecification = exportSpecification
     }
 }
 
@@ -737,6 +752,7 @@ public final class PhotoPipelineRunner: @unchecked Sendable {
         folder: URL,
         outputDirectory: URL,
         profile: ScoringProfile,
+        exportSpecification: ExportSpecification = ExportSpecification(),
         progress: @escaping @Sendable (PipelineProgress) -> Void = { _ in },
         shouldCancel: @escaping @Sendable () -> Bool = { false }
     ) throws -> PipelineResult {
@@ -955,7 +971,8 @@ public final class PhotoPipelineRunner: @unchecked Sendable {
                 photo: analyzedPhoto,
                 outputURL: outputURL,
                 style: profile.style,
-                styleIntensity: profile.styleIntensity
+                styleIntensity: profile.styleIntensity,
+                exportSpecification: exportSpecification
             )
             exports.append(exported)
             if let catalog, catalogHealthy {
@@ -990,6 +1007,7 @@ public final class PhotoPipelineRunner: @unchecked Sendable {
             style: profile.style,
             styleIntensity: profile.styleIntensity,
             targetCount: profile.targetCount,
+            exportSpecification: exportSpecification,
             assets: imported.map(\.asset),
             // Feature prints remain in the compact analysis cache. They are
             // implementation details and would dominate the portable manifest.
@@ -1033,7 +1051,8 @@ public final class PhotoPipelineRunner: @unchecked Sendable {
             warnings: warnings,
             runDirectory: runDirectory,
             storageSummary: storageSummary,
-            metrics: manifest.metrics
+            metrics: manifest.metrics,
+            exportSpecification: exportSpecification
         )
     }
 

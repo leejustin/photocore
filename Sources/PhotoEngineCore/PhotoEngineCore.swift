@@ -479,6 +479,44 @@ public struct CleanupReport: Codable, Sendable, Equatable {
     }
 }
 
+public enum ExportPreset: String, Codable, CaseIterable, Sendable {
+    case full
+    case compact
+
+    public var displayName: String {
+        switch self {
+        case .full: "Full size"
+        case .compact: "Compact"
+        }
+    }
+
+    public var maxLongEdge: Int? {
+        switch self {
+        case .full: nil
+        case .compact: 2048
+        }
+    }
+
+    public var quality: Double {
+        switch self {
+        case .full: 0.92
+        case .compact: 0.84
+        }
+    }
+}
+
+public struct ExportSpecification: Codable, Sendable, Equatable {
+    public let preset: ExportPreset
+    public let maxLongEdge: Int?
+    public let quality: Double
+
+    public init(preset: ExportPreset = .full, maxLongEdge: Int? = nil, quality: Double? = nil) {
+        self.preset = preset
+        self.maxLongEdge = maxLongEdge ?? preset.maxLongEdge
+        self.quality = min(max(quality ?? preset.quality, 0.1), 1)
+    }
+}
+
 public struct SelectionDecision: Identifiable, Codable, Sendable, Equatable {
     public let id: UUID
     public let photoID: PhotoID
@@ -575,6 +613,7 @@ public struct PipelineManifest: Codable, Sendable, Equatable {
     public let style: StylePreset
     public let styleIntensity: Double
     public let targetCount: Int
+    public let exportSpecification: ExportSpecification
     public let assets: [PhotoAsset]
     public let analyzed: [AnalyzedPhoto]
     public let grouping: PhotoGrouping
@@ -585,8 +624,8 @@ public struct PipelineManifest: Codable, Sendable, Equatable {
 
     public init(
         sessionID: SessionID = SessionID(),
-        schemaVersion: Int = 2,
-        pipelineVersion: String = "0.2.0",
+        schemaVersion: Int = 3,
+        pipelineVersion: String = "0.3.0",
         createdAt: Date = Date(),
         sourceFolder: String,
         mode: CurationMode,
@@ -595,6 +634,7 @@ public struct PipelineManifest: Codable, Sendable, Equatable {
         style: StylePreset = .natural,
         styleIntensity: Double = 0.65,
         targetCount: Int = 0,
+        exportSpecification: ExportSpecification = ExportSpecification(),
         assets: [PhotoAsset],
         analyzed: [AnalyzedPhoto],
         grouping: PhotoGrouping,
@@ -614,6 +654,7 @@ public struct PipelineManifest: Codable, Sendable, Equatable {
         self.style = style
         self.styleIntensity = styleIntensity
         self.targetCount = targetCount
+        self.exportSpecification = exportSpecification
         self.assets = assets
         self.analyzed = analyzed
         self.grouping = grouping
@@ -626,7 +667,8 @@ public struct PipelineManifest: Codable, Sendable, Equatable {
     private enum CodingKeys: String, CodingKey {
         case sessionID, schemaVersion, pipelineVersion, createdAt, sourceFolder,
              mode, aggressiveness, style, styleIntensity, targetCount, assets,
-             profile, analyzed, grouping, shortlist, exports, warnings, metrics
+             profile, analyzed, grouping, shortlist, exports, warnings, metrics,
+             exportSpecification
     }
 
     public init(from decoder: Decoder) throws {
@@ -642,6 +684,7 @@ public struct PipelineManifest: Codable, Sendable, Equatable {
         style = try container.decodeIfPresent(StylePreset.self, forKey: .style) ?? .natural
         styleIntensity = try container.decodeIfPresent(Double.self, forKey: .styleIntensity) ?? 0.65
         targetCount = try container.decodeIfPresent(Int.self, forKey: .targetCount) ?? 0
+        exportSpecification = try container.decodeIfPresent(ExportSpecification.self, forKey: .exportSpecification) ?? ExportSpecification()
         assets = try container.decodeIfPresent([PhotoAsset].self, forKey: .assets) ?? []
         analyzed = try container.decodeIfPresent([AnalyzedPhoto].self, forKey: .analyzed) ?? []
         grouping = try container.decodeIfPresent(PhotoGrouping.self, forKey: .grouping) ?? PhotoGrouping(groups: [])
