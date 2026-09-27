@@ -15,6 +15,7 @@ struct PhotoEngineChecks {
             ("burst groups do not chain", burstGroupingUsesFixedRepresentative),
             ("burst duration is bounded", burstDurationIsBounded),
             ("selection honors its target", selectionHonorsTarget),
+            ("technical rejects never compete", technicalRejectsNeverCompete),
             ("selection is deterministic", selectionIsDeterministic),
             ("culling controls and style recipes", cullingControlsAndStyleRecipes),
             ("Vision feature prints round-trip", visionFeaturePrintRoundTrip),
@@ -102,6 +103,62 @@ struct PhotoEngineChecks {
             visualDistance: { _, _ in 20 }
         )
         try expect(mixed.decisions.first { $0.photoID == weak.id }?.bucket == .hidden, "a clearly weaker photo was sent for confirmation")
+    }
+
+    private static func technicalRejectsNeverCompete() throws {
+        let keepers = (0..<4).map {
+            analyzed(index: $0, hash: "keep-\($0)", perceptualHash: UInt64($0), date: nil)
+        }
+        let blur = analyzed(
+            index: 20,
+            hash: "blur",
+            perceptualHash: 900,
+            date: nil,
+            sharpness: 0.02,
+            qualityFlags: [PhotoTechnicalReject.extremeBlur]
+        )
+        let blank = analyzed(
+            index: 21,
+            hash: "blank",
+            perceptualHash: 901,
+            date: nil,
+            qualityFlags: [PhotoTechnicalReject.noClearSubject],
+            aestheticUtility: true,
+            aestheticScore: 0.1
+        )
+        var profile = ScoringProfile.default(for: .everyday)
+        profile.targetCount = 3
+        let scored = (keepers + [blur, blank]).map {
+            ScoredPhoto(photo: $0, score: PhotoScoring.score($0, profile: profile))
+        }
+        let shortlist = PhotoSelectionEngine.select(
+            scored,
+            grouping: PhotoGrouping(groups: []),
+            profile: profile,
+            visualDistance: { _, _ in 20 }
+        )
+        let blurDecision = try require(shortlist.decisions.first { $0.photoID == blur.id }, "blur decision missing")
+        try expect(blurDecision.bucket == .hidden, "extreme blur was not hard-hidden")
+        try expect(blurDecision.reasons.contains { $0.contains("extreme blur") }, "blur reject reason missing")
+        let blankDecision = try require(shortlist.decisions.first { $0.photoID == blank.id }, "blank decision missing")
+        try expect(blankDecision.bucket == .hidden, "blank frame was not hard-hidden")
+        try expect(!shortlist.selectedIDs.contains(blur.id), "blur competed for the shortlist")
+        try expect(!shortlist.selectedIDs.contains(blank.id), "blank competed for the shortlist")
+
+        var creative = ScoringProfile.default(for: .creative)
+        creative.targetCount = 2
+        let creativeBlank = analyzed(
+            index: 22,
+            hash: "creative-blank",
+            perceptualHash: 902,
+            date: nil,
+            qualityFlags: [PhotoTechnicalReject.noClearSubject],
+            aestheticScore: 0.2
+        )
+        try expect(
+            PhotoTechnicalReject.reason(for: creativeBlank.signals, policy: creative.rejection) == nil,
+            "creative rejection policy should keep unusual frames"
+        )
     }
 
     private static func burstDurationIsBounded() throws {
@@ -406,7 +463,16 @@ struct PhotoEngineChecks {
         }
     }
 
-    private static func analyzed(index: Int, hash: String, perceptualHash: UInt64, date: Date?, sharpness: Double = 0.8) -> AnalyzedPhoto {
+    private static func analyzed(
+        index: Int,
+        hash: String,
+        perceptualHash: UInt64,
+        date: Date?,
+        sharpness: Double = 0.8,
+        qualityFlags: [String] = [],
+        aestheticUtility: Bool? = false,
+        aestheticScore: Double? = 0.8
+    ) -> AnalyzedPhoto {
         let id = PhotoID(UUID(uuidString: String(format: "00000000-0000-0000-0000-%012d", index + 1))!)
         let asset = PhotoAsset(
             id: id,
@@ -423,10 +489,11 @@ struct PhotoEngineChecks {
                 sharpness: sharpness,
                 faceQuality: 0.5,
                 faceCount: 0,
-                aestheticScore: 0.8,
-                aestheticUtility: false,
+                aestheticScore: aestheticScore,
+                aestheticUtility: aestheticUtility,
                 featurePrint: nil,
-                faces: []
+                faces: [],
+                qualityFlags: qualityFlags
             )
         )
     }
@@ -467,8 +534,8 @@ private struct FixtureDirectory {
     func remove() { try? FileManager.default.removeItem(at: root) }
 
     func writeJPEG(name: String, red: CGFloat, includeMetadata: Bool = false) throws {
-        let width = 64
-        let height = 64
+        let width = 128
+        let height = 128
         let context = try PhotoEngineChecks.require(
             CGContext(
                 data: nil,
@@ -481,8 +548,21 @@ private struct FixtureDirectory {
             ),
             "could not create fixture context"
         )
+        // Patterned fixtures keep enough edge energy that analysis does not
+        // hard-reject them as extreme blur / blank frames.
         context.setFillColor(CGColor(red: red, green: 0.25, blue: 0.6, alpha: 1))
         context.fill(CGRect(x: 0, y: 0, width: width, height: height))
+        context.setFillColor(CGColor(red: 1 - red, green: 0.75, blue: 0.2, alpha: 1))
+        context.fill(CGRect(x: 16, y: 16, width: 48, height: 48))
+        context.setStrokeColor(CGColor(gray: 1, alpha: 1))
+        context.setLineWidth(2)
+        context.stroke(CGRect(x: 8, y: 8, width: width - 16, height: height - 16))
+        for i in 0..<8 {
+            let x = CGFloat(12 + i * 14)
+            context.move(to: CGPoint(x: x, y: 72))
+            context.addLine(to: CGPoint(x: x + 8, y: 112))
+        }
+        context.strokePath()
         let image = try PhotoEngineChecks.require(context.makeImage(), "could not create fixture image")
         let url = source.appendingPathComponent(name)
         let destination = try PhotoEngineChecks.require(

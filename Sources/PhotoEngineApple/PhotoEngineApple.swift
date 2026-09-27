@@ -287,6 +287,20 @@ public struct AppleAnalysisEngine: Sendable {
         if vision.faces.count > 0 && vision.faceQuality < 0.35 {
             qualityFlags.append("face quality low")
         }
+        if pixels.sharpness < 0.06 {
+            qualityFlags.append(PhotoTechnicalReject.extremeBlur)
+        }
+        if pixels.exposureQuality < 0.08 && (pixels.brightness < 0.08 || pixels.brightness > 0.92) {
+            qualityFlags.append(PhotoTechnicalReject.unusableExposure)
+        }
+        if vision.faces.isEmpty {
+            let looksUtility = vision.aestheticUtility == true
+            let lowAesthetic = (vision.aestheticScore ?? 0.5) < 0.28
+            let lowSubject = subject.confidence < 0.18
+            if looksUtility || (lowAesthetic && lowSubject && pixels.sharpness < 0.42) {
+                qualityFlags.append(PhotoTechnicalReject.noClearSubject)
+            }
+        }
         let fingerprint = PhotoFingerprint(contentHash: contentHash, perceptualHash: pixels.perceptualHash)
 
         return AnalysisSignals(
@@ -1143,7 +1157,7 @@ public final class PhotoPipelineRunner: @unchecked Sendable {
             do {
                 for (asset, signals) in zip(imported.map(\.asset), signalsByIndex) {
                     try catalog.upsert(asset: asset, sessionID: sessionID, contentHash: signals.fingerprint.contentHash)
-                    try catalog.upsert(analysis: signals, for: asset.id, analyzerVersion: "apple-analysis-0.2.2")
+                    try catalog.upsert(analysis: signals, for: asset.id, analyzerVersion: "apple-analysis-0.2.3")
                 }
             } catch {
                 catalogHealthy = false

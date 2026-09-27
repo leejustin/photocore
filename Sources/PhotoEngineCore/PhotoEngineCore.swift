@@ -221,6 +221,89 @@ public enum CurationMode: String, Codable, CaseIterable, Sendable {
         case .creative: "Creative"
         }
     }
+
+    public var cullHint: String {
+        switch self {
+        case .everyday:
+            "Drops blur, blank frames, and unusable exposures before you confirm."
+        case .groupEvent:
+            "Protects faces: soft subjects and blank frames leave the album."
+        case .trip:
+            "Keeps landscapes and scenes; only blur, utility shots, and bad exposures leave."
+        case .creative:
+            "Only extreme blur and unusable exposures are hard rejects. Soft and unusual frames stay."
+        }
+    }
+}
+
+/// Occasion-aware rules for frames that should never compete for the shortlist.
+public struct RejectionPolicy: Codable, Sendable, Equatable {
+    public var rejectExtremeBlur: Bool
+    public var rejectNoSubject: Bool
+    public var rejectUnusableExposure: Bool
+    /// When true, "no clear subject" only applies to Vision utility / accidental shots.
+    public var noSubjectRequiresUtility: Bool
+    public var facesMatter: Bool
+
+    public init(
+        rejectExtremeBlur: Bool = true,
+        rejectNoSubject: Bool = true,
+        rejectUnusableExposure: Bool = true,
+        noSubjectRequiresUtility: Bool = false,
+        facesMatter: Bool = true
+    ) {
+        self.rejectExtremeBlur = rejectExtremeBlur
+        self.rejectNoSubject = rejectNoSubject
+        self.rejectUnusableExposure = rejectUnusableExposure
+        self.noSubjectRequiresUtility = noSubjectRequiresUtility
+        self.facesMatter = facesMatter
+    }
+
+    public static func `default`(for mode: CurationMode) -> RejectionPolicy {
+        switch mode {
+        case .everyday:
+            RejectionPolicy()
+        case .groupEvent:
+            RejectionPolicy(facesMatter: true)
+        case .trip:
+            RejectionPolicy(noSubjectRequiresUtility: true, facesMatter: false)
+        case .creative:
+            RejectionPolicy(rejectNoSubject: false, facesMatter: false)
+        }
+    }
+}
+
+public enum PhotoTechnicalReject {
+    public static let extremeBlur = "extreme blur"
+    public static let noClearSubject = "no clear subject"
+    public static let unusableExposure = "unusable exposure"
+
+    public static let allFlags: Set<String> = [extremeBlur, noClearSubject, unusableExposure]
+
+    public static func isTechnicalRejectReason(_ reason: String) -> Bool {
+        reason.hasPrefix("technical reject:")
+    }
+
+    /// Returns a shortlist reason when this photo must be hidden under the policy.
+    public static func reason(for signals: AnalysisSignals, policy: RejectionPolicy) -> String? {
+        let flags = Set(signals.qualityFlags)
+        if policy.rejectExtremeBlur, flags.contains(extremeBlur) {
+            return "technical reject: extreme blur"
+        }
+        if policy.rejectUnusableExposure, flags.contains(unusableExposure) {
+            return "technical reject: unusable exposure"
+        }
+        if policy.rejectNoSubject, flags.contains(noClearSubject) {
+            if policy.noSubjectRequiresUtility {
+                if signals.aestheticUtility == true {
+                    return "technical reject: no clear subject"
+                }
+            } else {
+                return "technical reject: no clear subject"
+            }
+        }
+        return nil
+    }
 }
 
 public enum CullingAggressiveness: String, Codable, CaseIterable, Sendable {
@@ -329,6 +412,7 @@ public struct ScoringProfile: Codable, Sendable, Equatable {
     public var maxBurstDuration: TimeInterval
     public var nearDuplicateHammingDistance: Int
     public var nearDuplicateVisualDistance: Double
+    public var rejection: RejectionPolicy
 
     public init(
         mode: CurationMode,
@@ -346,7 +430,8 @@ public struct ScoringProfile: Codable, Sendable, Equatable {
         style: StylePreset = .natural,
         styleIntensity: Double = 0.65,
         sizingMode: ShortlistSizingMode = .count,
-        keepPercentage: Double = 30
+        keepPercentage: Double = 30,
+        rejection: RejectionPolicy? = nil
     ) {
         self.mode = mode
         self.aggressiveness = aggressiveness
@@ -364,6 +449,7 @@ public struct ScoringProfile: Codable, Sendable, Equatable {
         self.maxBurstDuration = maxBurstDuration ?? burstWindow * 4
         self.nearDuplicateHammingDistance = nearDuplicateHammingDistance
         self.nearDuplicateVisualDistance = nearDuplicateVisualDistance
+        self.rejection = rejection ?? .default(for: mode)
     }
 
     public static func `default`(for mode: CurationMode) -> ScoringProfile {
@@ -412,6 +498,7 @@ public struct ScoringProfile: Codable, Sendable, Equatable {
         case sharpnessWeight, exposureWeight, faceWeight, aestheticWeight, diversityWeight
         case targetCount, burstWindow, maxBurstDuration
         case nearDuplicateHammingDistance, nearDuplicateVisualDistance
+        case rejection
     }
 
     public init(from decoder: Decoder) throws {
@@ -432,6 +519,7 @@ public struct ScoringProfile: Codable, Sendable, Equatable {
         maxBurstDuration = try container.decodeIfPresent(TimeInterval.self, forKey: .maxBurstDuration) ?? burstWindow * 4
         nearDuplicateHammingDistance = try container.decode(Int.self, forKey: .nearDuplicateHammingDistance)
         nearDuplicateVisualDistance = try container.decode(Double.self, forKey: .nearDuplicateVisualDistance)
+        rejection = try container.decodeIfPresent(RejectionPolicy.self, forKey: .rejection) ?? .default(for: mode)
     }
 
     public func encode(to encoder: Encoder) throws {
@@ -452,6 +540,7 @@ public struct ScoringProfile: Codable, Sendable, Equatable {
         try container.encode(maxBurstDuration, forKey: .maxBurstDuration)
         try container.encode(nearDuplicateHammingDistance, forKey: .nearDuplicateHammingDistance)
         try container.encode(nearDuplicateVisualDistance, forKey: .nearDuplicateVisualDistance)
+        try container.encode(rejection, forKey: .rejection)
     }
 }
 
@@ -1107,10 +1196,27 @@ public enum PhotoSelectionEngine {
         var groupedIDs = Set<PhotoID>()
         var decisions: [SelectionDecision] = []
         var candidates: [ScoredPhoto] = []
+        var trashIDs = Set<PhotoID>()
+
+        for photo in photos {
+            guard let reason = PhotoTechnicalReject.reason(for: photo.photo.signals, policy: profile.rejection) else { continue }
+            trashIDs.insert(photo.id)
+            decisions.append(SelectionDecision(
+                photoID: photo.id,
+                bucket: .hidden,
+                rank: nil,
+                reasons: [reason],
+                score: photo.score.total
+            ))
+        }
 
         for group in grouping.groups {
             let members = group.memberIDs.compactMap { byID[$0] }
-            let contentBuckets = Dictionary(grouping: members) {
+            let usable = members.filter { !trashIDs.contains($0.id) }
+            groupedIDs.formUnion(group.memberIDs)
+            guard !usable.isEmpty else { continue }
+
+            let contentBuckets = Dictionary(grouping: usable) {
                 $0.photo.signals.fingerprint.contentHash
             }
             let orderedBuckets = contentBuckets.keys.sorted().compactMap { contentBuckets[$0] }
@@ -1118,7 +1224,6 @@ public enum PhotoSelectionEngine {
                 bucket.max { lhs, rhs in Self.isPreferred(rhs, over: lhs) }
             }
             guard let best = bucketRepresentatives.max(by: { Self.isPreferred($1, over: $0) }) else { continue }
-            groupedIDs.formUnion(group.memberIDs)
             candidates.append(best)
 
             for bucketMembers in orderedBuckets {
@@ -1145,7 +1250,7 @@ public enum PhotoSelectionEngine {
             }
         }
 
-        candidates.append(contentsOf: photos.filter { !groupedIDs.contains($0.id) })
+        candidates.append(contentsOf: photos.filter { !groupedIDs.contains($0.id) && !trashIDs.contains($0.id) })
         candidates.sort { Self.isPreferred($0, over: $1) }
 
         var selected: [ScoredPhoto] = []
