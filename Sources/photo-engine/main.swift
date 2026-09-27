@@ -21,7 +21,7 @@ struct PhotoEngineCommand {
 
         switch command {
         case "version":
-            print("photo-engine 0.3.0")
+            print("photo-engine 0.4.0")
         case "catalog":
             guard arguments.count >= 2 else { throw PhotoEngineError.invalidArgument("catalog requires a folder path") }
             let folder = URL(fileURLWithPath: arguments[1], isDirectory: true).standardizedFileURL
@@ -35,6 +35,8 @@ struct PhotoEngineCommand {
             try runPipeline(arguments: Array(arguments.dropFirst()))
         case "smoke-test":
             try runSmokeTests()
+        case "serve":
+            try serve(arguments: Array(arguments.dropFirst()))
         case "help", "--help", "-h":
             printUsage()
         default:
@@ -54,8 +56,22 @@ struct PhotoEngineCommand {
         if rawTarget != nil && (targetCount ?? 0) <= 0 {
             throw PhotoEngineError.invalidArgument("Target must be a positive integer.")
         }
+        let rawKeepPercent = option(arguments, name: "--keep-percent")
+        let keepPercent = rawKeepPercent.flatMap(Double.init)
+        if rawTarget != nil && rawKeepPercent != nil {
+            throw PhotoEngineError.invalidArgument("Use either --target or --keep-percent, not both.")
+        }
+        if let keepPercent, !(5...90).contains(keepPercent) {
+            throw PhotoEngineError.invalidArgument("Keep percentage must be between 5 and 90.")
+        }
         var profile = ScoringProfile.default(for: mode)
-        if let targetCount, targetCount > 0 { profile.targetCount = targetCount }
+        if let keepPercent {
+            profile.sizingMode = .percentage
+            profile.keepPercentage = keepPercent
+        } else if let targetCount, targetCount > 0 {
+            profile.sizingMode = .count
+            profile.targetCount = targetCount
+        }
         if let rawAggressiveness = option(arguments, name: "--cull") {
             guard let aggressiveness = CullingAggressiveness(rawValue: rawAggressiveness) else {
                 throw PhotoEngineError.invalidArgument("Unknown culling preset '\(rawAggressiveness)'. Use gentle, balanced, or highlights.")
@@ -164,15 +180,39 @@ struct PhotoEngineCommand {
         print("Smoke tests passed")
     }
 
+    private static func serve(arguments: [String]) throws {
+        let rawPort = option(arguments, name: "--port") ?? "8787"
+        guard let port = UInt16(rawPort), port > 0 else {
+            throw PhotoEngineError.invalidArgument("Port must be between 1 and 65535.")
+        }
+        let token = ProcessInfo.processInfo.environment["PHOTO_ENGINE_TOKEN"]
+        let server = LocalCurationServer()
+        try server.start(port: port, token: token)
+        let auth = (token?.isEmpty == false) ? "Bearer auth on" : "no auth token set"
+        emit("Photocore worker listening on http://127.0.0.1:\(port) (\(auth))")
+        emit("POST /v1/jobs  {\"sourcePath\":\"/path/to/shoot\"}")
+        emit("This process reads folders that already exist on this Mac. It does not upload photos.")
+        dispatchMain()
+    }
+
+    private static func emit(_ line: String) {
+        var text = Data(line.utf8)
+        text.append(0x0A)
+        try? FileHandle.standardOutput.write(contentsOf: text)
+    }
+
     private static func printUsage() {
         print("""
-        photo-engine 0.3.0
+        photo-engine 0.4.0
 
         Usage:
           photo-engine catalog <folder>
-          photo-engine run <folder> [--profile everyday|groupEvent|trip|creative] [--cull gentle|balanced|highlights] [--target N] [--style natural|warm|vibrant|soft|blackAndWhite] [--intensity 0...1] [--size full|compact] [--output folder]
+          photo-engine run <folder> [--profile everyday|groupEvent|trip|creative] [--cull gentle|balanced|highlights] [--target N | --keep-percent P] [--style natural|warm|vibrant|soft|blackAndWhite] [--intensity 0...1] [--size full|compact] [--output folder]
+          photo-engine serve [--port 8787]
           photo-engine smoke-test
           photo-engine version
+
+        serve binds to loopback only. Set PHOTO_ENGINE_TOKEN to require Authorization: Bearer.
         """)
     }
 }

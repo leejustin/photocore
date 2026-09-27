@@ -1,8 +1,11 @@
 # macOS
 .DS_Store
 
-# Swift Package Manager
+# Swift Package Manager build cache (debug, intermediates, dSYMs)
 .build/
+
+# Release binaries go in dist/ (not ignored — copy after: swift build -c release)
+
 .swiftpm/
 Package.resolved
 

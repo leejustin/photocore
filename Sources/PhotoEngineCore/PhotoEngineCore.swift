@@ -237,6 +237,61 @@ public enum CullingAggressiveness: String, Codable, CaseIterable, Sendable {
     }
 }
 
+public enum ShortlistSizingMode: String, Codable, CaseIterable, Sendable {
+    case count
+    case percentage
+
+    public var displayName: String {
+        switch self {
+        case .count: "Fixed count"
+        case .percentage: "Percentage to keep"
+        }
+    }
+}
+
+public enum ShortlistEstimate {
+    public static func resolvedTargetCount(
+        totalPhotos: Int,
+        sizingMode: ShortlistSizingMode,
+        targetCount: Int,
+        keepPercentage: Double
+    ) -> Int {
+        guard totalPhotos > 0 else { return max(1, targetCount) }
+        switch sizingMode {
+        case .count:
+            return max(1, min(totalPhotos, targetCount))
+        case .percentage:
+            let percentage = min(max(keepPercentage, 1), 100)
+            return max(1, min(totalPhotos, Int(round(Double(totalPhotos) * percentage / 100.0))))
+        }
+    }
+
+    /// A rough range after duplicate grouping and culling aggressiveness are applied.
+    public static func estimatedKeepRange(
+        totalPhotos: Int,
+        sizingMode: ShortlistSizingMode,
+        targetCount: Int,
+        keepPercentage: Double,
+        aggressiveness: CullingAggressiveness
+    ) -> ClosedRange<Int> {
+        guard totalPhotos > 0 else { return 1...1 }
+        let naive = Double(resolvedTargetCount(
+            totalPhotos: totalPhotos,
+            sizingMode: sizingMode,
+            targetCount: targetCount,
+            keepPercentage: keepPercentage
+        ))
+        let bounds: (Double, Double) = switch aggressiveness {
+        case .gentle: (0.85, 1.0)
+        case .balanced: (0.72, 0.92)
+        case .highlights: (0.58, 0.82)
+        }
+        let low = max(1, Int(round(naive * bounds.0)))
+        let high = max(low, min(totalPhotos, Int(round(naive * bounds.1))))
+        return low...high
+    }
+}
+
 public enum StylePreset: String, Codable, CaseIterable, Sendable {
     case natural
     case warm
@@ -260,6 +315,8 @@ public struct ScoringProfile: Codable, Sendable, Equatable {
     public var aggressiveness: CullingAggressiveness
     public var style: StylePreset
     public var styleIntensity: Double
+    public var sizingMode: ShortlistSizingMode
+    public var keepPercentage: Double
     public var sharpnessWeight: Double
     public var exposureWeight: Double
     public var faceWeight: Double
@@ -287,12 +344,16 @@ public struct ScoringProfile: Codable, Sendable, Equatable {
         maxBurstDuration: TimeInterval? = nil,
         aggressiveness: CullingAggressiveness = .balanced,
         style: StylePreset = .natural,
-        styleIntensity: Double = 0.65
+        styleIntensity: Double = 0.65,
+        sizingMode: ShortlistSizingMode = .count,
+        keepPercentage: Double = 30
     ) {
         self.mode = mode
         self.aggressiveness = aggressiveness
         self.style = style
         self.styleIntensity = styleIntensity
+        self.sizingMode = sizingMode
+        self.keepPercentage = keepPercentage
         self.sharpnessWeight = sharpnessWeight
         self.exposureWeight = exposureWeight
         self.faceWeight = faceWeight
@@ -335,6 +396,62 @@ public struct ScoringProfile: Codable, Sendable, Equatable {
             maxBurstDuration *= 1.25
         }
         maxBurstDuration = max(maxBurstDuration, burstWindow)
+    }
+
+    public func resolvedTargetCount(for totalPhotos: Int) -> Int {
+        ShortlistEstimate.resolvedTargetCount(
+            totalPhotos: totalPhotos,
+            sizingMode: sizingMode,
+            targetCount: targetCount,
+            keepPercentage: keepPercentage
+        )
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case mode, aggressiveness, style, styleIntensity, sizingMode, keepPercentage
+        case sharpnessWeight, exposureWeight, faceWeight, aestheticWeight, diversityWeight
+        case targetCount, burstWindow, maxBurstDuration
+        case nearDuplicateHammingDistance, nearDuplicateVisualDistance
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        mode = try container.decode(CurationMode.self, forKey: .mode)
+        aggressiveness = try container.decodeIfPresent(CullingAggressiveness.self, forKey: .aggressiveness) ?? .balanced
+        style = try container.decodeIfPresent(StylePreset.self, forKey: .style) ?? .natural
+        styleIntensity = try container.decodeIfPresent(Double.self, forKey: .styleIntensity) ?? 0.65
+        sizingMode = try container.decodeIfPresent(ShortlistSizingMode.self, forKey: .sizingMode) ?? .count
+        keepPercentage = try container.decodeIfPresent(Double.self, forKey: .keepPercentage) ?? 30
+        sharpnessWeight = try container.decode(Double.self, forKey: .sharpnessWeight)
+        exposureWeight = try container.decode(Double.self, forKey: .exposureWeight)
+        faceWeight = try container.decode(Double.self, forKey: .faceWeight)
+        aestheticWeight = try container.decode(Double.self, forKey: .aestheticWeight)
+        diversityWeight = try container.decode(Double.self, forKey: .diversityWeight)
+        targetCount = try container.decode(Int.self, forKey: .targetCount)
+        burstWindow = try container.decode(TimeInterval.self, forKey: .burstWindow)
+        maxBurstDuration = try container.decodeIfPresent(TimeInterval.self, forKey: .maxBurstDuration) ?? burstWindow * 4
+        nearDuplicateHammingDistance = try container.decode(Int.self, forKey: .nearDuplicateHammingDistance)
+        nearDuplicateVisualDistance = try container.decode(Double.self, forKey: .nearDuplicateVisualDistance)
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(mode, forKey: .mode)
+        try container.encode(aggressiveness, forKey: .aggressiveness)
+        try container.encode(style, forKey: .style)
+        try container.encode(styleIntensity, forKey: .styleIntensity)
+        try container.encode(sizingMode, forKey: .sizingMode)
+        try container.encode(keepPercentage, forKey: .keepPercentage)
+        try container.encode(sharpnessWeight, forKey: .sharpnessWeight)
+        try container.encode(exposureWeight, forKey: .exposureWeight)
+        try container.encode(faceWeight, forKey: .faceWeight)
+        try container.encode(aestheticWeight, forKey: .aestheticWeight)
+        try container.encode(diversityWeight, forKey: .diversityWeight)
+        try container.encode(targetCount, forKey: .targetCount)
+        try container.encode(burstWindow, forKey: .burstWindow)
+        try container.encode(maxBurstDuration, forKey: .maxBurstDuration)
+        try container.encode(nearDuplicateHammingDistance, forKey: .nearDuplicateHammingDistance)
+        try container.encode(nearDuplicateVisualDistance, forKey: .nearDuplicateVisualDistance)
     }
 }
 
@@ -574,8 +691,16 @@ public struct EditRecipe: Codable, Sendable, Equatable {
     public var highlights: Double
     public var shadows: Double
     public var sharpening: Double
+    /// -1 cools, +1 warms, on top of any look.
+    public var temperature: Double
+    /// -1 green, +1 magenta.
+    public var tint: Double
+    /// Midtone local contrast. Negative softens.
+    public var clarity: Double
+    /// Degrees. Positive rotates clockwise in the preview.
+    public var straighten: Double
 
-    public init(style: StylePreset = .natural, styleIntensity: Double = 0.65, exposure: Double = 0, contrast: Double = 0, saturation: Double = 0, highlights: Double = 0, shadows: Double = 0, sharpening: Double = 0) {
+    public init(style: StylePreset = .natural, styleIntensity: Double = 0.65, exposure: Double = 0, contrast: Double = 0, saturation: Double = 0, highlights: Double = 0, shadows: Double = 0, sharpening: Double = 0, temperature: Double = 0, tint: Double = 0, clarity: Double = 0, straighten: Double = 0) {
         self.style = style
         self.styleIntensity = styleIntensity
         self.exposure = exposure
@@ -584,6 +709,31 @@ public struct EditRecipe: Codable, Sendable, Equatable {
         self.highlights = highlights
         self.shadows = shadows
         self.sharpening = sharpening
+        self.temperature = temperature
+        self.tint = tint
+        self.clarity = clarity
+        self.straighten = straighten
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case style, styleIntensity, exposure, contrast, saturation, highlights, shadows, sharpening
+        case temperature, tint, clarity, straighten
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        style = try container.decode(StylePreset.self, forKey: .style)
+        styleIntensity = try container.decode(Double.self, forKey: .styleIntensity)
+        exposure = try container.decode(Double.self, forKey: .exposure)
+        contrast = try container.decode(Double.self, forKey: .contrast)
+        saturation = try container.decode(Double.self, forKey: .saturation)
+        highlights = try container.decode(Double.self, forKey: .highlights)
+        shadows = try container.decode(Double.self, forKey: .shadows)
+        sharpening = try container.decode(Double.self, forKey: .sharpening)
+        temperature = try container.decodeIfPresent(Double.self, forKey: .temperature) ?? 0
+        tint = try container.decodeIfPresent(Double.self, forKey: .tint) ?? 0
+        clarity = try container.decodeIfPresent(Double.self, forKey: .clarity) ?? 0
+        straighten = try container.decodeIfPresent(Double.self, forKey: .straighten) ?? 0
     }
 }
 
@@ -1035,8 +1185,17 @@ public enum PhotoSelectionEngine {
             decisions.append(SelectionDecision(photoID: photo.id, bucket: .selected, rank: rank, reasons: photo.score.reasons, score: photo.score.total))
         }
 
+        let cutoff = selected.last?.score.total ?? 0
         for photo in remaining {
-            decisions.append(SelectionDecision(photoID: photo.id, bucket: .review, rank: nil, reasons: ["below shortlist target"], score: photo.score.total))
+            let margin = cutoff - photo.score.total
+            let close = margin < 0.08
+            decisions.append(SelectionDecision(
+                photoID: photo.id,
+                bucket: close ? .review : .hidden,
+                rank: nil,
+                reasons: [close ? "close to a photo we kept" : "weaker than the shortlist"],
+                score: photo.score.total
+            ))
         }
 
         return Shortlist(decisions: decisions)
@@ -1045,5 +1204,134 @@ public enum PhotoSelectionEngine {
     private static func isPreferred(_ lhs: ScoredPhoto, over rhs: ScoredPhoto) -> Bool {
         if lhs.score.total != rhs.score.total { return lhs.score.total > rhs.score.total }
         return lhs.id.description < rhs.id.description
+    }
+}
+
+public enum ReviewFlag: String, Codable, Sendable, CaseIterable {
+    case unflagged
+    case pick
+    case reject
+}
+
+public enum ReviewColor: String, Codable, Sendable, CaseIterable {
+    case none
+    case red
+    case yellow
+    case green
+    case blue
+    case purple
+
+    /// Lightroom color labels are proper-case English names.
+    public var lightroomLabel: String? {
+        switch self {
+        case .none: nil
+        case .red: "Red"
+        case .yellow: "Yellow"
+        case .green: "Green"
+        case .blue: "Blue"
+        case .purple: "Purple"
+        }
+    }
+}
+
+/// A photographer's mark, stored separately from the automatic culling bucket.
+/// Stars and color labels match the Lightroom vocabulary. Pick and reject are
+/// the cull flags; Lightroom does not keep those flags in XMP, so sidecars
+/// also emit them as keywords.
+public struct PhotoReviewMark: Codable, Sendable, Equatable {
+    public var photoID: PhotoID
+    public var flag: ReviewFlag
+    public var stars: Int
+    public var color: ReviewColor
+
+    public init(photoID: PhotoID, flag: ReviewFlag = .unflagged, stars: Int = 0, color: ReviewColor = .none) {
+        self.photoID = photoID
+        self.flag = flag
+        self.stars = min(5, max(0, stars))
+        self.color = color
+    }
+}
+
+public struct PortableCullEntry: Codable, Sendable, Equatable {
+    public var fileName: String
+    public var relativePath: String
+    public var bucket: String
+    public var flag: String
+    public var stars: Int
+    public var color: String
+    public var reasons: [String]
+
+    public init(fileName: String, relativePath: String, bucket: String, flag: String, stars: Int, color: String, reasons: [String]) {
+        self.fileName = fileName
+        self.relativePath = relativePath
+        self.bucket = bucket
+        self.flag = flag
+        self.stars = stars
+        self.color = color
+        self.reasons = reasons
+    }
+}
+
+public enum LightroomSidecar {
+    public static func document(for mark: PhotoReviewMark) -> String {
+        let stars = min(5, max(0, mark.stars))
+        var attributes = [
+            "xmlns:xmp=\"http://ns.adobe.com/xap/1.0/\"",
+            "xmlns:dc=\"http://purl.org/dc/elements/1.1/\"",
+            "xmlns:photocore=\"urn:photocore:ns:1.0\"",
+            "xmp:Rating=\"\(stars)\"",
+            "photocore:Flag=\"\(mark.flag.rawValue)\""
+        ]
+        if let label = mark.color.lightroomLabel {
+            attributes.append("xmp:Label=\"\(label)\"")
+        }
+        let keywords = keywordItems(for: mark.flag)
+        return """
+        <?xpacket begin="\u{FEFF}" id="W5M0MpCehiHzreSzNTczkc9d"?>
+        <x:xmpmeta xmlns:x="adobe:ns:meta/" x:xmptk="Photocore 0.4">
+         <rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+          <rdf:Description rdf:about=""
+           \(attributes.joined(separator: "\n           "))>
+        \(keywords)
+          </rdf:Description>
+         </rdf:RDF>
+        </x:xmpmeta>
+        <?xpacket end="w"?>
+        """
+    }
+
+    public static func write(_ mark: PhotoReviewMark, named baseName: String, to directory: URL) throws -> URL {
+        let sanitized = baseName
+            .replacingOccurrences(of: "/", with: "-")
+            .replacingOccurrences(of: ":", with: "-")
+        guard !sanitized.isEmpty, sanitized != ".", sanitized != ".." else {
+            throw PhotoEngineError.invalidArgument("Sidecar name is empty.")
+        }
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let url = directory.appendingPathComponent(sanitized).appendingPathExtension("xmp")
+        try Data(document(for: mark).utf8).write(to: url, options: .atomic)
+        return url
+    }
+
+    public static func decisionsData(_ entries: [PortableCullEntry]) throws -> Data {
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        return try encoder.encode(entries)
+    }
+
+    private static func keywordItems(for flag: ReviewFlag) -> String {
+        let keyword: String? = switch flag {
+        case .pick: "Photocore Pick"
+        case .reject: "Photocore Reject"
+        case .unflagged: nil
+        }
+        guard let keyword else { return "" }
+        return """
+               <dc:subject>
+                <rdf:Bag>
+                 <rdf:li>\(keyword)</rdf:li>
+                </rdf:Bag>
+               </dc:subject>
+        """
     }
 }

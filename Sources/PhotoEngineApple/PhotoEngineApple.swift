@@ -120,6 +120,26 @@ public final class PhotoFolderImporter: @unchecked Sendable {
         }
     }
 
+    public func countSupportedPhotos(in folder: URL) throws -> Int {
+        var isDirectory: ObjCBool = false
+        guard fileManager.fileExists(atPath: folder.path, isDirectory: &isDirectory), isDirectory.boolValue else {
+            throw PhotoEngineError.invalidFolder(folder)
+        }
+        guard let enumerator = fileManager.enumerator(
+            at: folder,
+            includingPropertiesForKeys: [.isRegularFileKey],
+            options: [.skipsHiddenFiles, .skipsPackageDescendants]
+        ) else {
+            throw PhotoEngineError.invalidFolder(folder)
+        }
+
+        var count = 0
+        for case let url as URL in enumerator {
+            if Self.isSupportedImage(url) { count += 1 }
+        }
+        return count
+    }
+
     private static func relativePath(for url: URL, root: URL) -> String {
         let rootPath = root.standardizedFileURL.path.hasSuffix("/") ? root.standardizedFileURL.path : root.standardizedFileURL.path + "/"
         let path = url.standardizedFileURL.path
@@ -396,54 +416,21 @@ public final class ApplePhotoRenderer: @unchecked Sendable {
         styleIntensity: Double = 0.65,
         exportSpecification: ExportSpecification = ExportSpecification()
     ) throws -> ExportedPhoto {
-        let recipe = Self.recipe(for: photo, style: style, intensity: styleIntensity)
-        guard let input = CIImage(contentsOf: photo.asset.url, options: [.applyOrientationProperty: true]) else {
-            throw PhotoEngineError.exportFailed(photo.asset.url, "Could not create Core Image input")
-        }
+        try render(
+            photo: photo,
+            outputURL: outputURL,
+            recipe: Self.recipe(for: photo, style: style, intensity: styleIntensity),
+            exportSpecification: exportSpecification
+        )
+    }
 
-        var image = input
-        if abs(recipe.exposure) > 0.01 {
-            let filter = CIFilter(name: "CIExposureAdjust")!
-            filter.setValue(image, forKey: kCIInputImageKey)
-            filter.setValue(recipe.exposure, forKey: "inputEV")
-            image = filter.outputImage ?? image
-        }
-        if abs(recipe.contrast) > 0.01 || abs(recipe.saturation) > 0.01 {
-            let filter = CIFilter(name: "CIColorControls")!
-            filter.setValue(image, forKey: kCIInputImageKey)
-            filter.setValue(1 + recipe.saturation, forKey: kCIInputSaturationKey)
-            filter.setValue(1 + recipe.contrast, forKey: kCIInputContrastKey)
-            image = filter.outputImage ?? image
-        }
-        if recipe.style == .warm {
-            let filter = CIFilter(name: "CITemperatureAndTint")!
-            filter.setValue(image, forKey: kCIInputImageKey)
-            let amount = min(max(recipe.styleIntensity, 0), 1)
-            filter.setValue(CIVector(x: 6500, y: 0), forKey: "inputNeutral")
-            filter.setValue(CIVector(x: 6500 - 700 * amount, y: 0), forKey: "inputTargetNeutral")
-            image = filter.outputImage ?? image
-        }
-        if recipe.style == .blackAndWhite {
-            let filter = CIFilter(name: "CIColorControls")!
-            filter.setValue(image, forKey: kCIInputImageKey)
-            filter.setValue(1 - min(max(recipe.styleIntensity, 0), 1), forKey: kCIInputSaturationKey)
-            image = filter.outputImage ?? image
-        }
-        if abs(recipe.highlights) > 0.01 || abs(recipe.shadows) > 0.01 {
-            let filter = CIFilter(name: "CIHighlightShadowAdjust")!
-            filter.setValue(image, forKey: kCIInputImageKey)
-            filter.setValue(min(max(recipe.shadows, -1), 1), forKey: "inputShadowAmount")
-            // The Core Image filter's neutral highlight value is 1, whereas
-            // EditRecipe intentionally stores a relative adjustment.
-            filter.setValue(min(max(1 + recipe.highlights, 0), 1), forKey: "inputHighlightAmount")
-            image = filter.outputImage ?? image
-        }
-        if abs(recipe.sharpening) > 0.01 {
-            let filter = CIFilter(name: "CISharpenLuminance")!
-            filter.setValue(image, forKey: kCIInputImageKey)
-            filter.setValue(recipe.sharpening, forKey: "inputSharpness")
-            image = filter.outputImage ?? image
-        }
+    public func render(
+        photo: AnalyzedPhoto,
+        outputURL: URL,
+        recipe: EditRecipe,
+        exportSpecification: ExportSpecification = ExportSpecification()
+    ) throws -> ExportedPhoto {
+        let image = try Self.apply(recipe, to: Self.orientedImage(photo))
 
         try FileManager.default.createDirectory(at: outputURL.deletingLastPathComponent(), withIntermediateDirectories: true)
         let renderedImage: CIImage
@@ -475,6 +462,136 @@ public final class ApplePhotoRenderer: @unchecked Sendable {
         )
 
         return ExportedPhoto(photoID: photo.id, sourcePath: photo.asset.url.path, outputPath: outputURL.path, recipe: recipe)
+    }
+
+    /// A downscaled JPEG for the develop loupe. The full export path uses the same recipe.
+    public func previewJPEG(photo: AnalyzedPhoto, recipe: EditRecipe, maxLongEdge: Int = 1600, quality: Double = 0.82) throws -> Data {
+        var image = try Self.apply(recipe, to: Self.orientedImage(photo))
+        let longEdge = max(image.extent.width, image.extent.height)
+        let limit = CGFloat(max(256, maxLongEdge))
+        if longEdge > limit, longEdge.isFinite {
+            let scale = limit / longEdge
+            image = image.transformed(by: CGAffineTransform(scaleX: scale, y: scale))
+        }
+        guard image.extent.isInfinite == false, image.extent.isNull == false else {
+            throw PhotoEngineError.exportFailed(photo.asset.url, "Edited preview had no pixels")
+        }
+        guard let outputImage = context.createCGImage(image, from: image.extent, format: .RGBA8, colorSpace: CGColorSpace(name: CGColorSpace.sRGB)) else {
+            throw PhotoEngineError.exportFailed(photo.asset.url, "Could not render edited preview")
+        }
+        let data = NSMutableData()
+        guard let destination = CGImageDestinationCreateWithData(data, UTType.jpeg.identifier as CFString, 1, nil) else {
+            throw PhotoEngineError.exportFailed(photo.asset.url, "Could not encode edited preview")
+        }
+        CGImageDestinationAddImage(destination, outputImage, [kCGImageDestinationLossyCompressionQuality: quality] as CFDictionary)
+        guard CGImageDestinationFinalize(destination) else {
+            throw PhotoEngineError.exportFailed(photo.asset.url, "Could not encode edited preview")
+        }
+        return data as Data
+    }
+
+    private static func orientedImage(_ photo: AnalyzedPhoto) throws -> CIImage {
+        guard let input = CIImage(contentsOf: photo.asset.url, options: [.applyOrientationProperty: true]) else {
+            throw PhotoEngineError.exportFailed(photo.asset.url, "Could not create Core Image input")
+        }
+        return input
+    }
+
+    static func apply(_ recipe: EditRecipe, to input: CIImage) -> CIImage {
+        var image = input
+        if abs(recipe.exposure) > 0.01 {
+            let filter = CIFilter(name: "CIExposureAdjust")!
+            filter.setValue(image, forKey: kCIInputImageKey)
+            filter.setValue(recipe.exposure, forKey: "inputEV")
+            image = filter.outputImage ?? image
+        }
+        if abs(recipe.contrast) > 0.01 || abs(recipe.saturation) > 0.01 {
+            let filter = CIFilter(name: "CIColorControls")!
+            filter.setValue(image, forKey: kCIInputImageKey)
+            filter.setValue(1 + recipe.saturation, forKey: kCIInputSaturationKey)
+            filter.setValue(1 + recipe.contrast, forKey: kCIInputContrastKey)
+            image = filter.outputImage ?? image
+        }
+        let lookWarmth = recipe.style == .warm ? 700 * min(max(recipe.styleIntensity, 0), 1) : 0
+        let kelvinShift = lookWarmth + recipe.temperature * 1800
+        let tintShift = recipe.tint * 50
+        if abs(kelvinShift) > 8 || abs(tintShift) > 0.4 {
+            let filter = CIFilter(name: "CITemperatureAndTint")!
+            filter.setValue(image, forKey: kCIInputImageKey)
+            filter.setValue(CIVector(x: 6500, y: 0), forKey: "inputNeutral")
+            filter.setValue(CIVector(x: max(2000, 6500 - kelvinShift), y: tintShift), forKey: "inputTargetNeutral")
+            image = filter.outputImage ?? image
+        }
+        if recipe.style == .blackAndWhite {
+            let filter = CIFilter(name: "CIColorControls")!
+            filter.setValue(image, forKey: kCIInputImageKey)
+            filter.setValue(1 - min(max(recipe.styleIntensity, 0), 1), forKey: kCIInputSaturationKey)
+            image = filter.outputImage ?? image
+        }
+        if abs(recipe.highlights) > 0.01 || abs(recipe.shadows) > 0.01 {
+            let filter = CIFilter(name: "CIHighlightShadowAdjust")!
+            filter.setValue(image, forKey: kCIInputImageKey)
+            filter.setValue(min(max(recipe.shadows, -1), 1), forKey: "inputShadowAmount")
+            // The Core Image filter's neutral highlight value is 1, whereas
+            // EditRecipe intentionally stores a relative adjustment.
+            filter.setValue(min(max(1 + recipe.highlights, 0), 1), forKey: "inputHighlightAmount")
+            image = filter.outputImage ?? image
+        }
+        if abs(recipe.clarity) > 0.02 {
+            let extent = image.extent
+            if recipe.clarity > 0 {
+                let filter = CIFilter(name: "CIUnsharpMask")!
+                filter.setValue(image, forKey: kCIInputImageKey)
+                filter.setValue(14, forKey: kCIInputRadiusKey)
+                filter.setValue(min(recipe.clarity, 1.5), forKey: kCIInputIntensityKey)
+                image = (filter.outputImage ?? image).cropped(to: extent)
+            } else {
+                let filter = CIFilter(name: "CIGaussianBlur")!
+                filter.setValue(image, forKey: kCIInputImageKey)
+                filter.setValue(min(-recipe.clarity * 3, 8), forKey: kCIInputRadiusKey)
+                image = (filter.outputImage ?? image).cropped(to: extent)
+            }
+        }
+        if abs(recipe.sharpening) > 0.01 {
+            let filter = CIFilter(name: "CISharpenLuminance")!
+            filter.setValue(image, forKey: kCIInputImageKey)
+            filter.setValue(recipe.sharpening, forKey: "inputSharpness")
+            image = filter.outputImage ?? image
+        }
+        if abs(recipe.straighten) > 0.05 {
+            image = Self.straighten(image, degrees: recipe.straighten)
+        }
+        return image
+    }
+
+    /// Rotates around the center and scales just enough to hide the empty corners.
+    static func straighten(_ image: CIImage, degrees: Double) -> CIImage {
+        let extent = image.extent
+        guard extent.isNull == false, extent.isInfinite == false, extent.width > 1, extent.height > 1 else { return image }
+        let angle = CGFloat(degrees * .pi / 180)
+        var rotation = CGAffineTransform(translationX: extent.midX, y: extent.midY)
+        rotation = rotation.rotated(by: angle)
+        rotation = rotation.translatedBy(x: -extent.midX, y: -extent.midY)
+        let rotated = image.transformed(by: rotation)
+        let cosine = abs(cos(angle))
+        let sine = abs(sin(angle))
+        let scale = max(
+            cosine + sine * extent.height / extent.width,
+            cosine + sine * extent.width / extent.height
+        ) * 1.02
+        let center = CGPoint(x: rotated.extent.midX, y: rotated.extent.midY)
+        var zoom = CGAffineTransform(translationX: center.x, y: center.y)
+        zoom = zoom.scaledBy(x: scale, y: scale)
+        zoom = zoom.translatedBy(x: -center.x, y: -center.y)
+        let scaled = rotated.transformed(by: zoom)
+        let crop = CGRect(
+            x: scaled.extent.midX - extent.width / 2,
+            y: scaled.extent.midY - extent.height / 2,
+            width: extent.width,
+            height: extent.height
+        )
+        guard crop.width > 1, crop.height > 1 else { return image }
+        return scaled.cropped(to: crop)
     }
 
     public static func recipe(for photo: AnalyzedPhoto, style: StylePreset = .natural, intensity: Double = 0.65) -> EditRecipe {
@@ -713,6 +830,67 @@ public enum PhotoCleanupPlanner {
     }
 }
 
+/// Removes generated exports and superseded run folders. Source photographs are
+/// never touched by this helper.
+public enum GeneratedArtifactCleanup {
+    public struct DiscardResult: Sendable {
+        public let exports: [ExportedPhoto]
+        public let removedPath: String?
+        public let storageSummary: PhotoCatalog.StorageSummary?
+    }
+
+    public static let bucketsThatRetainExports: Set<SelectionBucket> = [.selected, .protected]
+
+    public static func discardExport(
+        photoID: PhotoID,
+        from result: PipelineResult,
+        sessionID: SessionID,
+        catalog: PhotoCatalog?,
+        cacheBytes: Int64 = 0,
+        fileManager: FileManager = .default
+    ) throws -> DiscardResult {
+        guard let export = result.exports.first(where: { $0.photoID == photoID }) else {
+            return DiscardResult(exports: result.exports, removedPath: nil, storageSummary: result.storageSummary)
+        }
+
+        let outputURL = URL(fileURLWithPath: export.outputPath).standardizedFileURL
+        if fileManager.fileExists(atPath: outputURL.path) {
+            try fileManager.trashItem(at: outputURL, resultingItemURL: nil)
+        }
+        if let catalog {
+            try catalog.deleteArtifact(sessionID: sessionID, photoID: photoID, kind: "jpeg-export")
+        }
+
+        let exports = result.exports.filter { $0.photoID != photoID }
+        let storageSummary = try catalog?.storageSummary(sessionID: sessionID, cacheBytes: cacheBytes) ?? result.storageSummary
+        return DiscardResult(exports: exports, removedPath: export.outputPath, storageSummary: storageSummary)
+    }
+
+    public static func pruneSupersededRuns(
+        in outputDirectory: URL,
+        keeping runDirectory: URL? = nil,
+        fileManager: FileManager = .default
+    ) throws -> Int {
+        let runsRoot = outputDirectory.appendingPathComponent("runs", isDirectory: true)
+        guard fileManager.fileExists(atPath: runsRoot.path) else { return 0 }
+        let keepingPath = runDirectory?.standardizedFileURL.path
+        let runURLs = try fileManager.contentsOfDirectory(
+            at: runsRoot,
+            includingPropertiesForKeys: [.isDirectoryKey],
+            options: [.skipsHiddenFiles]
+        )
+        var removed = 0
+        for runURL in runURLs {
+            let values = try runURL.resourceValues(forKeys: [.isDirectoryKey])
+            guard values.isDirectory == true else { continue }
+            if let keepingPath, runURL.standardizedFileURL.path == keepingPath { continue }
+            try fileManager.removeItem(at: runURL)
+            removed += 1
+        }
+        return removed
+    }
+}
+
 public final class PhotoPipelineRunner: @unchecked Sendable {
     private let importer: PhotoFolderImporter
     private let analyzer: AppleAnalysisEngine
@@ -736,6 +914,18 @@ public final class PhotoPipelineRunner: @unchecked Sendable {
                 self.catalogInitializationMessage = error.localizedDescription
             }
         }
+    }
+
+    public func saveReviewMark(_ mark: PhotoReviewMark) throws {
+        guard let catalog else {
+            throw PhotoEngineError.invalidArgument("The local catalog is unavailable; this rating could not be saved.")
+        }
+        try catalog.saveReviewMark(mark)
+    }
+
+    public func reviewMarks(for photoIDs: [PhotoID]) throws -> [PhotoReviewMark] {
+        guard let catalog else { return [] }
+        return try catalog.reviewMarks(for: photoIDs)
     }
 
     public func setOverride(
@@ -767,6 +957,20 @@ public final class PhotoPipelineRunner: @unchecked Sendable {
         try catalog.updateCleanupPlanStatus(planID, status: status, approvedAt: approvedAt, completedAt: completedAt)
     }
 
+    public func discardExport(photoID: PhotoID, from result: PipelineResult) throws -> GeneratedArtifactCleanup.DiscardResult {
+        try GeneratedArtifactCleanup.discardExport(
+            photoID: photoID,
+            from: result,
+            sessionID: result.sessionID,
+            catalog: catalog,
+            cacheBytes: result.storageSummary?.cacheBytes ?? 0
+        )
+    }
+
+    public func prunePreviousRuns(in outputDirectory: URL, keeping runDirectory: URL? = nil) throws -> Int {
+        try GeneratedArtifactCleanup.pruneSupersededRuns(in: outputDirectory, keeping: runDirectory)
+    }
+
     public func run(
         folder: URL,
         outputDirectory: URL,
@@ -777,6 +981,15 @@ public final class PhotoPipelineRunner: @unchecked Sendable {
     ) throws -> PipelineResult {
         try Self.validateOutput(source: folder, output: outputDirectory)
         try Self.checkCancellation(shouldCancel)
+        let removedRuns = try GeneratedArtifactCleanup.pruneSupersededRuns(in: outputDirectory)
+        if removedRuns > 0 {
+            progress(PipelineProgress(
+                stage: .discovering,
+                completed: 0,
+                total: 1,
+                message: "Removed \(removedRuns) previous export pass(es)"
+            ))
+        }
         let runStartedAt = Date()
         let sessionID = SessionID()
         var warnings = [ImportIssue]()
@@ -950,7 +1163,9 @@ public final class PhotoPipelineRunner: @unchecked Sendable {
         let scored = analyzed.map { ScoredPhoto(photo: $0, score: PhotoScoring.score($0, profile: profile)) }
         progress(PipelineProgress(stage: .selecting, completed: 0, total: 1, message: "Building shortlist"))
         let selectionStartedAt = Date()
-        var shortlist = PhotoSelectionEngine.select(scored, grouping: grouping, profile: profile, visualDistance: visualDistance)
+        var selectionProfile = profile
+        selectionProfile.targetCount = profile.resolvedTargetCount(for: analyzed.count)
+        var shortlist = PhotoSelectionEngine.select(scored, grouping: grouping, profile: selectionProfile, visualDistance: visualDistance)
         selectionSeconds = Date().timeIntervalSince(selectionStartedAt)
         if let catalog, catalogHealthy {
             do {
@@ -1025,7 +1240,7 @@ public final class PhotoPipelineRunner: @unchecked Sendable {
             aggressiveness: profile.aggressiveness,
             style: profile.style,
             styleIntensity: profile.styleIntensity,
-            targetCount: profile.targetCount,
+            targetCount: selectionProfile.targetCount,
             exportSpecification: exportSpecification,
             assets: imported.map(\.asset),
             // Feature prints remain in the compact analysis cache. They are

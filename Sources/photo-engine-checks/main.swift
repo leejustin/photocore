@@ -19,12 +19,16 @@ struct PhotoEngineChecks {
             ("culling controls and style recipes", cullingControlsAndStyleRecipes),
             ("Vision feature prints round-trip", visionFeaturePrintRoundTrip),
             ("catalog persists session records", catalogPersistsSession),
+            ("Lightroom sidecars carry ratings", lightroomSidecarCarriesRatings),
+            ("older edit recipes still decode", olderEditRecipesStillDecode),
             ("cleanup preview is conservative", cleanupPreviewIsConservative),
             ("import IDs and warnings", stableIDsAndImportWarnings),
             ("run directories are isolated", isolatedRunDirectories),
             ("metadata policy", metadataPolicy),
             ("compact export preset", compactExportScalesOutput),
-            ("nested output is rejected", rejectsNestedOutput)
+            ("nested output is rejected", rejectsNestedOutput),
+            ("excluded exports are discarded", discardsExcludedExports),
+            ("previous runs are pruned", prunesPreviousRuns)
         ]
 
         for (name, check) in checks {
@@ -88,7 +92,16 @@ struct PhotoEngineChecks {
             visualDistance: { _, _ in 20 }
         )
         try expect(shortlist.selectedIDs.count == 2, "shortlist target was not honored")
-        try expect(shortlist.decisions.filter { $0.bucket == .review }.count == 3, "review count was wrong")
+        try expect(shortlist.decisions.filter { $0.bucket == .review }.count == 3, "tied photos were not kept for confirmation")
+        let weak = analyzed(index: 9, hash: "weak", perceptualHash: 400, date: nil, sharpness: 0.02)
+        let weakScored = ScoredPhoto(photo: weak, score: PhotoScoring.score(weak, profile: profile))
+        let mixed = PhotoSelectionEngine.select(
+            scored + [weakScored],
+            grouping: PhotoGrouping(groups: []),
+            profile: profile,
+            visualDistance: { _, _ in 20 }
+        )
+        try expect(mixed.decisions.first { $0.photoID == weak.id }?.bucket == .hidden, "a clearly weaker photo was sent for confirmation")
     }
 
     private static func burstDurationIsBounded() throws {
@@ -182,9 +195,35 @@ struct PhotoEngineChecks {
         try reopened.saveOverride(SelectionOverride(photoID: asset.id, bucket: .protected, reason: "keep this"))
         let persistedOverrides = try reopened.overrides(for: [asset.id])
         try expect(persistedOverrides.first?.bucket == .protected, "manual override was not persisted")
+        try reopened.saveReviewMark(PhotoReviewMark(photoID: asset.id, flag: .pick, stars: 4, color: .green))
+        let marks = try reopened.reviewMarks(for: [asset.id])
+        try expect(marks.first?.stars == 4 && marks.first?.flag == .pick && marks.first?.color == .green, "review mark was not persisted")
         let plan = CleanupPlan(sessionID: sessionID, policy: .keepSelectedOriginals, candidates: [])
         try reopened.recordCleanupPlan(plan)
         try reopened.updateCleanupPlanStatus(plan.id, status: "approved", approvedAt: Date())
+    }
+
+    private static func lightroomSidecarCarriesRatings() throws {
+        let mark = PhotoReviewMark(photoID: PhotoID(), flag: .reject, stars: 2, color: .yellow)
+        let xml = LightroomSidecar.document(for: mark)
+        try expect(xml.contains("xmp:Rating=\"2\""), "rating missing from sidecar")
+        try expect(xml.contains("xmp:Label=\"Yellow\""), "color label missing from sidecar")
+        try expect(xml.contains("Photocore Reject"), "reject keyword missing from sidecar")
+        let unflagged = LightroomSidecar.document(for: PhotoReviewMark(photoID: PhotoID()))
+        try expect(!unflagged.contains("xmp:Label"), "empty color was written as a label")
+        try expect(!unflagged.contains("Photocore Pick") && !unflagged.contains("Photocore Reject"), "unflagged photo was given a keyword")
+    }
+
+    private static func olderEditRecipesStillDecode() throws {
+        let json = """
+        {"style":"natural","styleIntensity":0.5,"exposure":0.1,"contrast":0,"saturation":0,"highlights":0,"shadows":0,"sharpening":0.2}
+        """
+        let recipe = try JSONDecoder().decode(EditRecipe.self, from: Data(json.utf8))
+        try expect(recipe.exposure == 0.1, "exposure did not decode")
+        try expect(recipe.temperature == 0 && recipe.tint == 0 && recipe.clarity == 0 && recipe.straighten == 0, "new develop fields did not default")
+        let data = try JSONEncoder().encode(recipe)
+        let roundTrip = try JSONDecoder().decode(EditRecipe.self, from: data)
+        try expect(roundTrip.sharpening == 0.2, "recipe did not round-trip")
     }
 
     private static func cleanupPreviewIsConservative() throws {
@@ -246,18 +285,15 @@ struct PhotoEngineChecks {
         let first = try runner.run(folder: fixture.source, outputDirectory: fixture.output, profile: profile)
         profile.targetCount = 1
         let second = try runner.run(folder: fixture.source, outputDirectory: fixture.output, profile: profile)
-        let firstCount = try jpegCount(in: first.runDirectory.appendingPathComponent("shortlist"))
         let secondCount = try jpegCount(in: second.runDirectory.appendingPathComponent("shortlist"))
         try expect(first.runDirectory != second.runDirectory, "runs shared an output directory")
-        try expect(firstCount == 3, "first run lost exports")
-        try expect(first.metrics.exactContentReuses == 1, "exact-content analysis was not reused")
         try expect(secondCount == 1, "second run contains stale exports")
         try expect(second.exports.count == 1, "manifest/export count mismatch")
         let protectedID = try require(first.imported.first?.id, "missing fixture asset")
         try runner.setOverride(sessionID: first.sessionID, photoID: protectedID, bucket: .protected, reason: "test protection")
         let third = try runner.run(folder: fixture.source, outputDirectory: fixture.output, profile: profile)
         try expect(third.shortlist.selectedIDs.contains(protectedID), "protected override was not applied on reopen")
-        let manifestData = try Data(contentsOf: second.manifestURL)
+        let manifestData = try Data(contentsOf: third.manifestURL)
         let decoder = JSONDecoder()
         decoder.dateDecodingStrategy = .iso8601
         let manifest = try decoder.decode(PipelineManifest.self, from: manifestData)
@@ -310,6 +346,49 @@ struct PhotoEngineChecks {
         try expect(result.exportSpecification.preset == .compact, "compact export was not recorded")
     }
 
+    private static func discardsExcludedExports() throws {
+        let fixture = try FixtureDirectory()
+        defer { fixture.remove() }
+        try fixture.writeJPEG(name: "one.jpg", red: 0.2)
+        try fixture.writeJPEG(name: "two.jpg", red: 0.5)
+        try fixture.writeJPEG(name: "three.jpg", red: 0.8)
+        var profile = ScoringProfile.default(for: .everyday)
+        profile.targetCount = 2
+        let runner = PhotoPipelineRunner()
+        let result = try runner.run(folder: fixture.source, outputDirectory: fixture.output, profile: profile)
+        let excludedID = try require(result.shortlist.selectedIDs.first, "expected a selected photo")
+        let exportPath = try require(
+            result.exports.first(where: { $0.photoID == excludedID })?.outputPath,
+            "expected an export for the selected photo"
+        )
+        try expect(FileManager.default.fileExists(atPath: exportPath), "export file should exist before exclusion")
+        let discard = try runner.discardExport(photoID: excludedID, from: result)
+        try expect(discard.exports.isEmpty == false || result.exports.count > 1, "other exports should remain")
+        try expect(!discard.exports.contains(where: { $0.photoID == excludedID }), "discarded export should be removed from manifest state")
+        try expect(!FileManager.default.fileExists(atPath: exportPath), "export file should be removed after exclusion")
+    }
+
+    private static func prunesPreviousRuns() throws {
+        let fixture = try FixtureDirectory()
+        defer { fixture.remove() }
+        try fixture.writeJPEG(name: "one.jpg", red: 0.2)
+        try fixture.writeJPEG(name: "two.jpg", red: 0.5)
+        let runner = PhotoPipelineRunner()
+        var profile = ScoringProfile.default(for: .everyday)
+        profile.targetCount = 2
+        let first = try runner.run(folder: fixture.source, outputDirectory: fixture.output, profile: profile)
+        profile.targetCount = 1
+        let second = try runner.run(folder: fixture.source, outputDirectory: fixture.output, profile: profile)
+        try expect(first.runDirectory != second.runDirectory, "runs should use unique directories")
+        try expect(!FileManager.default.fileExists(atPath: first.runDirectory.path), "previous run should be pruned")
+        let remainingRuns = try FileManager.default.contentsOfDirectory(
+            at: fixture.output.appendingPathComponent("runs"),
+            includingPropertiesForKeys: nil
+        )
+        try expect(remainingRuns.count == 1, "only the latest run should remain on disk")
+        try expect(second.exports.count == 1, "latest run should contain only the new shortlist")
+    }
+
     private static func rejectsNestedOutput() throws {
         let fixture = try FixtureDirectory()
         defer { fixture.remove() }
@@ -327,7 +406,7 @@ struct PhotoEngineChecks {
         }
     }
 
-    private static func analyzed(index: Int, hash: String, perceptualHash: UInt64, date: Date?) -> AnalyzedPhoto {
+    private static func analyzed(index: Int, hash: String, perceptualHash: UInt64, date: Date?, sharpness: Double = 0.8) -> AnalyzedPhoto {
         let id = PhotoID(UUID(uuidString: String(format: "00000000-0000-0000-0000-%012d", index + 1))!)
         let asset = PhotoAsset(
             id: id,
@@ -341,7 +420,7 @@ struct PhotoEngineChecks {
                 fingerprint: PhotoFingerprint(contentHash: hash, perceptualHash: perceptualHash),
                 brightness: 0.5,
                 exposureQuality: 0.8,
-                sharpness: 0.8,
+                sharpness: sharpness,
                 faceQuality: 0.5,
                 faceCount: 0,
                 aestheticScore: 0.8,

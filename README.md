@@ -2,7 +2,7 @@
 
 Photo Engine is a local-first photo culling and editing system designed for Apple Silicon. It imports folders of JPEG/HEIC photographs, identifies exact and near duplicates, groups timestamped bursts, computes explainable quality signals, produces a diverse shortlist, applies restrained edits, and exports finished JPEGs.
 
-The first product surface is a simple native macOS application. The processing engine is split into independent Swift modules so the same pipeline can later power personal camera workflows, venue capture systems, and command-line batch processing.
+The Mac app is a culling studio: a photo grid, a keyboard cull, basic develop controls, and Lightroom XMP sidecars. The processing engine stays in independent Swift modules so the same Vision pipeline can run in the app, the CLI, or a localhost worker that a phone or hosted front end can call.
 
 ## Current status
 
@@ -39,11 +39,25 @@ swift run photo-engine catalog /path/to/photos
 swift run photo-engine run /path/to/photos --profile trip --cull balanced --target 60 --style natural --size compact --output ./exports/trip
 ```
 
-Launch the simple Mac UI:
+Launch the Mac studio:
 
 ```bash
 swift run photo-engine-mac
 ```
+
+After a run, the album is already chosen. Confirm only shows moments where two frames are close, or a keeper looks soft. Return keeps the suggestion. One look is applied to the whole album. Hand off writes `.xmp` sidecars (stars, color labels, and pick/reject keywords) without modifying image pixels.
+
+Run the same pipeline as a loopback worker. It reads a folder that already exists on this Mac; it does not upload photographs. Set `PHOTO_ENGINE_TOKEN` to require `Authorization: Bearer`.
+
+```bash
+swift run photo-engine serve --port 8787
+curl http://127.0.0.1:8787/v1/health
+curl -X POST http://127.0.0.1:8787/v1/jobs \
+  -H 'Content-Type: application/json' \
+  -d '{"sourcePath":"/path/to/photos","profile":"groupEvent","cull":"balanced","target":40}'
+```
+
+A hosted service can be this same binary on an Apple Silicon worker, with upload and accounts added in front. Vision stays on the Mac either way.
 
 Each run is written beneath `<output>/runs/<timestamp>-<id>/`, so rerunning with a smaller target cannot leave stale JPEGs in the current shortlist. Analysis and export never modify source files. Camera, lens, exposure, and capture metadata are retained in exports while GPS and XMP location metadata are removed by default. The optional cleanup action is separate and only proposes verified byte-identical copies.
 

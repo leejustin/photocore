@@ -183,6 +183,17 @@ public final class PhotoCatalog: @unchecked Sendable {
         }
     }
 
+    public func deleteArtifact(sessionID: SessionID, photoID: PhotoID, kind: String) throws {
+        try execute(
+            "DELETE FROM artifacts WHERE session_id = ? AND photo_id = ? AND kind = ?",
+            bind: { statement in
+                bindText(statement, 1, sessionID.description)
+                bindText(statement, 2, photoID.description)
+                bindText(statement, 3, kind)
+            }
+        )
+    }
+
     public func recordArtifact(sessionID: SessionID, photoID: PhotoID?, kind: String, url: URL, recipe: EditRecipe? = nil) throws {
         let recipeData = try recipe.map(encode)
         let byteCount = (try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize).map(Int64.init) ?? 0
@@ -407,6 +418,60 @@ public final class PhotoCatalog: @unchecked Sendable {
         return values
     }
 
+    public func saveReviewMark(_ mark: PhotoReviewMark) throws {
+        try execute(
+            """
+            INSERT INTO review_marks (photo_id, flag, stars, color, updated_at)
+            VALUES (?, ?, ?, ?, ?)
+            ON CONFLICT(photo_id) DO UPDATE SET flag=excluded.flag,
+                stars=excluded.stars, color=excluded.color, updated_at=excluded.updated_at
+            """,
+            bind: { statement in
+                bindText(statement, 1, mark.photoID.description)
+                bindText(statement, 2, mark.flag.rawValue)
+                sqlite3_bind_int(statement, 3, Int32(min(5, max(0, mark.stars))))
+                bindText(statement, 4, mark.color.rawValue)
+                bindDouble(statement, 5, Date().timeIntervalSince1970)
+            }
+        )
+    }
+
+    public func reviewMarks(for photoIDs: [PhotoID]) throws -> [PhotoReviewMark] {
+        guard !photoIDs.isEmpty else { return [] }
+        var values: [PhotoReviewMark] = []
+        for start in stride(from: 0, to: photoIDs.count, by: 900) {
+            let end = min(start + 900, photoIDs.count)
+            let chunk = Array(photoIDs[start..<end])
+            let placeholders = Array(repeating: "?", count: chunk.count).joined(separator: ",")
+            var statement: OpaquePointer?
+            let sql = "SELECT photo_id, flag, stars, color FROM review_marks WHERE photo_id IN (\(placeholders))"
+            guard sqlite3_prepare_v2(database, sql, -1, &statement, nil) == SQLITE_OK, let statement else {
+                throw CatalogError.statementFailed(String(cString: sqlite3_errmsg(database)))
+            }
+            defer { sqlite3_finalize(statement) }
+            for (index, photoID) in chunk.enumerated() {
+                bindText(statement, Int32(index + 1), photoID.description)
+            }
+            while sqlite3_step(statement) == SQLITE_ROW {
+                guard let photoCString = sqlite3_column_text(statement, 0),
+                      let flagCString = sqlite3_column_text(statement, 1),
+                      let colorCString = sqlite3_column_text(statement, 3),
+                      let photoUUID = UUID(uuidString: String(cString: photoCString)),
+                      let flag = ReviewFlag(rawValue: String(cString: flagCString)),
+                      let color = ReviewColor(rawValue: String(cString: colorCString)) else {
+                    throw CatalogError.statementFailed("Stored review mark has invalid identity")
+                }
+                values.append(PhotoReviewMark(
+                    photoID: PhotoID(photoUUID),
+                    flag: flag,
+                    stars: Int(sqlite3_column_int(statement, 2)),
+                    color: color
+                ))
+            }
+        }
+        return values
+    }
+
     private func migrate() throws {
         let schemaVersion = try scalarInt64("PRAGMA user_version;")
         if schemaVersion < 1 {
@@ -485,6 +550,20 @@ public final class PhotoCatalog: @unchecked Sendable {
                 """
             )
             try executeScript("PRAGMA user_version = 2;")
+        }
+        if schemaVersion < 3 {
+            try executeScript(
+                """
+                CREATE TABLE IF NOT EXISTS review_marks (
+                    photo_id TEXT PRIMARY KEY,
+                    flag TEXT NOT NULL,
+                    stars INTEGER NOT NULL,
+                    color TEXT NOT NULL,
+                    updated_at REAL NOT NULL
+                );
+                """
+            )
+            try executeScript("PRAGMA user_version = 3;")
         }
     }
 
