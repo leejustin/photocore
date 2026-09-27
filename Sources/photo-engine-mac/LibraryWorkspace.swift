@@ -147,6 +147,10 @@ private struct PhotoGridCell: View {
             if row.bucket == .hidden || row.bucket == .review || row.bucket == .alternate {
                 Button("Restore to album") { model.restoreToAlbum(row.id) }
             }
+            Button("Adjust…") {
+                model.focusedID = row.id
+                model.openAdjust()
+            }
             Menu("Stars") {
                 ForEach(0...5, id: \.self) { stars in
                     Button(stars == 0 ? "Clear" : String(repeating: "★", count: stars)) {

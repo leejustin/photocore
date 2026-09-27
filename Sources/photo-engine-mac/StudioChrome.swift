@@ -13,6 +13,7 @@ enum StudioWorkspace: String, CaseIterable, Identifiable {
     case album
     case confirm
     case look
+    case adjust
 
     var id: String { rawValue }
 
@@ -21,6 +22,7 @@ enum StudioWorkspace: String, CaseIterable, Identifiable {
         case .album: "Album"
         case .confirm: "Confirm"
         case .look: "Look"
+        case .adjust: "Adjust"
         }
     }
 }

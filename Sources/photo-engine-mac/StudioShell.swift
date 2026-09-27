@@ -130,6 +130,8 @@ struct ContentView: View {
                 ConfirmWorkspace(model: model)
             case .look:
                 LookWorkspace(model: model)
+            case .adjust:
+                AdjustWorkspace(model: model)
             }
         }
     }
@@ -512,6 +514,7 @@ private struct CullKeyCommands: View {
             key("z") { model.undoMark() }
             key("c") { model.workspace = .confirm }
             key("l") { model.workspace = .look }
+            key("d") { model.openAdjust() }
             key("s") { model.toggleSurvey() }
             key("f") { model.cycleLoupeZoom() }
             key("e") { model.zoomToEyes() }

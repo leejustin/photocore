@@ -26,6 +26,12 @@ struct PhotoEngineMacApp: App {
                 Button("Confirm") { model.workspace = .confirm }
                     .keyboardShortcut("2", modifiers: .command)
                     .disabled(model.result == nil)
+                Button("Look") { model.workspace = .look }
+                    .keyboardShortcut("3", modifiers: .command)
+                    .disabled(model.result == nil)
+                Button("Adjust…") { model.openAdjust() }
+                    .keyboardShortcut("d", modifiers: .command)
+                    .disabled(model.result == nil)
                 Divider()
                 Button("Pick") { model.flagFocused(.pick, advance: true) }
                     .keyboardShortcut("p", modifiers: [.command])
@@ -848,6 +854,35 @@ final class PhotoEngineViewModel: ObservableObject {
         guard group.memberIDs.indices.contains(next) else { return }
         focusedID = group.memberIDs[next]
         syncDevelopRecipe()
+    }
+
+    func openAdjust() {
+        guard result != nil else { return }
+        if focusedID == nil {
+            focusedID = rows.first { $0.bucket == .selected || $0.bucket == .protected }?.id
+                ?? visibleRows.first?.id
+        }
+        syncDevelopRecipeFromAlbumLook()
+        workspace = .adjust
+        showingOriginal = false
+    }
+
+    func syncDevelopRecipeFromAlbumLook() {
+        guard let row = focusedRow, let photo = analyzedPhoto(id: row.id) else { return }
+        if let custom = customRecipes[row.id] {
+            developRecipe = custom
+            return
+        }
+        if var look = selectedLook {
+            look.temperature += lookTemperature
+            look.autoStraighten = autoStraightenLook
+            let horizon = look.autoStraighten
+                ? ApplePhotoRenderer.detectHorizonDegrees(url: photo.asset.url, orientation: photo.asset.metadata.orientation)
+                : nil
+            developRecipe = look.recipe(for: photo, horizonDegrees: horizon)
+        } else {
+            syncDevelopRecipe()
+        }
     }
 
     func syncDevelopRecipe() {

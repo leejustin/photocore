@@ -45,7 +45,7 @@ Launch the Mac studio:
 swift run photo-engine-mac
 ```
 
-After a run, the album is already chosen. Confirm only shows moments where two frames are close, or a keeper looks soft / blinky. Return keeps the suggestion. Technical trash (extreme blur, blank frames, unusable exposures, single-subject blinks) never becomes a suggestion. RAW+JPEG pairs collapse to the RAW master; iPhone HEIC is supported and Live Photo movies / screenshot-named files are skipped. One look is applied from the Look workspace — built-ins, imported `.cube` LUTs, or Lightroom `.xmp` develop presets, with optional auto-straighten. Hand off packs finished JPEGs and writes XMP beside each master (including RAW) without modifying image pixels.
+After a run, the album is already chosen. Confirm only shows moments where two frames are close, or a keeper looks soft / blinky. Return keeps the suggestion. Technical trash (extreme blur, blank frames, unusable exposures, single-subject blinks) never becomes a suggestion. RAW+JPEG pairs collapse to the RAW master; iPhone HEIC is supported and Live Photo movies / screenshot-named files are skipped. One look is applied from the Look workspace — built-ins, imported `.cube` LUTs, or Lightroom `.xmp` develop presets, with optional auto-straighten. For one-off tweaks, **Adjust** (Cmd+D) offers Lightroom-basic sliders on a single photo without changing the automated path. Hand off packs finished JPEGs and writes XMP beside each master (including RAW) without modifying image pixels.
 
 Run the same pipeline as a loopback worker. It reads a folder that already exists on this Mac; it does not upload photographs. Set `PHOTO_ENGINE_TOKEN` to require `Authorization: Bearer`.
 
