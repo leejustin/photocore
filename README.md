@@ -45,7 +45,7 @@ Launch the Mac studio:
 swift run photo-engine-mac
 ```
 
-After a run, the album is already chosen. Confirm only shows moments where two frames are close, or a keeper looks soft. Return keeps the suggestion. One look is applied to the whole album. Hand off writes `.xmp` sidecars (stars, color labels, and pick/reject keywords) without modifying image pixels.
+After a run, the album is already chosen. Confirm only shows moments where two frames are close, or a keeper looks soft. Return keeps the suggestion. Technical trash (extreme blur, blank frames, unusable exposures) never becomes a suggestion. One look is applied to the whole album from the Look workspace. Hand off packs finished JPEGs and XMP into `handoff/01-keepers` without modifying image pixels. In-camera ratings are read into stars when present.
 
 Run the same pipeline as a loopback worker. It reads a folder that already exists on this Mac; it does not upload photographs. Set `PHOTO_ENGINE_TOKEN` to require `Authorization: Bearer`.
 
@@ -63,7 +63,7 @@ Each run is written beneath `<output>/runs/<timestamp>-<id>/`, so rerunning with
 
 `photo-engine-checks` is a fixture-driven regression executable that exercises grouping, bounded burst duration, deterministic selection, culling/style controls, Vision descriptor round-trips, durable catalog records, stable IDs, corrupt-file reporting, isolated outputs, metadata sanitization, warm-cache metrics, and unsafe output paths. It is deliberately runnable with the standalone Swift Command Line Tools installed on this machine; it can be migrated to XCTest/Swift Testing without changing the fixture coverage when the app moves into an Xcode project.
 
-Quality calibration against real labeled shoots, RAW/ARW support, person identity grouping, lens-profile chromatic-aberration correction, and side-by-side correction tools remain intentionally separate follow-up work. Automatic culling never modifies source photographs; cleanup is limited to an explicit, verified exact-duplicate Trash action.
+Quality calibration against real labeled shoots, RAW/ARW support, person identity grouping, lens-profile chromatic-aberration correction, and side-by-side correction tools remain intentionally separate follow-up work. Automatic culling never modifies source photographs; cleanup is limited to an explicit, verified exact-duplicate Trash action. Occasion profiles change which technical rejects are hard-hidden (creative keeps unusual frames; group events protect faces).
 
 ## Repository policy
 
