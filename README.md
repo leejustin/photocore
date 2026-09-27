@@ -1,6 +1,6 @@
 # Photo Engine
 
-Photo Engine is a local-first photo culling and editing system designed for Apple Silicon. It imports folders of JPEG/HEIC photographs, identifies exact and near duplicates, groups timestamped bursts, computes explainable quality signals, produces a diverse shortlist, applies restrained edits, and exports finished JPEGs.
+Photo Engine is a local-first photo culling and editing system designed for Apple Silicon. It imports folders of JPEG/HEIC and camera RAW photographs, identifies exact and near duplicates, groups timestamped bursts, computes explainable quality signals, produces a diverse shortlist, applies restrained edits (built-in looks, imported LUTs, or Lightroom XMP presets), and exports finished JPEGs.
 
 The Mac app is a culling studio: a photo grid, a keyboard cull, basic develop controls, and Lightroom XMP sidecars. The processing engine stays in independent Swift modules so the same Vision pipeline can run in the app, the CLI, or a localhost worker that a phone or hosted front end can call.
 
@@ -45,7 +45,7 @@ Launch the Mac studio:
 swift run photo-engine-mac
 ```
 
-After a run, the album is already chosen. Confirm only shows moments where two frames are close, or a keeper looks soft. Return keeps the suggestion. Technical trash (extreme blur, blank frames, unusable exposures) never becomes a suggestion. One look is applied to the whole album from the Look workspace. Hand off packs finished JPEGs and XMP into `handoff/01-keepers` without modifying image pixels. In-camera ratings are read into stars when present.
+After a run, the album is already chosen. Confirm only shows moments where two frames are close, or a keeper looks soft / blinky. Return keeps the suggestion. Technical trash (extreme blur, blank frames, unusable exposures, single-subject blinks) never becomes a suggestion. RAW+JPEG pairs collapse to the RAW master; iPhone HEIC is supported and Live Photo movies / screenshot-named files are skipped. One look is applied from the Look workspace — built-ins, imported `.cube` LUTs, or Lightroom `.xmp` develop presets, with optional auto-straighten. Hand off packs finished JPEGs and writes XMP beside each master (including RAW) without modifying image pixels.
 
 Run the same pipeline as a loopback worker. It reads a folder that already exists on this Mac; it does not upload photographs. Set `PHOTO_ENGINE_TOKEN` to require `Authorization: Bearer`.
 

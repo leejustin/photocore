@@ -1,12 +1,19 @@
+import AppKit
+import PhotoEngineApple
 import PhotoEngineCore
 import SwiftUI
+import UniformTypeIdentifiers
 
 struct LookWorkspace: View {
     @ObservedObject var model: PhotoEngineViewModel
+    @State private var importingLUT = false
+    @State private var importingXMP = false
 
     private var samples: [CuratedRow] {
         Array(model.rows.filter { $0.bucket == .selected || $0.bucket == .protected }.prefix(9))
     }
+
+    private var looks: [AlbumLook] { model.availableLooks }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
@@ -14,31 +21,52 @@ struct LookWorkspace: View {
                 VStack(alignment: .leading, spacing: 4) {
                     Text("One look for the album")
                         .font(.system(size: 28, weight: .semibold, design: .serif))
-                    Text("Pick a direction. Photocore re-renders the keepers with that look. Sources stay untouched.")
+                    Text("Built-in looks, or import a .cube LUT / Lightroom .xmp develop preset. Photocore re-renders keepers; sources stay untouched.")
                         .foregroundStyle(StudioChrome.secondary)
                 }
                 Spacer()
                 if model.isReexportingLook {
-                    ProgressView()
-                        .controlSize(.small)
+                    ProgressView().controlSize(.small)
                 }
             }
 
-            HStack(spacing: 8) {
-                ForEach(StylePreset.allCases, id: \.self) { preset in
-                    Button {
-                        model.style = preset
-                    } label: {
-                        Text(preset.displayName)
-                            .font(.subheadline.weight(.medium))
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 8) {
+                    ForEach(looks) { look in
+                        Button {
+                            model.selectedLookID = look.id
+                            if let style = look.style { model.style = style }
+                        } label: {
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(look.name)
+                                    .font(.subheadline.weight(.medium))
+                                Text(look.kind == .builtin ? "Built-in" : look.kind.rawValue.uppercased())
+                                    .font(.caption2)
+                                    .foregroundStyle(model.selectedLookID == look.id ? .black.opacity(0.7) : StudioChrome.tertiary)
+                            }
                             .padding(.horizontal, 12)
-                            .padding(.vertical, 7)
-                            .background(model.style == preset ? StudioChrome.pick : StudioChrome.elevated, in: Capsule())
-                            .foregroundStyle(model.style == preset ? .black : StudioChrome.text)
+                            .padding(.vertical, 8)
+                            .background(model.selectedLookID == look.id ? StudioChrome.pick : StudioChrome.elevated, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+                            .foregroundStyle(model.selectedLookID == look.id ? .black : StudioChrome.text)
+                        }
+                        .buttonStyle(.plain)
                     }
-                    .buttonStyle(.plain)
+                }
+            }
+
+            HStack(spacing: 10) {
+                Toggle("Auto straighten", isOn: $model.autoStraightenLook)
+                    .toggleStyle(.checkbox)
+                HStack {
+                    Text("Warmth")
+                        .font(.caption)
+                        .foregroundStyle(StudioChrome.secondary)
+                    Slider(value: $model.lookTemperature, in: -0.6...0.6, step: 0.05)
+                        .frame(width: 140)
                 }
                 Spacer()
+                Button("Import LUT…") { importingLUT = true }
+                Button("Import XMP…") { importingXMP = true }
                 Button("Apply look") { model.applyAlbumLook() }
                     .buttonStyle(.borderedProminent)
                     .tint(StudioChrome.pick)
@@ -69,7 +97,7 @@ struct LookWorkspace: View {
             }
 
             HStack {
-                Text("Current look: \(model.style.displayName)")
+                Text("Current: \(model.selectedLook?.name ?? model.style.displayName)")
                     .font(.caption)
                     .foregroundStyle(StudioChrome.tertiary)
                 Spacer()
@@ -78,5 +106,15 @@ struct LookWorkspace: View {
         }
         .padding(22)
         .background(StudioChrome.canvas)
+        .fileImporter(isPresented: $importingLUT, allowedContentTypes: [UTType(filenameExtension: "cube") ?? .data], allowsMultipleSelection: false) { result in
+            if case .success(let urls) = result, let url = urls.first {
+                model.importLook(from: url, kind: .lut)
+            }
+        }
+        .fileImporter(isPresented: $importingXMP, allowedContentTypes: [UTType(filenameExtension: "xmp") ?? .xml, .data], allowsMultipleSelection: false) { result in
+            if case .success(let urls) = result, let url = urls.first {
+                model.importLook(from: url, kind: .xmp)
+            }
+        }
     }
 }

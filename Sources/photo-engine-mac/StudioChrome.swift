@@ -130,7 +130,8 @@ final class ThumbnailCache: @unchecked Sendable {
         let key = "\(maxPixelSize)|\(url.path)" as NSString
         if let cached = cache.object(forKey: key) { return cached }
         let data = await Task.detached(priority: .utility) { () -> Data? in
-            try? PhotoThumbnailProvider.data(for: url, maxPixelSize: maxPixelSize)
+            (try? PreviewDiskCache.shared.jpegPreview(for: url, maxPixelSize: maxPixelSize))
+                ?? (try? PhotoThumbnailProvider.data(for: url, maxPixelSize: maxPixelSize))
         }.value
         guard let data, let image = NSImage(data: data) else { return nil }
         cache.setObject(image, forKey: key)

@@ -169,7 +169,6 @@ struct PhotoEngineChecks {
             || PhotoFormatSupport.shouldSkipImport(URL(fileURLWithPath: "/tmp/Screenshot.jpg")),
             "screenshot naming should skip")
         try expect(PhotoFormatSupport.shouldSkipImport(URL(fileURLWithPath: "/tmp/IMG_1234.MOV")), "Live Photo movie should skip")
-        let root = URL(fileURLWithPath: "/shoot")
         let raw = URL(fileURLWithPath: "/shoot/IMG_1.CR3")
         let jpg = URL(fileURLWithPath: "/shoot/IMG_1.JPG")
         let master = PhotoFormatSupport.preferMaster(in: [jpg, raw])

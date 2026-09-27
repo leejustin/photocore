@@ -95,6 +95,9 @@ final class PhotoEngineViewModel: ObservableObject {
     @Published var loupeZoom: LoupeZoom = .fit
     @Published var customRecipes: [PhotoID: EditRecipe] = [:]
     @Published var isReexportingLook = false
+    @Published var selectedLookID: String = "builtin.natural"
+    @Published var autoStraightenLook = true
+    @Published var lookTemperature: Double = 0
     private var undoStack: [PhotoReviewMark] = []
 
     private let runner = PhotoPipelineRunner()
@@ -493,16 +496,43 @@ final class PhotoEngineViewModel: ObservableObject {
         status = "Restored to the album."
     }
 
+    var availableLooks: [AlbumLook] { AlbumLookLibrary.shared.allLooks() }
+
+    var selectedLook: AlbumLook? {
+        availableLooks.first { $0.id == selectedLookID } ?? availableLooks.first
+    }
+
+    func importLook(from url: URL, kind: AlbumLook.Kind) {
+        let accessed = url.startAccessingSecurityScopedResource()
+        defer { if accessed { url.stopAccessingSecurityScopedResource() } }
+        do {
+            let look: AlbumLook
+            switch kind {
+            case .lut:
+                look = try AlbumLookLibrary.shared.importCubeLUT(from: url)
+            case .xmp:
+                look = try AlbumLookLibrary.shared.importXMPPreset(from: url)
+            case .builtin:
+                return
+            }
+            selectedLookID = look.id
+            status = "Imported look “\(look.name)”."
+        } catch {
+            errorMessage = error.localizedDescription
+        }
+    }
+
     func applyAlbumLook() {
         guard let result, !isReexportingLook else { return }
         let keepers = result.analyzed.filter { photo in
             result.shortlist.selectedIDs.contains(photo.id)
         }
         guard !keepers.isEmpty else { return }
+        var look = selectedLook ?? AlbumLook.builtins[0]
+        look.temperature = lookTemperature
+        look.autoStraighten = autoStraightenLook
         isReexportingLook = true
-        status = "Applying \(style.displayName) to \(keepers.count) keepers…"
-        let style = style
-        let intensity = styleIntensity
+        status = "Applying \(look.name) to \(keepers.count) keepers…"
         let exportDirectory = result.runDirectory.appendingPathComponent("shortlist", isDirectory: true)
         let exportSpecification = ExportSpecification(preset: exportPreset)
         let runDirectory = result.runDirectory
@@ -512,18 +542,21 @@ final class PhotoEngineViewModel: ObservableObject {
                 let renderer = ApplePhotoRenderer()
                 var exports: [ExportedPhoto] = []
                 for (index, photo) in keepers.enumerated() {
+                    let horizon = look.autoStraighten
+                        ? ApplePhotoRenderer.detectHorizonDegrees(url: photo.asset.url, orientation: photo.asset.metadata.orientation)
+                        : nil
+                    let recipe = look.recipe(for: photo, horizonDegrees: horizon)
                     let fileName = String(format: "%03d-%@.jpg", index + 1, photo.asset.url.deletingPathExtension().lastPathComponent)
                     let outputURL = exportDirectory.appendingPathComponent(fileName)
                     let exported = try renderer.render(
                         photo: photo,
                         outputURL: outputURL,
-                        style: style,
-                        styleIntensity: intensity,
+                        recipe: recipe,
                         exportSpecification: exportSpecification
                     )
                     exports.append(exported)
                 }
-                await self?.didApplyAlbumLook(exports: exports, runDirectory: runDirectory)
+                await self?.didApplyAlbumLook(exports: exports, runDirectory: runDirectory, lookName: look.name)
             } catch {
                 await self?.noteLookFailure(error)
             }
@@ -531,7 +564,7 @@ final class PhotoEngineViewModel: ObservableObject {
     }
 
     @MainActor
-    private func didApplyAlbumLook(exports: [ExportedPhoto], runDirectory: URL) {
+    private func didApplyAlbumLook(exports: [ExportedPhoto], runDirectory: URL, lookName: String) {
         guard let result else {
             isReexportingLook = false
             return
@@ -553,7 +586,7 @@ final class PhotoEngineViewModel: ObservableObject {
         )
         rows = Self.makeRows(result: self.result!)
         isReexportingLook = false
-        status = "Applied \(style.displayName) to \(exports.count) keepers."
+        status = "Applied \(lookName) to \(exports.count) keepers."
         workspace = .album
     }
 
@@ -580,6 +613,9 @@ final class PhotoEngineViewModel: ObservableObject {
             for row in rows where row.bucket == .selected || row.bucket == .protected || mark(for: row.id).flag == .pick {
                 let mark = sidecarMark(for: row)
                 let base = row.sourceURL.deletingPathExtension().lastPathComponent
+                // Always write XMP beside the master (RAW or HEIC) so Lightroom
+                // picks up ratings without importing our JPEG proofs first.
+                _ = try LightroomSidecar.write(mark, named: base, to: row.sourceURL.deletingLastPathComponent())
                 _ = try LightroomSidecar.write(mark, named: base, to: keepersDir)
                 if let export = result.exports.first(where: { $0.photoID == row.id }) {
                     let source = URL(fileURLWithPath: export.outputPath)
@@ -600,6 +636,7 @@ final class PhotoEngineViewModel: ObservableObject {
             let readme = """
             Photocore handoff
             - 01-keepers: finished JPEGs plus XMP for Lightroom
+            - XMP was also written beside each master file (including RAW)
             - 02-alternates: XMP for near-duplicates you may want later
             Image originals were not modified.
             """
@@ -722,7 +759,7 @@ final class PhotoEngineViewModel: ObservableObject {
         for row in rows where row.bucket == .selected || row.bucket == .protected {
             guard !covered.contains(row.id), groupsByPhoto[row.id] == nil else { continue }
             let flags = analyzedPhoto(id: row.id)?.signals.qualityFlags.filter {
-                $0 == "subject appears soft" || $0 == "face quality low"
+                $0 == "subject appears soft" || $0 == "face quality low" || $0 == PhotoTechnicalReject.eyesClosed
             } ?? []
             guard !flags.isEmpty else { continue }
             covered.insert(row.id)
