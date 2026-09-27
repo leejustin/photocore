@@ -68,18 +68,33 @@ public final class PhotoFolderImporter: @unchecked Sendable {
             throw PhotoEngineError.invalidFolder(folder)
         }
 
-        var imported: [ImportedPhoto] = []
-        var issues: [ImportIssue] = []
+        var candidates: [URL] = []
         for case let url as URL in enumerator {
             try Task.checkCancellation()
             if shouldCancel() { throw CancellationError() }
-            guard Self.isSupportedImage(url) else { continue }
+            guard Self.isSupportedImage(url), !PhotoFormatSupport.shouldSkipImport(url) else { continue }
+            candidates.append(url)
+        }
+
+        let paired = Self.collapsePairedMasters(candidates, root: folder)
+        var imported: [ImportedPhoto] = []
+        var issues: [ImportIssue] = []
+        for url in paired {
+            try Task.checkCancellation()
+            if shouldCancel() { throw CancellationError() }
             do {
                 let metadata = try ImageMetadataReader.read(url: url)
                 let relativePath = Self.relativePath(for: url, root: folder)
                 let sourceModifiedAt = (try? url.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate)
                 let sourceSignature = try SHA256Hasher.quickSignature(url: url)
-                let contentHash = try SHA256Hasher.hash(url: url)
+                // Full-file digests on huge RAW cards are expensive; use the
+                // quick signature for RAW masters and a full hash for rendered files.
+                let contentHash: String
+                if metadata.format.isRawMaster {
+                    contentHash = sourceSignature
+                } else {
+                    contentHash = try SHA256Hasher.hash(url: url)
+                }
                 let asset = PhotoAsset(
                     id: PhotoID(Self.stableUUID(
                         rootPath: folder.standardizedFileURL.path,
@@ -94,7 +109,7 @@ public final class PhotoFolderImporter: @unchecked Sendable {
                     sourceSignature: sourceSignature,
                     contentHash: contentHash
                 )
-                let thumbnail = try ImageMetadataReader.thumbnailData(url: url, maxPixelSize: thumbnailMaxPixelSize)
+                let thumbnail = try PreviewDiskCache.shared.jpegPreview(for: url, maxPixelSize: thumbnailMaxPixelSize)
                 imported.append(ImportedPhoto(asset: asset, thumbnail: thumbnail))
             } catch {
                 // A single corrupt file should not abort the complete import.
@@ -114,9 +129,18 @@ public final class PhotoFolderImporter: @unchecked Sendable {
     }
 
     public static func isSupportedImage(_ url: URL) -> Bool {
-        switch url.pathExtension.lowercased() {
-        case "jpg", "jpeg", "heic", "heif": true
-        default: false
+        PhotoFormatSupport.isSupportedImage(url)
+    }
+
+    private static func collapsePairedMasters(_ urls: [URL], root: URL) -> [URL] {
+        var groups: [String: [URL]] = [:]
+        for url in urls {
+            let key = PhotoFormatSupport.pairingKey(for: url, root: root)
+            groups[key, default: []].append(url)
+        }
+        return groups.keys.sorted().compactMap { key in
+            guard let members = groups[key], !members.isEmpty else { return nil }
+            return PhotoFormatSupport.preferMaster(in: members)
         }
     }
 
@@ -183,13 +207,7 @@ enum ImageMetadataReader {
 
         let captureDate = captureDate(exif: exif, tiff: tiff)
 
-        let format: PhotoFormat
-        switch url.pathExtension.lowercased() {
-        case "jpg", "jpeg": format = .jpeg
-        case "heic": format = .heic
-        case "heif": format = .heif
-        default: format = .unknown
-        }
+        let format = PhotoFormatSupport.format(for: url)
 
         return PhotoMetadata(
             pixelWidth: width,
@@ -222,20 +240,29 @@ enum ImageMetadataReader {
         return nil
     }
 
-    static func thumbnailData(url: URL, maxPixelSize: Int) throws -> Data {
+    static func thumbnailData(url: URL, maxPixelSize: Int, preferEmbedded: Bool = true) throws -> Data {
         guard let source = CGImageSourceCreateWithURL(url as CFURL, nil) else {
             throw PhotoEngineError.unreadableImage(url)
         }
-        let options: [CFString: Any] = [
-            kCGImageSourceCreateThumbnailFromImageAlways: true,
+        var options: [CFString: Any] = [
             kCGImageSourceThumbnailMaxPixelSize: maxPixelSize,
             kCGImageSourceCreateThumbnailWithTransform: true,
             kCGImageSourceShouldCacheImmediately: false
         ]
-        guard let image = CGImageSourceCreateThumbnailAtIndex(source, 0, options as CFDictionary) else {
+        if preferEmbedded {
+            options[kCGImageSourceCreateThumbnailFromImageIfAbsent] = true
+        } else {
+            options[kCGImageSourceCreateThumbnailFromImageAlways] = true
+        }
+        if let image = CGImageSourceCreateThumbnailAtIndex(source, 0, options as CFDictionary) {
+            return try jpegData(image: image, quality: 0.82)
+        }
+        options[kCGImageSourceCreateThumbnailFromImageAlways] = true
+        options.removeValue(forKey: kCGImageSourceCreateThumbnailFromImageIfAbsent)
+        guard let fallback = CGImageSourceCreateThumbnailAtIndex(source, 0, options as CFDictionary) else {
             throw PhotoEngineError.unreadableImage(url)
         }
-        return try jpegData(image: image, quality: 0.82)
+        return try jpegData(image: fallback, quality: 0.82)
     }
 
     static func jpegData(image: CGImage, quality: Double) throws -> Data {
@@ -305,6 +332,13 @@ public struct AppleAnalysisEngine: Sendable {
         if vision.faces.count > 0 && vision.faceQuality < 0.35 {
             qualityFlags.append("face quality low")
         }
+        let eyeValues = vision.faces.compactMap(\.eyeOpenness)
+        if !eyeValues.isEmpty {
+            let averageOpen = eyeValues.reduce(0, +) / Double(eyeValues.count)
+            if averageOpen < 0.28 {
+                qualityFlags.append(PhotoTechnicalReject.eyesClosed)
+            }
+        }
         if pixels.sharpness < 0.06 {
             qualityFlags.append(PhotoTechnicalReject.extremeBlur)
         }
@@ -343,9 +377,10 @@ public struct AppleAnalysisEngine: Sendable {
         featureRequest.revision = VNGenerateImageFeaturePrintRequestRevision2
         let faceRequest = VNDetectFaceCaptureQualityRequest()
         faceRequest.revision = VNDetectFaceCaptureQualityRequestRevision3
+        let landmarksRequest = VNDetectFaceLandmarksRequest()
         let handler = VNImageRequestHandler(url: url, orientation: CGImagePropertyOrientation(exifOrientation: orientation), options: [:])
 
-        var requests: [VNRequest] = [featureRequest, faceRequest]
+        var requests: [VNRequest] = [featureRequest, faceRequest, landmarksRequest]
         var aestheticsRequest: VNCalculateImageAestheticsScoresRequest?
         if #available(macOS 15.0, *) {
             let request = VNCalculateImageAestheticsScoresRequest()
@@ -358,17 +393,27 @@ public struct AppleAnalysisEngine: Sendable {
             try JSONEncoder().encode(Vision.FeaturePrintObservation($0))
         }
 
-        let observations = faceRequest.results ?? []
-        let faceSignals = observations.map {
-            FaceSignal(
-                boundingBox: CGRectCodable(x: $0.boundingBox.origin.x, y: $0.boundingBox.origin.y, width: $0.boundingBox.size.width, height: $0.boundingBox.size.height),
-                captureQuality: $0.faceCaptureQuality.map(Double.init)
+        let qualityObservations = faceRequest.results ?? []
+        let landmarkObservations = landmarksRequest.results ?? []
+        let faceSignals: [FaceSignal] = qualityObservations.enumerated().map { index, observation in
+            let landmark = landmarkObservations.first {
+                $0.boundingBox.intersects(observation.boundingBox)
+            } ?? (index < landmarkObservations.count ? landmarkObservations[index] : nil)
+            return FaceSignal(
+                boundingBox: CGRectCodable(
+                    x: observation.boundingBox.origin.x,
+                    y: observation.boundingBox.origin.y,
+                    width: observation.boundingBox.size.width,
+                    height: observation.boundingBox.size.height
+                ),
+                captureQuality: observation.faceCaptureQuality.map(Double.init),
+                eyeOpenness: landmark.flatMap(Self.eyeOpenness(for:))
             )
         }
         let measuredQualities = faceSignals.compactMap(\.captureQuality)
         let faceQuality: Double
         if measuredQualities.isEmpty {
-            faceQuality = observations.isEmpty ? 0.5 : 0.35
+            faceQuality = qualityObservations.isEmpty ? 0.5 : 0.35
         } else {
             // For group shots, an average can hide one very poor important
             // face. Blend a lower quantile with the mean so a single weak
@@ -387,6 +432,29 @@ public struct AppleAnalysisEngine: Sendable {
         return (featurePrint, faceSignals, min(max(faceQuality, 0), 1), aestheticScore, aestheticUtility)
     }
 
+    private static func eyeOpenness(for observation: VNFaceObservation) -> Double? {
+        guard let landmarks = observation.landmarks else { return nil }
+        let left = openness(for: landmarks.leftEye)
+        let right = openness(for: landmarks.rightEye)
+        switch (left, right) {
+        case let (l?, r?): return min(l, r)
+        case let (l?, nil): return l
+        case let (nil, r?): return r
+        default: return nil
+        }
+    }
+
+    private static func openness(for region: VNFaceLandmarkRegion2D?) -> Double? {
+        guard let region, region.pointCount >= 4 else { return nil }
+        let points = (0..<region.pointCount).map { region.normalizedPoints[$0] }
+        let xs = points.map(\.x)
+        let ys = points.map(\.y)
+        guard let minX = xs.min(), let maxX = xs.max(), let minY = ys.min(), let maxY = ys.max() else { return nil }
+        let width = max(maxX - minX, 0.0001)
+        let height = max(maxY - minY, 0)
+        // Open eyes are taller relative to their width; blinks collapse.
+        return min(max(Double(height / width) / 0.45, 0), 1)
+    }
 }
 
 public enum AppleVisualDistance {
@@ -593,7 +661,26 @@ public final class ApplePhotoRenderer: @unchecked Sendable {
         if abs(recipe.straighten) > 0.05 {
             image = Self.straighten(image, degrees: recipe.straighten)
         }
+        if let lookID = recipe.albumLookID,
+           let look = AlbumLookLibrary.shared.look(id: lookID),
+           let filter = try? AlbumLookLibrary.shared.colorCubeFilter(for: look) {
+            filter.setValue(image, forKey: kCIInputImageKey)
+            image = filter.outputImage ?? image
+        }
         return image
+    }
+
+    public static func detectHorizonDegrees(url: URL, orientation: Int) -> Double? {
+        let request = VNDetectHorizonRequest()
+        let handler = VNImageRequestHandler(url: url, orientation: CGImagePropertyOrientation(exifOrientation: orientation), options: [:])
+        do {
+            try handler.perform([request])
+            guard let angle = request.results?.first?.angle else { return nil }
+            // Vision angle is radians; convert to degrees and invert for our straighten convention.
+            return -Double(angle) * 180 / .pi
+        } catch {
+            return nil
+        }
     }
 
     /// Rotates around the center and scales just enough to hide the empty corners.
@@ -1175,7 +1262,7 @@ public final class PhotoPipelineRunner: @unchecked Sendable {
             do {
                 for (asset, signals) in zip(imported.map(\.asset), signalsByIndex) {
                     try catalog.upsert(asset: asset, sessionID: sessionID, contentHash: signals.fingerprint.contentHash)
-                    try catalog.upsert(analysis: signals, for: asset.id, analyzerVersion: "apple-analysis-0.2.3")
+                    try catalog.upsert(analysis: signals, for: asset.id, analyzerVersion: "apple-analysis-0.3.0")
                 }
             } catch {
                 catalogHealthy = false

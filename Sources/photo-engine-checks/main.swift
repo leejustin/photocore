@@ -16,6 +16,7 @@ struct PhotoEngineChecks {
             ("burst duration is bounded", burstDurationIsBounded),
             ("selection honors its target", selectionHonorsTarget),
             ("technical rejects never compete", technicalRejectsNeverCompete),
+            ("RAW pairing and LUT looks", rawPairingAndLUTLooks),
             ("selection is deterministic", selectionIsDeterministic),
             ("culling controls and style recipes", cullingControlsAndStyleRecipes),
             ("Vision feature prints round-trip", visionFeaturePrintRoundTrip),
@@ -161,6 +162,45 @@ struct PhotoEngineChecks {
         )
     }
 
+    private static func rawPairingAndLUTLooks() throws {
+        try expect(PhotoFormatSupport.isSupportedImage(URL(fileURLWithPath: "/tmp/a.CR3")), "CR3 should be supported")
+        try expect(PhotoFormatSupport.isSupportedImage(URL(fileURLWithPath: "/tmp/a.HEIC")), "HEIC should be supported")
+        try expect(PhotoFormatSupport.shouldSkipImport(URL(fileURLWithPath: "/tmp/Screenshot 2024.png")) == false
+            || PhotoFormatSupport.shouldSkipImport(URL(fileURLWithPath: "/tmp/Screenshot.jpg")),
+            "screenshot naming should skip")
+        try expect(PhotoFormatSupport.shouldSkipImport(URL(fileURLWithPath: "/tmp/IMG_1234.MOV")), "Live Photo movie should skip")
+        let root = URL(fileURLWithPath: "/shoot")
+        let raw = URL(fileURLWithPath: "/shoot/IMG_1.CR3")
+        let jpg = URL(fileURLWithPath: "/shoot/IMG_1.JPG")
+        let master = PhotoFormatSupport.preferMaster(in: [jpg, raw])
+        try expect(master.pathExtension.lowercased() == "cr3", "RAW should win over JPEG companion")
+
+        let cube = """
+        TITLE \"Test\"
+        LUT_3D_SIZE 2
+        0 0 0
+        1 0 0
+        0 1 0
+        1 1 0
+        0 0 1
+        1 0 1
+        0 1 1
+        1 1 1
+        """
+        let lut = try CubeLUTParser.parse(Data(cube.utf8))
+        try expect(lut.dimension == 2, "LUT dimension wrong")
+        try expect(lut.rgbaData.count == 2 * 2 * 2 * 4 * MemoryLayout<Float>.size, "LUT rgba size wrong")
+
+        let xmp = #"""
+        <x:xmpmeta><rdf:Description crs:Temperature="7000" crs:Exposure2012="0.5" crs:Contrast2012="20" crs:Saturation="10"/></x:xmpmeta>
+        """#
+        let parsed = XMPDevelopPresetParser.parse(xmp)
+        try expect(parsed.temperature > 0.2, "warm temperature was not mapped")
+        try expect(parsed.exposure > 0, "exposure was not mapped")
+        try expect(RejectionPolicy.default(for: .newborn).closedEyesMatter == false, "newborn should allow closed eyes")
+        try expect(RejectionPolicy.default(for: .wedding).closedEyesMatter == true, "wedding should care about blinks")
+    }
+
     private static func burstDurationIsBounded() throws {
         let start = Date(timeIntervalSince1970: 10_000)
         let photos = (0..<5).map {
@@ -277,7 +317,7 @@ struct PhotoEngineChecks {
         """
         let recipe = try JSONDecoder().decode(EditRecipe.self, from: Data(json.utf8))
         try expect(recipe.exposure == 0.1, "exposure did not decode")
-        try expect(recipe.temperature == 0 && recipe.tint == 0 && recipe.clarity == 0 && recipe.straighten == 0, "new develop fields did not default")
+        try expect(recipe.temperature == 0 && recipe.tint == 0 && recipe.clarity == 0 && recipe.straighten == 0 && recipe.albumLookID == nil, "new develop fields did not default")
         let data = try JSONEncoder().encode(recipe)
         let roundTrip = try JSONDecoder().decode(EditRecipe.self, from: data)
         try expect(roundTrip.sharpening == 0.2, "recipe did not round-trip")

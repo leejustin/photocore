@@ -32,7 +32,13 @@ public enum PhotoFormat: String, Codable, Sendable {
     case jpeg
     case heic
     case heif
+    case raw
+    case dng
     case unknown
+
+    public var isRawMaster: Bool {
+        self == .raw || self == .dng
+    }
 }
 
 public struct PhotoMetadata: Codable, Sendable, Equatable {
@@ -119,10 +125,13 @@ public struct PhotoFingerprint: Codable, Sendable, Equatable {
 public struct FaceSignal: Codable, Sendable, Equatable {
     public var boundingBox: CGRectCodable
     public var captureQuality: Double?
+    /// 0 closed … 1 wide open, when landmarks were available.
+    public var eyeOpenness: Double?
 
-    public init(boundingBox: CGRectCodable, captureQuality: Double?) {
+    public init(boundingBox: CGRectCodable, captureQuality: Double?, eyeOpenness: Double? = nil) {
         self.boundingBox = boundingBox
         self.captureQuality = captureQuality
+        self.eyeOpenness = eyeOpenness
     }
 }
 
@@ -216,6 +225,11 @@ public enum CurationMode: String, Codable, CaseIterable, Sendable {
     case groupEvent
     case trip
     case creative
+    case wedding
+    case family
+    case newborn
+    case sports
+    case phoneDump
 
     public var displayName: String {
         switch self {
@@ -223,6 +237,11 @@ public enum CurationMode: String, Codable, CaseIterable, Sendable {
         case .groupEvent: "Group event"
         case .trip: "Trip"
         case .creative: "Creative"
+        case .wedding: "Wedding"
+        case .family: "Family"
+        case .newborn: "Newborn"
+        case .sports: "Sports"
+        case .phoneDump: "Phone dump"
         }
     }
 
@@ -230,12 +249,18 @@ public enum CurationMode: String, Codable, CaseIterable, Sendable {
         switch self {
         case .everyday:
             "Drops blur, blank frames, and unusable exposures before you confirm."
-        case .groupEvent:
-            "Protects faces: soft subjects and blank frames leave the album."
+        case .groupEvent, .wedding, .family:
+            "Protects faces: soft subjects, blinks, and blank frames leave the album."
         case .trip:
             "Keeps landscapes and scenes; only blur, utility shots, and bad exposures leave."
         case .creative:
             "Only extreme blur and unusable exposures are hard rejects. Soft and unusual frames stay."
+        case .newborn:
+            "Closed eyes are fine. Still drops blur, blanks, and unusable exposures."
+        case .sports:
+            "Allows motion blur more often. Still drops blanks and unusable exposures."
+        case .phoneDump:
+            "Skips screenshots-style junk in analysis and keeps a tighter everyday cull."
         }
     }
 }
@@ -248,32 +273,59 @@ public struct RejectionPolicy: Codable, Sendable, Equatable {
     /// When true, "no clear subject" only applies to Vision utility / accidental shots.
     public var noSubjectRequiresUtility: Bool
     public var facesMatter: Bool
+    public var closedEyesMatter: Bool
+    /// Soften the extreme-blur cutoff for action sports.
+    public var allowMotionBlur: Bool
 
     public init(
         rejectExtremeBlur: Bool = true,
         rejectNoSubject: Bool = true,
         rejectUnusableExposure: Bool = true,
         noSubjectRequiresUtility: Bool = false,
-        facesMatter: Bool = true
+        facesMatter: Bool = true,
+        closedEyesMatter: Bool = true,
+        allowMotionBlur: Bool = false
     ) {
         self.rejectExtremeBlur = rejectExtremeBlur
         self.rejectNoSubject = rejectNoSubject
         self.rejectUnusableExposure = rejectUnusableExposure
         self.noSubjectRequiresUtility = noSubjectRequiresUtility
         self.facesMatter = facesMatter
+        self.closedEyesMatter = closedEyesMatter
+        self.allowMotionBlur = allowMotionBlur
     }
 
     public static func `default`(for mode: CurationMode) -> RejectionPolicy {
         switch mode {
-        case .everyday:
+        case .everyday, .phoneDump:
             RejectionPolicy()
-        case .groupEvent:
-            RejectionPolicy(facesMatter: true)
+        case .groupEvent, .wedding, .family:
+            RejectionPolicy(facesMatter: true, closedEyesMatter: true)
         case .trip:
-            RejectionPolicy(noSubjectRequiresUtility: true, facesMatter: false)
+            RejectionPolicy(noSubjectRequiresUtility: true, facesMatter: false, closedEyesMatter: false)
         case .creative:
-            RejectionPolicy(rejectNoSubject: false, facesMatter: false)
+            RejectionPolicy(rejectNoSubject: false, facesMatter: false, closedEyesMatter: false)
+        case .newborn:
+            RejectionPolicy(closedEyesMatter: false)
+        case .sports:
+            RejectionPolicy(closedEyesMatter: false, allowMotionBlur: true)
         }
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case rejectExtremeBlur, rejectNoSubject, rejectUnusableExposure
+        case noSubjectRequiresUtility, facesMatter, closedEyesMatter, allowMotionBlur
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        rejectExtremeBlur = try container.decodeIfPresent(Bool.self, forKey: .rejectExtremeBlur) ?? true
+        rejectNoSubject = try container.decodeIfPresent(Bool.self, forKey: .rejectNoSubject) ?? true
+        rejectUnusableExposure = try container.decodeIfPresent(Bool.self, forKey: .rejectUnusableExposure) ?? true
+        noSubjectRequiresUtility = try container.decodeIfPresent(Bool.self, forKey: .noSubjectRequiresUtility) ?? false
+        facesMatter = try container.decodeIfPresent(Bool.self, forKey: .facesMatter) ?? true
+        closedEyesMatter = try container.decodeIfPresent(Bool.self, forKey: .closedEyesMatter) ?? true
+        allowMotionBlur = try container.decodeIfPresent(Bool.self, forKey: .allowMotionBlur) ?? false
     }
 }
 
@@ -281,8 +333,9 @@ public enum PhotoTechnicalReject {
     public static let extremeBlur = "extreme blur"
     public static let noClearSubject = "no clear subject"
     public static let unusableExposure = "unusable exposure"
+    public static let eyesClosed = "eyes appear closed"
 
-    public static let allFlags: Set<String> = [extremeBlur, noClearSubject, unusableExposure]
+    public static let allFlags: Set<String> = [extremeBlur, noClearSubject, unusableExposure, eyesClosed]
 
     public static func isTechnicalRejectReason(_ reason: String) -> Bool {
         reason.hasPrefix("technical reject:")
@@ -291,7 +344,10 @@ public enum PhotoTechnicalReject {
     /// Returns a shortlist reason when this photo must be hidden under the policy.
     public static func reason(for signals: AnalysisSignals, policy: RejectionPolicy) -> String? {
         let flags = Set(signals.qualityFlags)
-        if policy.rejectExtremeBlur, flags.contains(extremeBlur) {
+        if policy.rejectExtremeBlur, flags.contains(extremeBlur), !policy.allowMotionBlur {
+            return "technical reject: extreme blur"
+        }
+        if policy.rejectExtremeBlur, policy.allowMotionBlur, flags.contains(extremeBlur), signals.sharpness < 0.03 {
             return "technical reject: extreme blur"
         }
         if policy.rejectUnusableExposure, flags.contains(unusableExposure) {
@@ -305,6 +361,9 @@ public enum PhotoTechnicalReject {
             } else {
                 return "technical reject: no clear subject"
             }
+        }
+        if policy.closedEyesMatter, flags.contains(eyesClosed), signals.faceCount == 1 {
+            return "technical reject: eyes appear closed"
         }
         return nil
     }
@@ -458,14 +517,18 @@ public struct ScoringProfile: Codable, Sendable, Equatable {
 
     public static func `default`(for mode: CurationMode) -> ScoringProfile {
         switch mode {
-        case .everyday:
+        case .everyday, .phoneDump:
             ScoringProfile(mode: mode, sharpnessWeight: 0.30, exposureWeight: 0.22, faceWeight: 0.20, aestheticWeight: 0.28, diversityWeight: 0.55, targetCount: 40, burstWindow: 12, nearDuplicateHammingDistance: 8, nearDuplicateVisualDistance: 8)
-        case .groupEvent:
-            ScoringProfile(mode: mode, sharpnessWeight: 0.24, exposureWeight: 0.16, faceWeight: 0.36, aestheticWeight: 0.24, diversityWeight: 0.70, targetCount: 50, burstWindow: 15, nearDuplicateHammingDistance: 9, nearDuplicateVisualDistance: 9)
+        case .groupEvent, .wedding, .family:
+            ScoringProfile(mode: mode, sharpnessWeight: 0.22, exposureWeight: 0.14, faceWeight: 0.40, aestheticWeight: 0.24, diversityWeight: 0.70, targetCount: 50, burstWindow: 15, nearDuplicateHammingDistance: 9, nearDuplicateVisualDistance: 9)
         case .trip:
             ScoringProfile(mode: mode, sharpnessWeight: 0.24, exposureWeight: 0.18, faceWeight: 0.10, aestheticWeight: 0.48, diversityWeight: 0.82, targetCount: 60, burstWindow: 20, nearDuplicateHammingDistance: 8, nearDuplicateVisualDistance: 8)
         case .creative:
             ScoringProfile(mode: mode, sharpnessWeight: 0.12, exposureWeight: 0.10, faceWeight: 0.12, aestheticWeight: 0.66, diversityWeight: 0.90, targetCount: 60, burstWindow: 25, nearDuplicateHammingDistance: 10, nearDuplicateVisualDistance: 10)
+        case .newborn:
+            ScoringProfile(mode: mode, sharpnessWeight: 0.28, exposureWeight: 0.20, faceWeight: 0.22, aestheticWeight: 0.30, diversityWeight: 0.60, targetCount: 40, burstWindow: 18, nearDuplicateHammingDistance: 8, nearDuplicateVisualDistance: 8)
+        case .sports:
+            ScoringProfile(mode: mode, sharpnessWeight: 0.34, exposureWeight: 0.16, faceWeight: 0.18, aestheticWeight: 0.32, diversityWeight: 0.75, targetCount: 50, burstWindow: 8, nearDuplicateHammingDistance: 7, nearDuplicateVisualDistance: 7)
         }
     }
 
@@ -792,8 +855,24 @@ public struct EditRecipe: Codable, Sendable, Equatable {
     public var clarity: Double
     /// Degrees. Positive rotates clockwise in the preview.
     public var straighten: Double
+    /// Optional imported look (LUT / XMP preset) applied after the base recipe.
+    public var albumLookID: String?
 
-    public init(style: StylePreset = .natural, styleIntensity: Double = 0.65, exposure: Double = 0, contrast: Double = 0, saturation: Double = 0, highlights: Double = 0, shadows: Double = 0, sharpening: Double = 0, temperature: Double = 0, tint: Double = 0, clarity: Double = 0, straighten: Double = 0) {
+    public init(
+        style: StylePreset = .natural,
+        styleIntensity: Double = 0.65,
+        exposure: Double = 0,
+        contrast: Double = 0,
+        saturation: Double = 0,
+        highlights: Double = 0,
+        shadows: Double = 0,
+        sharpening: Double = 0,
+        temperature: Double = 0,
+        tint: Double = 0,
+        clarity: Double = 0,
+        straighten: Double = 0,
+        albumLookID: String? = nil
+    ) {
         self.style = style
         self.styleIntensity = styleIntensity
         self.exposure = exposure
@@ -806,11 +885,12 @@ public struct EditRecipe: Codable, Sendable, Equatable {
         self.tint = tint
         self.clarity = clarity
         self.straighten = straighten
+        self.albumLookID = albumLookID
     }
 
     private enum CodingKeys: String, CodingKey {
         case style, styleIntensity, exposure, contrast, saturation, highlights, shadows, sharpening
-        case temperature, tint, clarity, straighten
+        case temperature, tint, clarity, straighten, albumLookID
     }
 
     public init(from decoder: Decoder) throws {
@@ -827,6 +907,7 @@ public struct EditRecipe: Codable, Sendable, Equatable {
         tint = try container.decodeIfPresent(Double.self, forKey: .tint) ?? 0
         clarity = try container.decodeIfPresent(Double.self, forKey: .clarity) ?? 0
         straighten = try container.decodeIfPresent(Double.self, forKey: .straighten) ?? 0
+        albumLookID = try container.decodeIfPresent(String.self, forKey: .albumLookID)
     }
 }
 
@@ -1019,21 +1100,31 @@ public enum PhotoScoring {
         // utility content. Keep them selectable, but do not let an aesthetic
         // score make them dominate a photographic shortlist.
         let aesthetic = signals.aestheticUtility == true ? min(rawAesthetic, 0.5) : rawAesthetic
-        let face = signals.faceCount == 0 ? 0.5 : signals.faceQuality
+        var face = signals.faceCount == 0 ? 0.5 : signals.faceQuality
+        if profile.rejection.facesMatter, let openness = averageEyeOpenness(signals), signals.faceCount > 0 {
+            face = face * 0.55 + openness * 0.45
+        }
         let sharpness = signals.faceCount > 0 && signals.subjectSharpness != nil
             ? (signals.subjectSharpness! * 0.70 + signals.sharpness * 0.30)
             : signals.sharpness
-        let total =
+        var total =
             sharpness * profile.sharpnessWeight +
             signals.exposureQuality * profile.exposureWeight +
             face * profile.faceWeight +
             aesthetic * profile.aestheticWeight
+        if profile.rejection.closedEyesMatter, signals.qualityFlags.contains(PhotoTechnicalReject.eyesClosed) {
+            total *= 0.42
+        }
 
         var reasons: [String] = []
         if sharpness >= 0.65 { reasons.append("sharp") }
         if signals.qualityFlags.contains("subject appears soft") { reasons.append("subject appears soft") }
+        if signals.qualityFlags.contains(PhotoTechnicalReject.eyesClosed) { reasons.append("eyes appear closed") }
         if signals.exposureQuality >= 0.65 { reasons.append("well exposed") }
         if signals.faceCount > 0 && face >= 0.65 { reasons.append("strong faces") }
+        if let openness = averageEyeOpenness(signals), openness >= 0.72, signals.faceCount > 0 {
+            reasons.append("eyes open")
+        }
         if aesthetic >= 0.65 { reasons.append("aesthetic") }
         if reasons.isEmpty { reasons.append("best available candidate") }
 
@@ -1048,6 +1139,12 @@ public enum PhotoScoring {
             ],
             reasons: reasons
         )
+    }
+
+    private static func averageEyeOpenness(_ signals: AnalysisSignals) -> Double? {
+        let values = signals.faces.compactMap(\.eyeOpenness)
+        guard !values.isEmpty else { return nil }
+        return values.reduce(0, +) / Double(values.count)
     }
 }
 
