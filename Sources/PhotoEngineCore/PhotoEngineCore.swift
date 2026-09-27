@@ -45,6 +45,8 @@ public struct PhotoMetadata: Codable, Sendable, Equatable {
     public var lensModel: String?
     public var fileSize: Int64
     public var format: PhotoFormat
+    /// In-camera or prior XMP rating when present (0...5).
+    public var rating: Int?
 
     public init(
         pixelWidth: Int,
@@ -55,7 +57,8 @@ public struct PhotoMetadata: Codable, Sendable, Equatable {
         cameraModel: String? = nil,
         lensModel: String? = nil,
         fileSize: Int64 = 0,
-        format: PhotoFormat = .unknown
+        format: PhotoFormat = .unknown,
+        rating: Int? = nil
     ) {
         self.pixelWidth = pixelWidth
         self.pixelHeight = pixelHeight
@@ -66,6 +69,7 @@ public struct PhotoMetadata: Codable, Sendable, Equatable {
         self.lensModel = lensModel
         self.fileSize = fileSize
         self.format = format
+        self.rating = rating
     }
 }
 

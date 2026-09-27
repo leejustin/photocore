@@ -59,16 +59,19 @@ struct LibraryWorkspace: View {
     }
 
     private var headline: String {
-        let picks = model.count(.picks)
-        let total = model.rows.count
-        if picks > 0 { return "\(picks) kept from \(total)" }
-        return "\(total) photos"
+        if model.result != nil {
+            let summary = model.albumSummary
+            return "\(summary.kept) kept from \(summary.total)"
+        }
+        return "\(model.rows.count) photos"
     }
 
     private var subtitle: String {
         var parts = [model.filter.title]
         if model.result != nil {
-            let waiting = model.pendingConfirmations.count
+            let summary = model.albumSummary
+            parts.append("\(summary.trash) trash")
+            let waiting = summary.pending
             parts.append(waiting == 0 ? "Nothing to confirm" : "\(waiting) to confirm")
         }
         parts.append(model.mode.displayName)
@@ -141,6 +144,9 @@ private struct PhotoGridCell: View {
             Button("Pick") { model.updateMark(row.id) { $0.flag = .pick } }
             Button("Reject") { model.updateMark(row.id) { $0.flag = .reject } }
             Button("Protect") { model.override(photoID: row.id, bucket: .protected) }
+            if row.bucket == .hidden || row.bucket == .review || row.bucket == .alternate {
+                Button("Restore to album") { model.restoreToAlbum(row.id) }
+            }
             Menu("Stars") {
                 ForEach(0...5, id: \.self) { stars in
                     Button(stars == 0 ? "Clear" : String(repeating: "★", count: stars)) {

@@ -94,6 +94,7 @@ final class PhotoEngineViewModel: ObservableObject {
     @Published var surveying = false
     @Published var loupeZoom: LoupeZoom = .fit
     @Published var customRecipes: [PhotoID: EditRecipe] = [:]
+    @Published var isReexportingLook = false
     private var undoStack: [PhotoReviewMark] = []
 
     private let runner = PhotoPipelineRunner()
@@ -249,18 +250,55 @@ final class PhotoEngineViewModel: ObservableObject {
         filter = rows.contains { $0.bucket == .selected || $0.bucket == .protected } ? .picks : .all
         confirmations = makeConfirmations()
         skippedConfirmationIDs = []
+        seedInCameraRatings()
         focusedID = confirmations.first?.suggestedID ?? visibleRows.first?.id
-        workspace = confirmations.isEmpty ? .album : .confirm
+        workspace = confirmations.isEmpty ? .look : .confirm
         isRunning = false
         progress = nil
-        let kept = result.shortlist.selectedIDs.count
-        let total = result.imported.count
+        let summary = albumSummary
         if confirmations.isEmpty {
-            status = "Kept \(kept) of \(total). Nothing needs a decision."
+            status = "\(summary.sentence) Choose a look when you are ready."
         } else {
-            status = "Kept \(kept) of \(total). \(confirmations.count) close moment\(confirmations.count == 1 ? "" : "s") to confirm."
+            status = "\(summary.sentence) \(confirmations.count) close moment\(confirmations.count == 1 ? "" : "s") to confirm."
         }
         processingTask = nil
+    }
+
+    struct AlbumSummary {
+        var total: Int
+        var kept: Int
+        var trash: Int
+        var close: Int
+        var pending: Int
+
+        var sentence: String {
+            "\(total) in · \(kept) kept · \(trash) trash · \(close) close"
+        }
+    }
+
+    var albumSummary: AlbumSummary {
+        let trash = rows.filter { $0.reasons.contains(where: PhotoTechnicalReject.isTechnicalRejectReason) }.count
+        let close = rows.filter { $0.bucket == .review || $0.reasons.contains("close to a photo we kept") }.count
+        return AlbumSummary(
+            total: rows.count,
+            kept: count(.picks),
+            trash: trash,
+            close: close,
+            pending: pendingConfirmations.count
+        )
+    }
+
+    private func seedInCameraRatings() {
+        guard let result else { return }
+        for asset in result.imported {
+            guard let stars = asset.metadata.rating, stars > 0 else { continue }
+            var mark = mark(for: asset.id)
+            if mark.stars == 0 {
+                mark.stars = stars
+                reviewMarks[asset.id] = mark
+                try? runner.saveReviewMark(mark)
+            }
+        }
     }
 
     func prepareCleanup() {
@@ -432,6 +470,12 @@ final class PhotoEngineViewModel: ObservableObject {
             return row.bucket == .alternate
         case .review:
             return row.bucket == .review
+        case .closeHidden:
+            return row.bucket == .hidden
+                && row.reasons.contains("close to a photo we kept")
+                && !row.reasons.contains(where: PhotoTechnicalReject.isTechnicalRejectReason)
+        case .trash:
+            return row.reasons.contains(where: PhotoTechnicalReject.isTechnicalRejectReason)
         case .duplicates:
             return groupsByPhoto[row.id] != nil
         case .rejected:
@@ -440,6 +484,130 @@ final class PhotoEngineViewModel: ObservableObject {
             return mark(for: row.id).flag == .pick
         case .starred:
             return mark(for: row.id).stars > 0
+        }
+    }
+
+    func restoreToAlbum(_ id: PhotoID) {
+        override(photoID: id, bucket: .selected)
+        updateMark(id) { $0.flag = .pick }
+        status = "Restored to the album."
+    }
+
+    func applyAlbumLook() {
+        guard let result, !isReexportingLook else { return }
+        let keepers = result.analyzed.filter { photo in
+            result.shortlist.selectedIDs.contains(photo.id)
+        }
+        guard !keepers.isEmpty else { return }
+        isReexportingLook = true
+        status = "Applying \(style.displayName) to \(keepers.count) keepers…"
+        let style = style
+        let intensity = styleIntensity
+        let exportDirectory = result.runDirectory.appendingPathComponent("shortlist", isDirectory: true)
+        let exportSpecification = ExportSpecification(preset: exportPreset)
+        let runDirectory = result.runDirectory
+        Task.detached(priority: .userInitiated) { [weak self] in
+            do {
+                try FileManager.default.createDirectory(at: exportDirectory, withIntermediateDirectories: true)
+                let renderer = ApplePhotoRenderer()
+                var exports: [ExportedPhoto] = []
+                for (index, photo) in keepers.enumerated() {
+                    let fileName = String(format: "%03d-%@.jpg", index + 1, photo.asset.url.deletingPathExtension().lastPathComponent)
+                    let outputURL = exportDirectory.appendingPathComponent(fileName)
+                    let exported = try renderer.render(
+                        photo: photo,
+                        outputURL: outputURL,
+                        style: style,
+                        styleIntensity: intensity,
+                        exportSpecification: exportSpecification
+                    )
+                    exports.append(exported)
+                }
+                await self?.didApplyAlbumLook(exports: exports, runDirectory: runDirectory)
+            } catch {
+                await self?.noteLookFailure(error)
+            }
+        }
+    }
+
+    @MainActor
+    private func didApplyAlbumLook(exports: [ExportedPhoto], runDirectory: URL) {
+        guard let result else {
+            isReexportingLook = false
+            return
+        }
+        self.result = PipelineResult(
+            sessionID: result.sessionID,
+            imported: result.imported,
+            analyzed: result.analyzed,
+            grouping: result.grouping,
+            scored: result.scored,
+            shortlist: result.shortlist,
+            exports: exports,
+            manifestURL: result.manifestURL,
+            warnings: result.warnings,
+            runDirectory: runDirectory,
+            storageSummary: result.storageSummary,
+            metrics: result.metrics,
+            exportSpecification: result.exportSpecification
+        )
+        rows = Self.makeRows(result: self.result!)
+        isReexportingLook = false
+        status = "Applied \(style.displayName) to \(exports.count) keepers."
+        workspace = .album
+    }
+
+    @MainActor
+    private func noteLookFailure(_ error: Error) {
+        isReexportingLook = false
+        errorMessage = error.localizedDescription
+        status = "Could not apply that look."
+    }
+
+    func prepareHandoffPackage() {
+        guard let result else { return }
+        let accessed = selectedFolder?.startAccessingSecurityScopedResource() ?? false
+        defer {
+            if accessed { selectedFolder?.stopAccessingSecurityScopedResource() }
+        }
+        let root = result.runDirectory.appendingPathComponent("handoff", isDirectory: true)
+        let keepersDir = root.appendingPathComponent("01-keepers", isDirectory: true)
+        let alternatesDir = root.appendingPathComponent("02-alternates", isDirectory: true)
+        do {
+            try FileManager.default.createDirectory(at: keepersDir, withIntermediateDirectories: true)
+            try FileManager.default.createDirectory(at: alternatesDir, withIntermediateDirectories: true)
+            var written = 0
+            for row in rows where row.bucket == .selected || row.bucket == .protected || mark(for: row.id).flag == .pick {
+                let mark = sidecarMark(for: row)
+                let base = row.sourceURL.deletingPathExtension().lastPathComponent
+                _ = try LightroomSidecar.write(mark, named: base, to: keepersDir)
+                if let export = result.exports.first(where: { $0.photoID == row.id }) {
+                    let source = URL(fileURLWithPath: export.outputPath)
+                    let dest = keepersDir.appendingPathComponent(source.lastPathComponent)
+                    if FileManager.default.fileExists(atPath: dest.path) {
+                        try FileManager.default.removeItem(at: dest)
+                    }
+                    try FileManager.default.copyItem(at: source, to: dest)
+                }
+                written += 1
+            }
+            for row in rows where row.bucket == .alternate {
+                let mark = sidecarMark(for: row)
+                let base = row.sourceURL.deletingPathExtension().lastPathComponent
+                _ = try LightroomSidecar.write(mark, named: base, to: alternatesDir)
+                written += 1
+            }
+            let readme = """
+            Photocore handoff
+            - 01-keepers: finished JPEGs plus XMP for Lightroom
+            - 02-alternates: XMP for near-duplicates you may want later
+            Image originals were not modified.
+            """
+            try Data(readme.utf8).write(to: root.appendingPathComponent("README.txt"), options: .atomic)
+            status = "Packed \(written) files for Lightroom."
+            NSWorkspace.shared.activateFileViewerSelecting([root])
+        } catch {
+            errorMessage = error.localizedDescription
         }
     }
 
@@ -567,6 +735,7 @@ final class PhotoEngineViewModel: ObservableObject {
             ))
         }
         for row in rows where row.bucket == .review && !covered.contains(row.id) {
+            guard !row.reasons.contains(where: PhotoTechnicalReject.isTechnicalRejectReason) else { continue }
             moments.append(ConfirmationMoment(
                 id: row.id.description,
                 suggestedID: row.id,

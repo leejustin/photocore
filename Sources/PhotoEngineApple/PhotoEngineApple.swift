@@ -200,8 +200,26 @@ enum ImageMetadataReader {
             cameraModel: tiff?.object(forKey: kCGImagePropertyTIFFModel) as? String,
             lensModel: exif?.object(forKey: kCGImagePropertyExifLensModel) as? String,
             fileSize: size,
-            format: format
+            format: format,
+            rating: readRating(from: source)
         )
+    }
+
+    private static func readRating(from source: CGImageSource) -> Int? {
+        guard let metadata = CGImageSourceCopyMetadataAtIndex(source, 0, nil) else { return nil }
+        let paths = ["xmp:Rating", "exif:Rating"]
+        for path in paths {
+            guard let tag = CGImageMetadataCopyTagWithPath(metadata, nil, path as CFString),
+                  let value = CGImageMetadataTagCopyValue(tag) else { continue }
+            if let number = value as? NSNumber {
+                let stars = number.intValue
+                if (0...5).contains(stars) { return stars }
+            }
+            if let string = value as? String, let stars = Int(string), (0...5).contains(stars) {
+                return stars
+            }
+        }
+        return nil
     }
 
     static func thumbnailData(url: URL, maxPixelSize: Int) throws -> Data {

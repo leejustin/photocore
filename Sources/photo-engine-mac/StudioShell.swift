@@ -128,6 +128,8 @@ struct ContentView: View {
                 LibraryWorkspace(model: model)
             case .confirm:
                 ConfirmWorkspace(model: model)
+            case .look:
+                LookWorkspace(model: model)
             }
         }
     }
@@ -231,6 +233,10 @@ struct ContentView: View {
                 }
             }
             Text(cullDescription)
+                .font(.caption2)
+                .foregroundStyle(StudioChrome.tertiary)
+                .fixedSize(horizontal: false, vertical: true)
+            Text(model.mode.cullHint)
                 .font(.caption2)
                 .foregroundStyle(StudioChrome.tertiary)
                 .fixedSize(horizontal: false, vertical: true)
@@ -434,10 +440,16 @@ private struct ExportSheet: View {
         VStack(alignment: .leading, spacing: 16) {
             Text("Hand this shoot off")
                 .font(.title2.weight(.semibold))
-            Text("\(model.count(.picks)) AI picks · \(model.count(.myPicks)) of your picks · \(model.count(.rejected)) rejected. Stars, colors, and flags are written as XMP. Image pixels stay untouched.")
+            Text("\(model.count(.picks)) AI picks · \(model.count(.myPicks)) of your picks · \(model.count(.trash)) trash · \(model.count(.rejected)) rejected. Stars, colors, and flags are written as XMP. Image pixels stay untouched.")
                 .foregroundStyle(StudioChrome.secondary)
                 .fixedSize(horizontal: false, vertical: true)
             VStack(alignment: .leading, spacing: 8) {
+                Button("Pack keepers for Lightroom") {
+                    model.prepareHandoffPackage()
+                    dismiss()
+                }
+                .buttonStyle(.borderedProminent)
+                .tint(StudioChrome.pick)
                 Button("Save sidecars in the export folder") {
                     model.writeSidecars(besideOriginals: false)
                     dismiss()
@@ -448,7 +460,7 @@ private struct ExportSheet: View {
                 }
                 Button("Reveal rendered JPEGs") { model.revealExports() }
             }
-            Text("Lightroom reads Rating and Label from the sidecar. Pick and reject become the keywords Photocore Pick and Photocore Reject, because Lightroom keeps flags in its own catalog.")
+            Text("Pack keepers writes finished JPEGs and XMP into handoff/01-keepers. Lightroom reads Rating and Label from the sidecar. Pick and reject become Photocore Pick / Photocore Reject keywords.")
                 .font(.caption)
                 .foregroundStyle(StudioChrome.tertiary)
                 .fixedSize(horizontal: false, vertical: true)
@@ -499,6 +511,7 @@ private struct CullKeyCommands: View {
             key("u") { model.flagFocused(.unflagged, advance: false) }
             key("z") { model.undoMark() }
             key("c") { model.workspace = .confirm }
+            key("l") { model.workspace = .look }
             key("s") { model.toggleSurvey() }
             key("f") { model.cycleLoupeZoom() }
             key("e") { model.zoomToEyes() }

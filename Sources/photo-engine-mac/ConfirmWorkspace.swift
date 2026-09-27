@@ -28,11 +28,13 @@ struct ConfirmWorkspace: View {
             if let id = model.currentConfirmation?.suggestedID {
                 model.focusedID = id
             }
+            model.loupeZoom = .fit
         }
     }
 
     private func momentView(_ moment: ConfirmationMoment) -> some View {
-        VStack(alignment: .leading, spacing: 16) {
+        VStack(alignment: .leading, spacing: 14) {
+            summaryStrip
             HStack(alignment: .firstTextBaseline) {
                 VStack(alignment: .leading, spacing: 4) {
                     Text(progressTitle)
@@ -43,10 +45,20 @@ struct ConfirmWorkspace: View {
                     Text(moment.reason)
                         .font(.body)
                         .foregroundStyle(StudioChrome.secondary)
+                    if moment.isChoice {
+                        Text(String(format: "Scores are %.0f%% apart", moment.margin * 100))
+                            .font(.caption)
+                            .foregroundStyle(StudioChrome.tertiary)
+                    }
                 }
                 Spacer()
-                Button("Skip") { model.skipConfirmation() }
-                    .keyboardShortcut(.cancelAction)
+                HStack(spacing: 8) {
+                    Button(model.loupeZoom == .face ? "Full frame" : "Check eyes") {
+                        model.loupeZoom = model.loupeZoom == .face ? .fit : .face
+                    }
+                    Button("Skip") { model.skipConfirmation() }
+                        .keyboardShortcut(.cancelAction)
+                }
             }
 
             if moment.isChoice {
@@ -59,7 +71,7 @@ struct ConfirmWorkspace: View {
                 }
                 .frame(maxHeight: .infinity)
             } else if let row = model.rows.first(where: { $0.id == moment.suggestedID }) {
-                CachedThumbnail(url: row.sourceURL, maxPixelSize: 1600)
+                confirmPreview(for: row)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
                     .background(Color.black, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
             }
@@ -77,13 +89,40 @@ struct ConfirmWorkspace: View {
                 if !moment.isChoice {
                     Button("Drop it") { model.dropSuggestion() }
                 }
+                if moment.isChoice {
+                    Button("Show runners-up") {
+                        model.filter = .closeHidden
+                        model.workspace = .album
+                    }
+                }
                 Spacer()
-                Text("Return keeps the suggestion. Arrows move between frames.")
+                Text("Return keeps the suggestion. E checks eyes. Arrows move between frames.")
                     .font(.caption)
                     .foregroundStyle(StudioChrome.tertiary)
             }
         }
         .padding(22)
+    }
+
+    private var summaryStrip: some View {
+        let summary = model.albumSummary
+        return HStack(spacing: 16) {
+            summaryChip("\(summary.total)", "in")
+            summaryChip("\(summary.kept)", "kept")
+            summaryChip("\(summary.trash)", "trash")
+            summaryChip("\(summary.pending)", "for you")
+            Spacer()
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 8)
+        .background(StudioChrome.elevated, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+    }
+
+    private func summaryChip(_ value: String, _ label: String) -> some View {
+        HStack(spacing: 4) {
+            Text(value).font(.caption.weight(.semibold).monospacedDigit())
+            Text(label).font(.caption).foregroundStyle(StudioChrome.tertiary)
+        }
     }
 
     private func candidate(_ row: CuratedRow, moment: ConfirmationMoment) -> some View {
@@ -95,7 +134,7 @@ struct ConfirmWorkspace: View {
             VStack(alignment: .leading, spacing: 8) {
                 ZStack(alignment: .topLeading) {
                     Color.black
-                    CachedThumbnail(url: row.sourceURL, maxPixelSize: 1200)
+                    confirmPreview(for: row)
                     if suggested {
                         Text("Suggestion")
                             .font(.caption2.weight(.bold))
@@ -111,27 +150,42 @@ struct ConfirmWorkspace: View {
                     RoundedRectangle(cornerRadius: 10, style: .continuous)
                         .strokeBorder(focused ? StudioChrome.pick : Color.clear, lineWidth: 2)
                 }
-                Text(row.sourceURL.lastPathComponent)
-                    .font(.caption)
-                    .foregroundStyle(StudioChrome.secondary)
-                    .lineLimit(1)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(row.sourceURL.lastPathComponent)
+                        .font(.caption)
+                        .foregroundStyle(StudioChrome.secondary)
+                        .lineLimit(1)
+                    if let reason = row.reasons.first {
+                        Text(reason)
+                            .font(.caption2)
+                            .foregroundStyle(StudioChrome.tertiary)
+                            .lineLimit(1)
+                    }
+                }
             }
         }
         .buttonStyle(.plain)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
+    private func confirmPreview(for row: CuratedRow) -> some View {
+        ConfirmLoupe(url: row.sourceURL, zoom: model.loupeZoom, face: model.primaryFaceBox(for: row.id))
+    }
+
     private var finished: some View {
         VStack(spacing: 14) {
             Text("Nothing else needs you.")
                 .font(.system(size: 34, weight: .semibold, design: .serif))
-            Text("The other frames were decided automatically. The album is the keepers.")
+            Text(model.albumSummary.sentence)
                 .foregroundStyle(StudioChrome.secondary)
                 .multilineTextAlignment(.center)
-                .frame(maxWidth: 420)
-            Button("See the album") { model.workspace = .album }
-                .buttonStyle(.borderedProminent)
-                .tint(StudioChrome.pick)
+                .frame(maxWidth: 440)
+            HStack(spacing: 10) {
+                Button("Choose the look") { model.workspace = .look }
+                    .buttonStyle(.borderedProminent)
+                    .tint(StudioChrome.pick)
+                Button("See the album") { model.workspace = .album }
+            }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
@@ -139,5 +193,26 @@ struct ConfirmWorkspace: View {
     private var progressTitle: String {
         let done = model.confirmations.count - model.pendingConfirmations.count + 1
         return "Moment \(min(done, model.confirmations.count)) of \(model.confirmations.count)"
+    }
+}
+
+private struct ConfirmLoupe: View {
+    let url: URL
+    let zoom: LoupeZoom
+    var face: CGRectCodable?
+
+    @State private var image: NSImage?
+
+    var body: some View {
+        Group {
+            if let image {
+                ZoomableLoupe(image: image, zoom: zoom, face: face)
+            } else {
+                ProgressView().controlSize(.small)
+            }
+        }
+        .task(id: url.path) {
+            image = await ThumbnailCache.shared.image(url: url, maxPixelSize: 1600)
+        }
     }
 }

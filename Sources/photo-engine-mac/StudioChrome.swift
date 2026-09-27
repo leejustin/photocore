@@ -12,6 +12,7 @@ enum LoupeZoom: String {
 enum StudioWorkspace: String, CaseIterable, Identifiable {
     case album
     case confirm
+    case look
 
     var id: String { rawValue }
 
@@ -19,6 +20,7 @@ enum StudioWorkspace: String, CaseIterable, Identifiable {
         switch self {
         case .album: "Album"
         case .confirm: "Confirm"
+        case .look: "Look"
         }
     }
 }
@@ -28,6 +30,8 @@ enum LibraryFilter: String, CaseIterable, Identifiable {
     case picks
     case alternates
     case review
+    case closeHidden
+    case trash
     case duplicates
     case rejected
     case myPicks
@@ -41,6 +45,8 @@ enum LibraryFilter: String, CaseIterable, Identifiable {
         case .picks: "AI picks"
         case .alternates: "Alternates"
         case .review: "Close calls"
+        case .closeHidden: "Hidden but close"
+        case .trash: "Technical trash"
         case .duplicates: "Similar"
         case .rejected: "Rejected"
         case .myPicks: "My picks"
@@ -54,6 +60,8 @@ enum LibraryFilter: String, CaseIterable, Identifiable {
         case .picks: "sparkles"
         case .alternates: "rectangle.on.rectangle"
         case .review: "questionmark.circle"
+        case .closeHidden: "eye.slash"
+        case .trash: "trash"
         case .duplicates: "square.on.square"
         case .rejected: "xmark"
         case .myPicks: "flag.fill"
@@ -156,4 +164,74 @@ struct CachedThumbnail: View {
 
 func studioByteCount(_ bytes: Int64) -> String {
     ByteCountFormatter.string(fromByteCount: bytes, countStyle: .file)
+}
+
+struct ZoomableLoupe: View {
+    let image: NSImage
+    let zoom: LoupeZoom
+    var face: CGRectCodable?
+
+    var body: some View {
+        GeometryReader { geo in
+            let pixels = pixelSize(of: image)
+            let fitted = fittedSize(pixels, in: geo.size)
+            let scale = displayScale(pixels: pixels, fitted: fitted)
+            let shift = pan(fitted: fitted, in: geo.size, scale: scale)
+            Image(nsImage: image)
+                .resizable()
+                .interpolation(.high)
+                .frame(width: fitted.width, height: fitted.height)
+                .scaleEffect(scale)
+                .offset(shift)
+                .frame(width: geo.size.width, height: geo.size.height)
+                .clipped()
+        }
+    }
+
+    private func pixelSize(of image: NSImage) -> CGSize {
+        if let rep = image.representations.first, rep.pixelsWide > 0, rep.pixelsHigh > 0 {
+            return CGSize(width: rep.pixelsWide, height: rep.pixelsHigh)
+        }
+        return image.size
+    }
+
+    private func fittedSize(_ pixels: CGSize, in view: CGSize) -> CGSize {
+        guard pixels.width > 1, pixels.height > 1, view.width > 1, view.height > 1 else { return view }
+        let imageAspect = pixels.width / pixels.height
+        let viewAspect = view.width / view.height
+        if viewAspect > imageAspect {
+            return CGSize(width: view.height * imageAspect, height: view.height)
+        }
+        return CGSize(width: view.width, height: view.width / imageAspect)
+    }
+
+    private func displayScale(pixels: CGSize, fitted: CGSize) -> CGFloat {
+        switch zoom {
+        case .fit:
+            return 1
+        case .actual:
+            let screen = NSScreen.main?.backingScaleFactor ?? 2
+            guard fitted.width > 1 else { return 1 }
+            return max(1, (pixels.width / fitted.width) / screen)
+        case .face:
+            let fraction = max(face?.width ?? 0.22, 0.08)
+            return min(6, max(1.8, 0.42 / fraction))
+        }
+    }
+
+    private func pan(fitted: CGSize, in view: CGSize, scale: CGFloat) -> CGSize {
+        guard zoom == .face, let face, scale > 1 else { return .zero }
+        let imageOrigin = CGPoint(x: (view.width - fitted.width) / 2, y: (view.height - fitted.height) / 2)
+        let focus = CGPoint(
+            x: (face.x + face.width / 2) * fitted.width,
+            y: (1 - (face.y + face.height / 2)) * fitted.height
+        )
+        let focusInView = CGPoint(x: imageOrigin.x + focus.x, y: imageOrigin.y + focus.y)
+        let center = CGPoint(x: view.width / 2, y: view.height / 2)
+        let scaled = CGPoint(
+            x: center.x + (focusInView.x - center.x) * scale,
+            y: center.y + (focusInView.y - center.y) * scale
+        )
+        return CGSize(width: center.x - scaled.x, height: center.y - scaled.y)
+    }
 }
