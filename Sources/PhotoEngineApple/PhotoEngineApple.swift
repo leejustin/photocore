@@ -458,6 +458,29 @@ public struct AppleAnalysisEngine: Sendable {
 }
 
 public enum AppleVisualDistance {
+    /// Serialized revision-2 feature print for an already-decoded, upright image.
+    /// The analyzer and `photo-engine calibrate` both use this, so measured
+    /// distances match what grouping sees.
+    public static func featurePrintData(for image: CGImage) throws -> Data? {
+        let request = VNGenerateImageFeaturePrintRequest()
+        request.revision = VNGenerateImageFeaturePrintRequestRevision2
+        try VNImageRequestHandler(cgImage: image, options: [:]).perform([request])
+        return try request.results?.first.map {
+            try JSONEncoder().encode(Vision.FeaturePrintObservation($0))
+        }
+    }
+
+    public static func distance(_ lhs: Data, _ rhs: Data) -> Double? {
+        do {
+            let decoder = JSONDecoder()
+            let left = try decoder.decode(Vision.FeaturePrintObservation.self, from: lhs)
+            let right = try decoder.decode(Vision.FeaturePrintObservation.self, from: rhs)
+            return try left.distance(to: right)
+        } catch {
+            return nil
+        }
+    }
+
     public static func distance(_ lhs: AnalysisSignals, _ rhs: AnalysisSignals) -> Double? {
         guard let leftData = lhs.featurePrint, let rightData = rhs.featurePrint else { return nil }
         do {

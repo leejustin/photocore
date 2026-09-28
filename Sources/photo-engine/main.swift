@@ -37,6 +37,11 @@ struct PhotoEngineCommand {
             try runSmokeTests()
         case "serve":
             try serve(arguments: Array(arguments.dropFirst()))
+        case "calibrate":
+            guard arguments.count >= 2 else { throw PhotoEngineError.invalidArgument("calibrate requires a folder path") }
+            let folder = URL(fileURLWithPath: arguments[1], isDirectory: true).standardizedFileURL
+            let sheet = option(arguments, name: "--sheet").map { URL(fileURLWithPath: $0) }
+            try Calibration.run(folder: folder, sheet: sheet)
         case "help", "--help", "-h":
             printUsage()
         default:
@@ -113,6 +118,13 @@ struct PhotoEngineCommand {
             print("[\(progress.stage.rawValue)] \(progress.message)\(suffix)")
         }
         print("\nSelected \(result.shortlist.selectedIDs.count) of \(result.imported.count) photos")
+        let groups = result.grouping.groups
+        let bursts = groups.filter { $0.kind != .exactDuplicate }
+        let sizes = bursts.map(\.memberIDs.count).sorted(by: >)
+        let grouped = Set(groups.flatMap(\.memberIDs)).count
+        print("Groups: \(bursts.count) moment groups (\(grouped) photos), \(groups.count - bursts.count) exact-copy groups; largest: \(sizes.prefix(6).map(String.init).joined(separator: ", "))")
+        let buckets = Dictionary(grouping: result.shortlist.decisions, by: \.bucket).mapValues(\.count)
+        print("Buckets: " + buckets.sorted { $0.key.rawValue < $1.key.rawValue }.map { "\($0.key.rawValue) \($0.value)" }.joined(separator: ", "))
         print("Session: \(result.sessionID)")
         print("Exported to \(result.runDirectory.appendingPathComponent("shortlist").path)")
         print("Manifest: \(result.manifestURL.path)")
@@ -216,6 +228,7 @@ struct PhotoEngineCommand {
         Usage:
           photo-engine catalog <folder>
           photo-engine run <folder> [--profile everyday|groupEvent|trip|creative] [--cull gentle|balanced|highlights] [--target N | --keep-percent P] [--style natural|warm|vibrant|soft|blackAndWhite] [--intensity 0...1] [--size full|compact] [--output folder]
+          photo-engine calibrate <folder> [--sheet out.jpg]
           photo-engine serve [--port 8787]
           photo-engine smoke-test
           photo-engine version
