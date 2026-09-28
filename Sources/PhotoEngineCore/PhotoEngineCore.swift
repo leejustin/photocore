@@ -475,6 +475,10 @@ public struct ScoringProfile: Codable, Sendable, Equatable {
     public var maxBurstDuration: TimeInterval
     public var nearDuplicateHammingDistance: Int
     public var nearDuplicateVisualDistance: Double
+    /// Looser Vision distance for frames taken within `momentWindow` seconds of each other.
+    /// A focus pull or a small reframe inside one second is still the same moment.
+    public var momentVisualDistance: Double
+    public var momentWindow: TimeInterval
     public var rejection: RejectionPolicy
 
     public init(
@@ -488,6 +492,8 @@ public struct ScoringProfile: Codable, Sendable, Equatable {
         burstWindow: TimeInterval,
         nearDuplicateHammingDistance: Int,
         nearDuplicateVisualDistance: Double,
+        momentVisualDistance: Double? = nil,
+        momentWindow: TimeInterval = 3,
         maxBurstDuration: TimeInterval? = nil,
         aggressiveness: CullingAggressiveness = .balanced,
         style: StylePreset = .natural,
@@ -512,23 +518,25 @@ public struct ScoringProfile: Codable, Sendable, Equatable {
         self.maxBurstDuration = maxBurstDuration ?? burstWindow * 4
         self.nearDuplicateHammingDistance = nearDuplicateHammingDistance
         self.nearDuplicateVisualDistance = nearDuplicateVisualDistance
+        self.momentVisualDistance = momentVisualDistance ?? min(nearDuplicateVisualDistance + 0.12, 0.66)
+        self.momentWindow = momentWindow
         self.rejection = rejection ?? .default(for: mode)
     }
 
     public static func `default`(for mode: CurationMode) -> ScoringProfile {
         switch mode {
         case .everyday, .phoneDump:
-            ScoringProfile(mode: mode, sharpnessWeight: 0.30, exposureWeight: 0.22, faceWeight: 0.20, aestheticWeight: 0.28, diversityWeight: 0.55, targetCount: 40, burstWindow: 12, nearDuplicateHammingDistance: 8, nearDuplicateVisualDistance: 8)
+            ScoringProfile(mode: mode, sharpnessWeight: 0.30, exposureWeight: 0.22, faceWeight: 0.20, aestheticWeight: 0.28, diversityWeight: 0.55, targetCount: 40, burstWindow: 12, nearDuplicateHammingDistance: 8, nearDuplicateVisualDistance: 0.50)
         case .groupEvent, .wedding, .family:
-            ScoringProfile(mode: mode, sharpnessWeight: 0.22, exposureWeight: 0.14, faceWeight: 0.40, aestheticWeight: 0.24, diversityWeight: 0.70, targetCount: 50, burstWindow: 15, nearDuplicateHammingDistance: 9, nearDuplicateVisualDistance: 9)
+            ScoringProfile(mode: mode, sharpnessWeight: 0.22, exposureWeight: 0.14, faceWeight: 0.40, aestheticWeight: 0.24, diversityWeight: 0.70, targetCount: 50, burstWindow: 15, nearDuplicateHammingDistance: 9, nearDuplicateVisualDistance: 0.50)
         case .trip:
-            ScoringProfile(mode: mode, sharpnessWeight: 0.24, exposureWeight: 0.18, faceWeight: 0.10, aestheticWeight: 0.48, diversityWeight: 0.82, targetCount: 60, burstWindow: 20, nearDuplicateHammingDistance: 8, nearDuplicateVisualDistance: 8)
+            ScoringProfile(mode: mode, sharpnessWeight: 0.24, exposureWeight: 0.18, faceWeight: 0.10, aestheticWeight: 0.48, diversityWeight: 0.82, targetCount: 60, burstWindow: 20, nearDuplicateHammingDistance: 8, nearDuplicateVisualDistance: 0.45)
         case .creative:
-            ScoringProfile(mode: mode, sharpnessWeight: 0.12, exposureWeight: 0.10, faceWeight: 0.12, aestheticWeight: 0.66, diversityWeight: 0.90, targetCount: 60, burstWindow: 25, nearDuplicateHammingDistance: 10, nearDuplicateVisualDistance: 10)
+            ScoringProfile(mode: mode, sharpnessWeight: 0.12, exposureWeight: 0.10, faceWeight: 0.12, aestheticWeight: 0.66, diversityWeight: 0.90, targetCount: 60, burstWindow: 25, nearDuplicateHammingDistance: 10, nearDuplicateVisualDistance: 0.40)
         case .newborn:
-            ScoringProfile(mode: mode, sharpnessWeight: 0.28, exposureWeight: 0.20, faceWeight: 0.22, aestheticWeight: 0.30, diversityWeight: 0.60, targetCount: 40, burstWindow: 18, nearDuplicateHammingDistance: 8, nearDuplicateVisualDistance: 8)
+            ScoringProfile(mode: mode, sharpnessWeight: 0.28, exposureWeight: 0.20, faceWeight: 0.22, aestheticWeight: 0.30, diversityWeight: 0.60, targetCount: 40, burstWindow: 18, nearDuplicateHammingDistance: 8, nearDuplicateVisualDistance: 0.50)
         case .sports:
-            ScoringProfile(mode: mode, sharpnessWeight: 0.34, exposureWeight: 0.16, faceWeight: 0.18, aestheticWeight: 0.32, diversityWeight: 0.75, targetCount: 50, burstWindow: 8, nearDuplicateHammingDistance: 7, nearDuplicateVisualDistance: 7)
+            ScoringProfile(mode: mode, sharpnessWeight: 0.34, exposureWeight: 0.16, faceWeight: 0.18, aestheticWeight: 0.32, diversityWeight: 0.75, targetCount: 50, burstWindow: 8, nearDuplicateHammingDistance: 7, nearDuplicateVisualDistance: 0.55)
         }
     }
 
@@ -537,14 +545,16 @@ public struct ScoringProfile: Codable, Sendable, Equatable {
         switch aggressiveness {
         case .gentle:
             nearDuplicateHammingDistance = max(nearDuplicateHammingDistance - 2, 3)
-            nearDuplicateVisualDistance = max(nearDuplicateVisualDistance - 1.5, 4)
+            nearDuplicateVisualDistance = max(nearDuplicateVisualDistance - 0.06, 0.25)
+            momentVisualDistance = max(momentVisualDistance - 0.06, nearDuplicateVisualDistance)
             burstWindow *= 0.8
             maxBurstDuration *= 0.8
         case .balanced:
             break
         case .highlights:
             nearDuplicateHammingDistance += 2
-            nearDuplicateVisualDistance += 1.5
+            nearDuplicateVisualDistance = min(nearDuplicateVisualDistance + 0.05, 0.56)
+            momentVisualDistance = min(momentVisualDistance + 0.05, 0.68)
             burstWindow *= 1.25
             maxBurstDuration *= 1.25
         }
@@ -564,7 +574,7 @@ public struct ScoringProfile: Codable, Sendable, Equatable {
         case mode, aggressiveness, style, styleIntensity, sizingMode, keepPercentage
         case sharpnessWeight, exposureWeight, faceWeight, aestheticWeight, diversityWeight
         case targetCount, burstWindow, maxBurstDuration
-        case nearDuplicateHammingDistance, nearDuplicateVisualDistance
+        case nearDuplicateHammingDistance, nearDuplicateVisualDistance, momentVisualDistance, momentWindow
         case rejection
     }
 
@@ -586,6 +596,13 @@ public struct ScoringProfile: Codable, Sendable, Equatable {
         maxBurstDuration = try container.decodeIfPresent(TimeInterval.self, forKey: .maxBurstDuration) ?? burstWindow * 4
         nearDuplicateHammingDistance = try container.decode(Int.self, forKey: .nearDuplicateHammingDistance)
         nearDuplicateVisualDistance = try container.decode(Double.self, forKey: .nearDuplicateVisualDistance)
+        // Profiles written before Vision calibration stored 7…10, which is 15–20× the real scale.
+        if nearDuplicateVisualDistance > 2 {
+            nearDuplicateVisualDistance = ScoringProfile.default(for: mode).nearDuplicateVisualDistance
+        }
+        momentVisualDistance = try container.decodeIfPresent(Double.self, forKey: .momentVisualDistance)
+            ?? min(nearDuplicateVisualDistance + 0.12, 0.66)
+        momentWindow = try container.decodeIfPresent(TimeInterval.self, forKey: .momentWindow) ?? 3
         rejection = try container.decodeIfPresent(RejectionPolicy.self, forKey: .rejection) ?? .default(for: mode)
     }
 
@@ -607,6 +624,8 @@ public struct ScoringProfile: Codable, Sendable, Equatable {
         try container.encode(maxBurstDuration, forKey: .maxBurstDuration)
         try container.encode(nearDuplicateHammingDistance, forKey: .nearDuplicateHammingDistance)
         try container.encode(nearDuplicateVisualDistance, forKey: .nearDuplicateVisualDistance)
+        try container.encode(momentVisualDistance, forKey: .momentVisualDistance)
+        try container.encode(momentWindow, forKey: .momentWindow)
         try container.encode(rejection, forKey: .rejection)
     }
 }
@@ -1218,21 +1237,21 @@ public enum PhotoGroupingEngine {
 
                 let left = photos[unit.representativeIndex]
                 let right = photos[clusters[clusterIndex].representativeIndex]
-                let hamming = PhotoSimilarity.hammingDistance(
-                    left.signals.fingerprint.perceptualHash,
-                    right.signals.fingerprint.perceptualHash
-                )
-                let visionDistance = visualDistance(left.signals, right.signals)
-                let hashClose = hamming <= profile.nearDuplicateHammingDistance
                 let close: Bool
-                if let visionDistance {
-                    // A low-detail perceptual hash is useful for candidate
-                    // generation but is not enough evidence on its own. When
-                    // both signals exist, require corroboration to avoid
-                    // collapsing distinct color-block or sky images.
-                    close = hashClose && visionDistance <= profile.nearDuplicateVisualDistance
+                if let visionDistance = visualDistance(left.signals, right.signals) {
+                    // Vision is the evidence. Measured on real shoots: the same shot
+                    // repeated is ≤ ~0.5; unrelated photos start at ~0.58.
+                    let threshold = abs(interval) <= profile.momentWindow
+                        ? profile.momentVisualDistance
+                        : profile.nearDuplicateVisualDistance
+                    close = visionDistance <= threshold
                 } else {
-                    close = hashClose
+                    // No feature print (older cache entries, fixtures): fall back to the hash.
+                    let hamming = PhotoSimilarity.hammingDistance(
+                        left.signals.fingerprint.perceptualHash,
+                        right.signals.fingerprint.perceptualHash
+                    )
+                    close = hamming <= profile.nearDuplicateHammingDistance
                 }
                 if close {
                     matchedCluster = clusterIndex
