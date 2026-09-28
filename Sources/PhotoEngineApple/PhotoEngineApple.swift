@@ -329,10 +329,11 @@ public struct AppleAnalysisEngine: Sendable {
             contentHash = try SHA256Hasher.hash(url: asset.url)
         }
         let pixels = PixelStatistics(image: image)
+        let focusEnergy = FocusMeasure.energy(image: image)
         let vision = try visionSignals(image: image)
         let subject = SubjectFocusAssessment(image: image, faces: vision.faces)
         var qualityFlags = subject.flags
-        if vision.faces.count > 0 && vision.faceQuality < 0.35 {
+        if vision.subjectFaceCount > 0 && vision.faceQuality < 0.35 {
             qualityFlags.append("face quality low")
         }
         let eyeValues = vision.faces.compactMap(\.eyeOpenness)
@@ -371,11 +372,12 @@ public struct AppleAnalysisEngine: Sendable {
             aestheticUtility: vision.aestheticUtility,
             featurePrint: vision.featurePrint,
             faces: vision.faces,
-            qualityFlags: qualityFlags
+            qualityFlags: qualityFlags,
+            focusEnergy: focusEnergy
         )
     }
 
-    private func visionSignals(image: CGImage) throws -> (featurePrint: Data?, faces: [FaceSignal], faceQuality: Double, aestheticScore: Double?, aestheticUtility: Bool?) {
+    private func visionSignals(image: CGImage) throws -> (featurePrint: Data?, faces: [FaceSignal], faceQuality: Double, aestheticScore: Double?, aestheticUtility: Bool?, subjectFaceCount: Int) {
         let featureRequest = VNGenerateImageFeaturePrintRequest()
         featureRequest.revision = VNGenerateImageFeaturePrintRequestRevision2
         let faceRequest = VNDetectFaceCaptureQualityRequest()
@@ -413,10 +415,21 @@ public struct AppleAnalysisEngine: Sendable {
                 eyeOpenness: landmark.flatMap(Self.eyeOpenness(for:))
             )
         }
-        let measuredQualities = faceSignals.compactMap(\.captureQuality)
+        let qualifying = faceSignals.filter { $0.boundingBox.width * $0.boundingBox.height >= 0.004 }
+        let subjectFaces: [FaceSignal]
+        if !qualifying.isEmpty {
+            subjectFaces = qualifying
+        } else if let largest = faceSignals.max(by: {
+            ($0.boundingBox.width * $0.boundingBox.height) < ($1.boundingBox.width * $1.boundingBox.height)
+        }) {
+            subjectFaces = [largest]
+        } else {
+            subjectFaces = []
+        }
+        let measuredQualities = subjectFaces.compactMap(\.captureQuality)
         let faceQuality: Double
         if measuredQualities.isEmpty {
-            faceQuality = qualityObservations.isEmpty ? 0.5 : 0.35
+            faceQuality = subjectFaces.isEmpty ? 0.5 : 0.35
         } else {
             // For group shots, an average can hide one very poor important
             // face. Blend a lower quantile with the mean so a single weak
@@ -432,7 +445,7 @@ public struct AppleAnalysisEngine: Sendable {
             min(max((Double($0.overallScore) + 1.0) / 2.0, 0), 1)
         }
         let aestheticUtility = aestheticsRequest?.results?.first?.isUtility
-        return (featurePrint, faceSignals, min(max(faceQuality, 0), 1), aestheticScore, aestheticUtility)
+        return (featurePrint, faceSignals, min(max(faceQuality, 0), 1), aestheticScore, aestheticUtility, qualifying.count)
     }
 
     private static func eyeOpenness(for observation: VNFaceObservation) -> Double? {
@@ -533,6 +546,10 @@ public final class ApplePhotoRenderer: @unchecked Sendable {
 
     public init() {
         context = CIContext(options: [CIContextOption.cacheIntermediates: false])
+    }
+
+    public func releaseCaches() {
+        context.clearCaches()
     }
 
     public func render(
@@ -1243,20 +1260,24 @@ public final class PhotoPipelineRunner: @unchecked Sendable {
                     guard !accumulator.hasError, !shouldCancel() else { return }
                     let index = pendingIndices[position]
                     let item = imported[index]
-                    do {
-                        let signals = try analyzer.analyze(asset: item.asset, thumbnailData: item.thumbnail)
-                        accumulator.record(signals, at: index) { completed in
-                            progress(PipelineProgress(
-                                stage: .analyzing,
-                                completed: completed,
-                                total: imported.count,
-                                message: item.asset.relativePath
-                            ))
+                    var stopWorker = false
+                    autoreleasepool {
+                        do {
+                            let signals = try analyzer.analyze(asset: item.asset, thumbnailData: item.thumbnail)
+                            accumulator.record(signals, at: index) { completed in
+                                progress(PipelineProgress(
+                                    stage: .analyzing,
+                                    completed: completed,
+                                    total: imported.count,
+                                    message: item.asset.relativePath
+                                ))
+                            }
+                        } catch {
+                            accumulator.record(error: error)
+                            stopWorker = true
                         }
-                    } catch {
-                        accumulator.record(error: error)
-                        return
                     }
+                    if stopWorker { return }
                 }
             }
             for representative in analysisRepresentatives {
@@ -1282,7 +1303,7 @@ public final class PhotoPipelineRunner: @unchecked Sendable {
         if let error = accumulator.firstError { throw error }
 
         let signalsByIndex = try accumulator.completeResults()
-        let analyzed = zip(imported, signalsByIndex).map { item, signals in
+        let rawAnalyzed = zip(imported, signalsByIndex).map { item, signals in
             AnalyzedPhoto(asset: item.asset, signals: signals)
         }
         for index in uncachedIndices {
@@ -1292,7 +1313,7 @@ public final class PhotoPipelineRunner: @unchecked Sendable {
             do {
                 for (asset, signals) in zip(imported.map(\.asset), signalsByIndex) {
                     try catalog.upsert(asset: asset, sessionID: sessionID, contentHash: signals.fingerprint.contentHash)
-                    try catalog.upsert(analysis: signals, for: asset.id, analyzerVersion: "apple-analysis-0.3.0")
+                    try catalog.upsert(analysis: signals, for: asset.id, analyzerVersion: "apple-analysis-0.5.0")
                 }
             } catch {
                 catalogHealthy = false
@@ -1301,6 +1322,8 @@ public final class PhotoPipelineRunner: @unchecked Sendable {
         }
         cache.retainAssets(imported.map(\.asset))
         try cache.save()
+
+        let analyzed = PhotoFocusRanking.apply(to: rawAnalyzed)
 
         progress(PipelineProgress(stage: .grouping, completed: 0, total: 1, message: "Grouping duplicates and bursts"))
         let visualDistance = AppleVisualDistance.cachedProvider()
@@ -1352,27 +1375,32 @@ public final class PhotoPipelineRunner: @unchecked Sendable {
         var exports: [ExportedPhoto] = []
         let exportStartedAt = Date()
         for (index, photoID) in shortlist.selectedIDs.enumerated() {
-            try Self.checkCancellation(shouldCancel)
-            guard let analyzedPhoto = analyzed.first(where: { $0.id == photoID }) else { continue }
-            let fileName = String(format: "%03d-%@.jpg", index + 1, safeFileStem(analyzedPhoto.asset.url.deletingPathExtension().lastPathComponent))
-            let outputURL = exportDirectory.appendingPathComponent(fileName)
-            let exported = try renderer.render(
-                photo: analyzedPhoto,
-                outputURL: outputURL,
-                style: profile.style,
-                styleIntensity: profile.styleIntensity,
-                exportSpecification: exportSpecification
-            )
-            exports.append(exported)
-            if let catalog, catalogHealthy {
-                do {
-                    try catalog.recordArtifact(sessionID: sessionID, photoID: photoID, kind: "jpeg-export", url: outputURL, recipe: exported.recipe)
-                } catch {
-                    catalogHealthy = false
-                    warnings.append(ImportIssue(path: PhotoCatalog.defaultURL().path, message: error.localizedDescription))
+            try autoreleasepool {
+                try Self.checkCancellation(shouldCancel)
+                guard let analyzedPhoto = analyzed.first(where: { $0.id == photoID }) else { return }
+                let fileName = String(format: "%03d-%@.jpg", index + 1, safeFileStem(analyzedPhoto.asset.url.deletingPathExtension().lastPathComponent))
+                let outputURL = exportDirectory.appendingPathComponent(fileName)
+                let exported = try renderer.render(
+                    photo: analyzedPhoto,
+                    outputURL: outputURL,
+                    style: profile.style,
+                    styleIntensity: profile.styleIntensity,
+                    exportSpecification: exportSpecification
+                )
+                exports.append(exported)
+                if let catalog, catalogHealthy {
+                    do {
+                        try catalog.recordArtifact(sessionID: sessionID, photoID: photoID, kind: "jpeg-export", url: outputURL, recipe: exported.recipe)
+                    } catch {
+                        catalogHealthy = false
+                        warnings.append(ImportIssue(path: PhotoCatalog.defaultURL().path, message: error.localizedDescription))
+                    }
                 }
+                if (index + 1) % 20 == 0 {
+                    renderer.releaseCaches()
+                }
+                progress(PipelineProgress(stage: .exporting, completed: index + 1, total: shortlist.selectedIDs.count, message: fileName))
             }
-            progress(PipelineProgress(stage: .exporting, completed: index + 1, total: shortlist.selectedIDs.count, message: fileName))
         }
         exportSeconds = Date().timeIntervalSince(exportStartedAt)
 
@@ -1400,7 +1428,7 @@ public final class PhotoPipelineRunner: @unchecked Sendable {
             assets: imported.map(\.asset),
             // Feature prints remain in the compact analysis cache. They are
             // implementation details and would dominate the portable manifest.
-            analyzed: analyzed.map { $0.removingFeaturePrint() },
+            analyzed: rawAnalyzed.map { $0.removingFeaturePrint() },
             grouping: grouping,
             shortlist: shortlist,
             exports: exports,
@@ -1597,7 +1625,9 @@ private struct SubjectFocusAssessment {
         let height = CGFloat(image.height)
         let measurements: [(score: Double, area: Double)] = faces.compactMap { face in
             let box = face.boundingBox
-            guard box.width > 0.01, box.height > 0.01 else { return nil }
+            // Background faces in a crowd are a few pixels wide; measuring them just
+            // measures upscaling blur. Require a face big enough to judge.
+            guard box.width * Double(width) >= 64, box.height * Double(height) >= 64 else { return nil }
             let margin = 0.18
             let x = max(0, box.x - box.width * margin) * width
             let y = max(0, 1 - box.y - box.height * (1 + margin)) * height
@@ -1611,7 +1641,7 @@ private struct SubjectFocusAssessment {
         guard !measurements.isEmpty else {
             sharpness = nil
             confidence = 0.15
-            flags = ["subject focus unavailable"]
+            flags = []
             return
         }
 
@@ -1680,7 +1710,7 @@ private struct PixelStatistics {
         self.perceptualHash = Self.dHash(image: image)
     }
 
-    private static func grayscalePixels(image: CGImage, width: Int, height: Int) -> [UInt8] {
+    fileprivate static func grayscalePixels(image: CGImage, width: Int, height: Int) -> [UInt8] {
         var pixels = [UInt8](repeating: 0, count: width * height)
         let colorSpace = CGColorSpaceCreateDeviceGray()
         pixels.withUnsafeMutableBytes { rawBuffer in
@@ -1712,6 +1742,45 @@ private struct PixelStatistics {
             }
         }
         return hash
+    }
+}
+
+/// Fine detail in the sharpest regions of the frame. Unlike the 128-px global
+/// measure, this survives busy backgrounds and small in-focus subjects.
+/// Raw units (Laplacian variance on 0…255 gray); compare only within a shoot.
+fileprivate enum FocusMeasure {
+    static func energy(image: CGImage) -> Double? {
+        let longEdge = 768.0
+        let scale = min(1, longEdge / Double(max(image.width, image.height)))
+        let width = max(64, Int(Double(image.width) * scale))
+        let height = max(64, Int(Double(image.height) * scale))
+        let pixels = PixelStatistics.grayscalePixels(image: image, width: width, height: height)
+        guard pixels.count == width * height else { return nil }
+        let tiles = 4
+        var energies: [Double] = []
+        for ty in 0..<tiles {
+            for tx in 0..<tiles {
+                let x0 = max(1, tx * width / tiles), x1 = min(width - 1, (tx + 1) * width / tiles)
+                let y0 = max(1, ty * height / tiles), y1 = min(height - 1, (ty + 1) * height / tiles)
+                var sum = 0.0, sumSquares = 0.0, count = 0.0
+                for y in y0..<y1 {
+                    for x in x0..<x1 {
+                        let i = y * width + x
+                        let response = 4 * Double(pixels[i]) - Double(pixels[i - 1]) - Double(pixels[i + 1])
+                            - Double(pixels[i - width]) - Double(pixels[i + width])
+                        sum += response
+                        sumSquares += response * response
+                        count += 1
+                    }
+                }
+                guard count > 0 else { continue }
+                let mean = sum / count
+                energies.append(sumSquares / count - mean * mean)
+            }
+        }
+        let sorted = energies.sorted(by: >)
+        // Second-sharpest tile: robust to one tile of noise or specular highlights.
+        return sorted.count >= 2 ? sorted[1] : sorted.first
     }
 }
 

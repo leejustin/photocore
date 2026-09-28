@@ -40,6 +40,8 @@ struct PhotoEngineChecks {
             ("legacy visual thresholds migrate", legacyVisualThresholdsMigrate),
             ("same-moment candidates become alternates", sameMomentCandidatesBecomeAlternates),
             ("review queue stays small", reviewQueueStaysSmall),
+            ("focus ranking spreads sharpness", focusRankingSpreadsSharpness),
+            ("focus ranking needs enough samples", focusRankingNeedsSamples),
         ]
 
         for (name, check) in checks {
@@ -662,6 +664,25 @@ struct PhotoEngineChecks {
         let shortlist = PhotoSelectionEngine.select(scored, grouping: PhotoGrouping(groups: []), profile: profile, visualDistance: { _, _ in 1.0 })
         let review = shortlist.decisions.filter { $0.bucket == .review }.count
         try expect(review <= 3, "review queue grew to \(review) for 20 selections")
+    }
+
+    private static func focusRankingSpreadsSharpness() throws {
+        let photos = (0..<10).map { index -> AnalyzedPhoto in
+            let photo = analyzed(index: index, hash: "f\(index)", perceptualHash: 0, date: nil, sharpness: 1)
+            var signals = photo.signals
+            signals.focusEnergy = Double(index * 100)
+            return AnalyzedPhoto(asset: photo.asset, signals: signals)
+        }
+        let ranked = PhotoFocusRanking.apply(to: photos)
+        try expect(abs(ranked[0].signals.sharpness - 0.15) < 0.001, "least focused photo should rank 0.15")
+        try expect(abs(ranked[9].signals.sharpness - 1.0) < 0.001, "most focused photo should rank 1.0")
+        try expect(ranked[4].signals.sharpness < ranked[5].signals.sharpness, "ranking is not monotonic")
+    }
+
+    private static func focusRankingNeedsSamples() throws {
+        let photos = (0..<3).map { analyzed(index: $0, hash: "g\($0)", perceptualHash: 0, date: nil, sharpness: 0.9) }
+        let ranked = PhotoFocusRanking.apply(to: photos)
+        try expect(ranked.map(\.signals.sharpness) == photos.map(\.signals.sharpness), "small sets must be left alone")
     }
 
     private static func pruningIgnoresForeignFolders() throws {
