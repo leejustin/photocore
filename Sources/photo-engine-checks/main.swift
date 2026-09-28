@@ -50,6 +50,9 @@ struct PhotoEngineChecks {
             ("confirmation builder finds groups", confirmationBuilderFindsGroups),
             ("album membership respects rejects", albumMembershipRespectsRejects),
             ("delivery never overwrites", deliveryNeverOverwrites),
+            ("catalog lists sessions with manifests", catalogListsSessionsWithManifests),
+            ("custom recipes persist", customRecipesPersist),
+            ("interrupted jobs are marked failed", interruptedJobsAreMarkedFailed),
         ]
 
         for (name, check) in checks {
@@ -785,6 +788,67 @@ struct PhotoEngineChecks {
         try FileManager.default.createDirectory(at: first, withIntermediateDirectories: true)
         let second = DeliveryExecutor.newFolder(parent: parent, shootName: "Pycon")
         try expect(second.lastPathComponent == first.lastPathComponent + " 2", "second folder was \(second.lastPathComponent)")
+    }
+
+    private static func catalogListsSessionsWithManifests() throws {
+        let fixture = try FixtureDirectory()
+        defer { fixture.remove() }
+        let catalog = try PhotoCatalog(url: fixture.root.appendingPathComponent("catalog.sqlite"))
+        let older = SessionID()
+        let newer = SessionID()
+        try catalog.beginSession(id: older, sourceFolder: fixture.source, settings: .default(for: .everyday))
+        try catalog.finishSession(older)
+        try catalog.beginSession(id: newer, sourceFolder: fixture.source, settings: .default(for: .trip))
+        let manifest = fixture.output.appendingPathComponent("manifest.json")
+        try catalog.recordRunLocation(sessionID: newer, manifestURL: manifest, runDirectory: fixture.output)
+        let listed = try catalog.listSessions(limit: 10)
+        try expect(listed.map(\.id) == [newer, older], "sessions were not newest first")
+        try expect(listed[0].manifestPath == manifest.path, "manifest path was not stored")
+        try expect(listed[0].runDirectory == fixture.output.path, "run directory was not stored")
+        let reopened = try PhotoCatalog(url: fixture.root.appendingPathComponent("catalog.sqlite"))
+        let again = try PhotoEngineChecks.require(reopened.session(id: newer), "session missing after reopen")
+        try expect(again.manifestPath == manifest.path, "manifest path did not survive reopen")
+    }
+
+    private static func customRecipesPersist() throws {
+        let fixture = try FixtureDirectory()
+        defer { fixture.remove() }
+        let url = fixture.root.appendingPathComponent("catalog.sqlite")
+        let session = SessionID()
+        let photo = PhotoID()
+        var recipe = EditRecipe(style: .natural, styleIntensity: 0.4, exposure: 0.2)
+        recipe.temperature = 0.15
+        do {
+            let catalog = try PhotoCatalog(url: url)
+            try catalog.beginSession(id: session, sourceFolder: fixture.source, settings: .default(for: .everyday))
+            try catalog.saveCustomRecipe(recipe, photoID: photo, sessionID: session)
+        }
+        let reopened = try PhotoCatalog(url: url)
+        let stored = try reopened.customRecipes(sessionID: session)
+        try expect(stored[photo]?.temperature == 0.15 && stored[photo]?.exposure == 0.2, "custom recipe did not round-trip")
+        try reopened.deleteCustomRecipe(photoID: photo, sessionID: session)
+        let remaining = try reopened.customRecipes(sessionID: session)
+        try expect(remaining.isEmpty, "deleted recipe remained")
+    }
+
+    private static func interruptedJobsAreMarkedFailed() throws {
+        let fixture = try FixtureDirectory()
+        defer { fixture.remove() }
+        let url = fixture.root.appendingPathComponent("catalog.sqlite")
+        let running = JobRecord(id: UUID().uuidString, kind: "curate", sessionID: nil, state: "running", request: Data("{}".utf8), createdAt: Date())
+        let done = JobRecord(id: UUID().uuidString, kind: "deliver", sessionID: nil, state: "succeeded", request: Data("{}".utf8), createdAt: Date().addingTimeInterval(-10))
+        do {
+            let catalog = try PhotoCatalog(url: url)
+            try catalog.insertJob(running)
+            try catalog.insertJob(done)
+        }
+        let reopened = try PhotoCatalog(url: url)
+        let marked = try reopened.markInterruptedJobs()
+        try expect(marked == 1, "expected one interrupted job, got \(marked)")
+        let failed = try PhotoEngineChecks.require(reopened.job(id: running.id), "running job disappeared")
+        try expect(failed.state == "failed" && failed.errorCode == "interrupted", "running job was not marked interrupted")
+        let kept = try PhotoEngineChecks.require(reopened.job(id: done.id), "finished job disappeared")
+        try expect(kept.state == "succeeded", "a finished job was rewritten")
     }
 
     private static func pruningIgnoresForeignFolders() throws {

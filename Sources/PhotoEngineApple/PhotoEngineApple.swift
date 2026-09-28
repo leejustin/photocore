@@ -1122,6 +1122,25 @@ public final class PhotoPipelineRunner: @unchecked Sendable {
         try catalog.saveReviewMark(mark)
     }
 
+    public func saveCustomRecipe(_ recipe: EditRecipe, photoID: PhotoID, sessionID: SessionID) throws {
+        guard let catalog else {
+            throw PhotoEngineError.invalidArgument("The local catalog is unavailable; this edit could not be saved.")
+        }
+        try catalog.saveCustomRecipe(recipe, photoID: photoID, sessionID: sessionID)
+    }
+
+    public func deleteCustomRecipe(photoID: PhotoID, sessionID: SessionID) throws {
+        guard let catalog else {
+            throw PhotoEngineError.invalidArgument("The local catalog is unavailable; this edit could not be removed.")
+        }
+        try catalog.deleteCustomRecipe(photoID: photoID, sessionID: sessionID)
+    }
+
+    public func customRecipes(sessionID: SessionID) throws -> [PhotoID: EditRecipe] {
+        guard let catalog else { return [:] }
+        return try catalog.customRecipes(sessionID: sessionID)
+    }
+
     public func reviewMarks(for photoIDs: [PhotoID]) throws -> [PhotoReviewMark] {
         guard let catalog else { return [] }
         return try catalog.reviewMarks(for: photoIDs)
@@ -1492,6 +1511,14 @@ public final class PhotoPipelineRunner: @unchecked Sendable {
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
         encoder.dateEncodingStrategy = .iso8601
         try encoder.encode(manifest).write(to: manifestURL, options: .atomic)
+        if let catalog, catalogHealthy {
+            do {
+                try catalog.recordRunLocation(sessionID: sessionID, manifestURL: manifestURL, runDirectory: runDirectory)
+            } catch {
+                catalogHealthy = false
+                warnings.append(ImportIssue(path: PhotoCatalog.defaultURL().path, message: error.localizedDescription))
+            }
+        }
         sessionFinished = true
         progress(PipelineProgress(stage: .complete, completed: 1, total: 1, message: "Complete"))
         completedRun = true
