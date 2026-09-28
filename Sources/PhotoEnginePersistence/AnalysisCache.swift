@@ -34,10 +34,10 @@ public final class AnalysisCache: @unchecked Sendable {
             .appendingPathComponent("analysis-v2.plist")
         self.entries = [:]
         self.analyzerVersion = [
-            "apple-analysis-0.4.0",
+            "apple-analysis-0.5.0",
             "feature-print-revision-2",
             "face-quality-revision-3",
-            "subject-crop-v1",
+            "subject-crop-v2-min64",
             "thumbnail-1024-vision-on-thumbnail",
             ProcessInfo.processInfo.operatingSystemVersionString
         ].joined(separator: "|")

@@ -166,6 +166,8 @@ public struct AnalysisSignals: Codable, Sendable, Equatable {
     public var featurePrint: Data?
     public var faces: [FaceSignal]
     public var qualityFlags: [String]
+    /// Laplacian energy of the sharpest regions. Raw units; compare only within a shoot.
+    public var focusEnergy: Double?
 
     public init(
         fingerprint: PhotoFingerprint,
@@ -180,7 +182,8 @@ public struct AnalysisSignals: Codable, Sendable, Equatable {
         aestheticUtility: Bool?,
         featurePrint: Data?,
         faces: [FaceSignal],
-        qualityFlags: [String] = []
+        qualityFlags: [String] = [],
+        focusEnergy: Double? = nil
     ) {
         self.fingerprint = fingerprint
         self.brightness = brightness
@@ -195,6 +198,7 @@ public struct AnalysisSignals: Codable, Sendable, Equatable {
         self.featurePrint = featurePrint
         self.faces = faces
         self.qualityFlags = qualityFlags
+        self.focusEnergy = focusEnergy
     }
 
     public func removingFeaturePrint() -> AnalysisSignals {
@@ -1095,6 +1099,25 @@ public enum PhotoEngineError: LocalizedError, Sendable {
         case .noPhotos(let url): "No supported photos found in \(url.path)"
         case .exportFailed(let url, let message): "Could not export \(url.lastPathComponent): \(message)"
         case .unsafeOutputDirectory(let source, let output): "Output folder \(output.path) must not be the source folder or live inside it (\(source.path))."
+        }
+    }
+}
+
+public enum PhotoFocusRanking {
+    /// Rewrites `sharpness` as the photo's focus percentile within this shoot (0.15…1),
+    /// using `focusEnergy`. Absolute Laplacian values vary by camera, lens and scene;
+    /// the ranking is what matters for picking the best frame of a moment.
+    /// Leaves photos untouched when fewer than 8 have a focus measurement.
+    public static func apply(to photos: [AnalyzedPhoto]) -> [AnalyzedPhoto] {
+        let energies = photos.compactMap(\.signals.focusEnergy).sorted()
+        guard energies.count >= 8 else { return photos }
+        let denominator = Double(energies.count - 1)
+        return photos.map { photo in
+            guard let energy = photo.signals.focusEnergy else { return photo }
+            let rank = Double(energies.firstIndex { $0 >= energy } ?? energies.count - 1)
+            var signals = photo.signals
+            signals.sharpness = 0.15 + 0.85 * (rank / denominator)
+            return AnalyzedPhoto(asset: photo.asset, signals: signals)
         }
     }
 }
