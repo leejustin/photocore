@@ -1506,17 +1506,44 @@ public enum LightroomSidecar {
         """
     }
 
-    public static func write(_ mark: PhotoReviewMark, named baseName: String, to directory: URL) throws -> URL {
+    public enum WriteOutcome: Sendable, Equatable {
+        case written(URL)
+        case skippedExistingSidecar(URL)
+    }
+
+    public static func sidecarURL(named baseName: String, in directory: URL) throws -> URL {
         let sanitized = baseName
             .replacingOccurrences(of: "/", with: "-")
             .replacingOccurrences(of: ":", with: "-")
         guard !sanitized.isEmpty, sanitized != ".", sanitized != ".." else {
             throw PhotoEngineError.invalidArgument("Sidecar name is empty.")
         }
+        return directory.appendingPathComponent(sanitized).appendingPathExtension("xmp")
+    }
+
+    /// True only for sidecars Photocore wrote. Anything else (Lightroom, Camera Raw,
+    /// Capture One) belongs to the photographer.
+    public static func isPhotocoreSidecar(at url: URL) -> Bool {
+        guard let data = try? Data(contentsOf: url),
+              let text = String(data: data, encoding: .utf8) else { return false }
+        return text.contains("x:xmptk=\"Photocore") && text.contains("urn:photocore:ns:1.0")
+    }
+
+    public static func write(_ mark: PhotoReviewMark, named baseName: String, to directory: URL) throws -> URL {
+        let url = try sidecarURL(named: baseName, in: directory)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-        let url = directory.appendingPathComponent(sanitized).appendingPathExtension("xmp")
         try Data(document(for: mark).utf8).write(to: url, options: .atomic)
         return url
+    }
+
+    /// Writes a sidecar unless a sidecar Photocore did not write is already there.
+    /// Lightroom and Camera Raw keep develop settings in that file; replacing it destroys edits.
+    public static func writePreservingExisting(_ mark: PhotoReviewMark, named baseName: String, to directory: URL) throws -> WriteOutcome {
+        let url = try sidecarURL(named: baseName, in: directory)
+        if FileManager.default.fileExists(atPath: url.path), !isPhotocoreSidecar(at: url) {
+            return .skippedExistingSidecar(url)
+        }
+        return .written(try write(mark, named: baseName, to: directory))
     }
 
     public static func decisionsData(_ entries: [PortableCullEntry]) throws -> Data {

@@ -46,13 +46,15 @@ struct AdjustWorkspace: View {
                         .font(.headline)
                 }
                 Spacer()
-                Text("Edge-case manual pass. Album Look still covers the shoot.")
+                Text("Your edit replaces the album look for this photo when you deliver.")
                     .font(.caption)
                     .foregroundStyle(StudioChrome.tertiary)
-                Button(model.showingOriginal ? "Edited" : "Original") {
+                Button(model.showingOriginal ? "Show edit" : "Show original") {
                     model.showingOriginal.toggle()
                 }
                 .keyboardShortcut("\\", modifiers: [])
+                Button("Done") { model.workspace = model.workspaceBeforeAdjust }
+                    .keyboardShortcut(.cancelAction)
             }
             .padding(.horizontal, 18)
             .padding(.vertical, 12)
@@ -88,7 +90,7 @@ struct AdjustWorkspace: View {
                             .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
                             .overlay {
                                 RoundedRectangle(cornerRadius: 6, style: .continuous)
-                                    .strokeBorder(model.focusedID == row.id ? StudioChrome.pick : Color.clear, lineWidth: 2)
+                                    .strokeBorder(model.focusedID == row.id ? StudioChrome.focus : Color.clear, lineWidth: 2)
                             }
                     }
                     .buttonStyle(.plain)
@@ -103,21 +105,18 @@ struct AdjustWorkspace: View {
     private var controls: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 16) {
-                Text("BASIC")
-                    .font(.caption2.weight(.semibold))
-                    .tracking(0.8)
-                    .foregroundStyle(StudioChrome.tertiary)
+                StudioSectionHeader(title: "Basic")
 
-                slider("Exposure", value: binding(\.exposure), range: -1.2...1.2)
-                slider("Contrast", value: binding(\.contrast), range: -0.8...0.8)
-                slider("Highlights", value: binding(\.highlights), range: -1...1)
-                slider("Shadows", value: binding(\.shadows), range: -1...1)
-                slider("Temp", value: binding(\.temperature), range: -1...1)
-                slider("Tint", value: binding(\.tint), range: -1...1)
-                slider("Saturation", value: binding(\.saturation), range: -1...1)
-                slider("Clarity", value: binding(\.clarity), range: -0.8...0.8)
-                slider("Sharpen", value: binding(\.sharpening), range: 0...0.8)
-                slider("Straighten", value: binding(\.straighten), range: -15...15)
+                slider("Exposure", \.exposure, range: -1.2...1.2)
+                slider("Contrast", \.contrast, range: -0.8...0.8)
+                slider("Highlights", \.highlights, range: -1...1)
+                slider("Shadows", \.shadows, range: -1...1)
+                slider("Temp", \.temperature, range: -1...1)
+                slider("Tint", \.tint, range: -1...1)
+                slider("Saturation", \.saturation, range: -1...1)
+                slider("Clarity", \.clarity, range: -0.8...0.8)
+                slider("Sharpen", \.sharpening, range: 0...0.8)
+                slider("Straighten", \.straighten, range: -15...15, degrees: true)
 
                 Divider().overlay(StudioChrome.hairline)
 
@@ -150,17 +149,25 @@ struct AdjustWorkspace: View {
         )
     }
 
-    private func slider(_ title: String, value: Binding<Double>, range: ClosedRange<Double>) -> some View {
-        VStack(alignment: .leading, spacing: 4) {
+    private func slider(_ title: String, _ keyPath: WritableKeyPath<EditRecipe, Double>, range: ClosedRange<Double>, degrees: Bool = false) -> some View {
+        let value = binding(keyPath)
+        let scale = max(abs(range.lowerBound), abs(range.upperBound))
+        let label = degrees
+            ? String(format: "%+.1f°", value.wrappedValue)
+            : String(format: "%+d", Int((value.wrappedValue / scale * 100).rounded()))
+        return VStack(alignment: .leading, spacing: 4) {
             HStack {
                 Text(title)
                     .font(.caption)
                     .foregroundStyle(StudioChrome.secondary)
                 Spacer()
-                Text(String(format: "%.2f", value.wrappedValue))
+                Text(label)
                     .font(.caption.monospacedDigit())
                     .foregroundStyle(StudioChrome.tertiary)
             }
+            .contentShape(Rectangle())
+            .onTapGesture(count: 2) { model.resetDevelopValue(keyPath) }
+            .help("Double-click to reset")
             Slider(value: value, in: range)
         }
     }
@@ -184,6 +191,9 @@ struct AdjustWorkspace: View {
         }
         let recipe = model.developRecipe
         Task.detached(priority: .userInitiated) {
+            try? await Task.sleep(for: .milliseconds(70))
+            let isCurrent = await MainActor.run { token == previewToken }
+            guard isCurrent else { return }
             let data = try? ApplePhotoRenderer().previewJPEG(photo: photo, recipe: recipe, maxLongEdge: 1600)
             let image = data.flatMap { NSImage(data: $0) }
             await MainActor.run {

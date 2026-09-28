@@ -7,12 +7,14 @@ struct ConfirmationMoment: Identifiable, Equatable {
     let candidateIDs: [PhotoID]
     let reason: String
     let margin: Double
+    var hiddenRunnerUpIDs: [PhotoID] = []
 
     var isChoice: Bool { candidateIDs.count > 1 }
 }
 
 struct ConfirmWorkspace: View {
     @ObservedObject var model: PhotoEngineViewModel
+    @State private var showingRunnersUp = false
 
     var body: some View {
         Group {
@@ -25,6 +27,7 @@ struct ConfirmWorkspace: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(StudioChrome.canvas)
         .onChange(of: model.currentConfirmation?.id) { _, _ in
+            showingRunnersUp = false
             if let id = model.currentConfirmation?.suggestedID {
                 model.focusedID = id
             }
@@ -41,15 +44,10 @@ struct ConfirmWorkspace: View {
                         .font(.caption.weight(.semibold))
                         .foregroundStyle(StudioChrome.pick)
                     Text(moment.isChoice ? "Which frame should we keep?" : "Keep this one?")
-                        .font(.system(size: 28, weight: .semibold, design: .serif))
-                    Text(moment.reason)
+                        .font(StudioType.display)
+                    Text(model.suggestionExplanation(for: moment))
                         .font(.body)
                         .foregroundStyle(StudioChrome.secondary)
-                    if moment.isChoice {
-                        Text(String(format: "Scores are %.0f%% apart", moment.margin * 100))
-                            .font(.caption)
-                            .foregroundStyle(StudioChrome.tertiary)
-                    }
                 }
                 Spacer()
                 HStack(spacing: 8) {
@@ -64,16 +62,39 @@ struct ConfirmWorkspace: View {
             if moment.isChoice {
                 HStack(alignment: .top, spacing: 12) {
                     ForEach(moment.candidateIDs, id: \.self) { id in
-                        if let row = model.rows.first(where: { $0.id == id }) {
+                        if let row = model.row(for: id) {
                             candidate(row, moment: moment)
                         }
                     }
                 }
                 .frame(maxHeight: .infinity)
-            } else if let row = model.rows.first(where: { $0.id == moment.suggestedID }) {
+            } else if let row = model.row(for: moment.suggestedID) {
                 confirmPreview(for: row)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
                     .background(Color.black, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+            }
+
+            if showingRunnersUp {
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 8) {
+                        ForEach(moment.hiddenRunnerUpIDs, id: \.self) { id in
+                            if let row = model.row(for: id) {
+                                Button { model.focusedID = id } label: {
+                                    CachedThumbnail(url: row.sourceURL, maxPixelSize: 320)
+                                        .frame(width: 132, height: 88)
+                                        .background(Color.black)
+                                        .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
+                                        .overlay {
+                                            RoundedRectangle(cornerRadius: 6, style: .continuous)
+                                                .strokeBorder(model.focusedID == id ? Color.white : Color.clear, lineWidth: 2)
+                                        }
+                                }
+                                .buttonStyle(.plain)
+                            }
+                        }
+                    }
+                }
+                .frame(height: 92)
             }
 
             HStack(spacing: 10) {
@@ -83,20 +104,19 @@ struct ConfirmWorkspace: View {
                 .buttonStyle(.borderedProminent)
                 .tint(StudioChrome.pick)
                 .keyboardShortcut(.return, modifiers: [])
-                if moment.isChoice, let focused = model.focusedID, focused != moment.suggestedID, moment.candidateIDs.contains(focused) {
+                if let focused = model.focusedID, focused != moment.suggestedID, moment.candidateIDs.contains(focused) || moment.hiddenRunnerUpIDs.contains(focused) {
                     Button("Use this frame") { model.useConfirmationCandidate(focused) }
                 }
                 if !moment.isChoice {
                     Button("Drop it") { model.dropSuggestion() }
                 }
-                if moment.isChoice {
-                    Button("Show runners-up") {
-                        model.filter = .closeHidden
-                        model.workspace = .album
+                if !moment.hiddenRunnerUpIDs.isEmpty {
+                    Button(showingRunnersUp ? "Hide other frames" : "Show \(moment.hiddenRunnerUpIDs.count) other frames") {
+                        showingRunnersUp.toggle()
                     }
                 }
                 Spacer()
-                Text("Return keeps the suggestion. E checks eyes. Arrows move between frames.")
+                Text("Return keeps the suggestion · P keeps the selected frame · X drops · Esc skips · E checks eyes")
                     .font(.caption)
                     .foregroundStyle(StudioChrome.tertiary)
             }
@@ -109,7 +129,7 @@ struct ConfirmWorkspace: View {
         return HStack(spacing: 16) {
             summaryChip("\(summary.total)", "in")
             summaryChip("\(summary.kept)", "kept")
-            summaryChip("\(summary.trash)", "trash")
+            summaryChip("\(summary.unusable)", "unusable")
             summaryChip("\(summary.pending)", "for you")
             Spacer()
         }
@@ -148,7 +168,7 @@ struct ConfirmWorkspace: View {
                 .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
                 .overlay {
                     RoundedRectangle(cornerRadius: 10, style: .continuous)
-                        .strokeBorder(focused ? StudioChrome.pick : Color.clear, lineWidth: 2)
+                        .strokeBorder(focused ? StudioChrome.focus : Color.clear, lineWidth: 2)
                 }
                 VStack(alignment: .leading, spacing: 2) {
                     Text(row.sourceURL.lastPathComponent)
@@ -175,16 +195,24 @@ struct ConfirmWorkspace: View {
     private var finished: some View {
         VStack(spacing: 14) {
             Text("Nothing else needs you.")
-                .font(.system(size: 34, weight: .semibold, design: .serif))
+                .font(StudioType.display)
             Text(model.albumSummary.sentence)
                 .foregroundStyle(StudioChrome.secondary)
                 .multilineTextAlignment(.center)
                 .frame(maxWidth: 440)
+            if model.confirmationsBeyondCap > 0 {
+                Text("We showed you the 16 closest calls. \(model.confirmationsBeyondCap) more were clear enough to decide automatically.")
+                    .font(.caption)
+                    .foregroundStyle(StudioChrome.tertiary)
+            }
             HStack(spacing: 10) {
                 Button("Choose the look") { model.workspace = .look }
                     .buttonStyle(.borderedProminent)
                     .tint(StudioChrome.pick)
-                Button("See the album") { model.workspace = .album }
+                Button("Browse the album") {
+                    model.workspace = .album
+                    model.albumMode = .grid
+                }
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)

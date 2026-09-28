@@ -14,36 +14,53 @@ struct PhotoEngineMacApp: App {
             ContentView(model: model)
                 .frame(minWidth: 1100, minHeight: 720)
         }
+        .windowToolbarStyle(.unified(showsTitle: false))
         .commands {
             CommandGroup(replacing: .newItem) {
                 Button("Choose Folder…") { model.showingChooser = true }
                     .keyboardShortcut("o", modifiers: .command)
+                Menu("Open Recent") {
+                    ForEach(model.recentFolders, id: \.self) { url in
+                        Button(url.lastPathComponent) { model.selectFolder(url) }
+                    }
+                }
+                .disabled(model.recentFolders.isEmpty)
             }
-            CommandMenu("Cull") {
-                Button("Album") { model.workspace = .album }
+            CommandMenu("Go") {
+                Button("Confirm") { model.workspace = .confirm }
                     .keyboardShortcut("1", modifiers: .command)
                     .disabled(model.result == nil)
-                Button("Confirm") { model.workspace = .confirm }
+                Button("Look") { model.workspace = .look }
                     .keyboardShortcut("2", modifiers: .command)
                     .disabled(model.result == nil)
-                Button("Look") { model.workspace = .look }
+                Button("Deliver") { model.workspace = .deliver }
                     .keyboardShortcut("3", modifiers: .command)
                     .disabled(model.result == nil)
+                Divider()
+                Button("Album") {
+                    model.workspace = .album
+                    model.albumMode = .grid
+                }
+                .keyboardShortcut("4", modifiers: .command)
+                .disabled(model.result == nil)
                 Button("Adjust…") { model.openAdjust() }
                     .keyboardShortcut("d", modifiers: .command)
                     .disabled(model.result == nil)
-                Divider()
-                Button("Pick") { model.flagFocused(.pick, advance: true) }
-                    .keyboardShortcut("p", modifiers: [.command])
+            }
+            CommandMenu("Photo") {
+                Button("Pick") { model.pressPick() }
                     .disabled(model.focusedRow == nil)
-                Button("Reject") { model.flagFocused(.reject, advance: true) }
-                    .keyboardShortcut("x", modifiers: [.command])
+                Button("Reject") { model.pressReject() }
                     .disabled(model.focusedRow == nil)
                 Button("Clear Flag") { model.flagFocused(.unflagged, advance: false) }
-                    .keyboardShortcut("u", modifiers: [.command])
                     .disabled(model.focusedRow == nil)
+                Divider()
                 Button("Undo Mark") { model.undoMark() }
                     .keyboardShortcut("z", modifiers: .command)
+            }
+            CommandGroup(replacing: .help) {
+                Button("Keyboard Shortcuts") { model.showingShortcuts = true }
+                    .keyboardShortcut("/", modifiers: .command)
             }
         }
     }
@@ -52,6 +69,8 @@ struct PhotoEngineMacApp: App {
 @MainActor
 final class PhotoEngineViewModel: ObservableObject {
     @Published var selectedFolder: URL?
+    @Published private(set) var recentFolders: [URL] = []
+    private static let recentFoldersKey = "PhotoEngine.recentFolders"
     @Published var mode: CurationMode = .everyday {
         didSet { UserDefaults.standard.set(mode.rawValue, forKey: "PhotoEngine.mode") }
     }
@@ -65,7 +84,10 @@ final class PhotoEngineViewModel: ObservableObject {
         didSet { UserDefaults.standard.set(styleIntensity, forKey: "PhotoEngine.styleIntensity") }
     }
     @Published var exportPreset: ExportPreset = .full {
-        didSet { UserDefaults.standard.set(exportPreset.rawValue, forKey: "PhotoEngine.exportPreset") }
+        didSet {
+            UserDefaults.standard.set(exportPreset.rawValue, forKey: "PhotoEngine.exportPreset")
+            lookIsApplied = false
+        }
     }
     @Published var sizingMode: ShortlistSizingMode = .count {
         didSet { UserDefaults.standard.set(sizingMode.rawValue, forKey: "PhotoEngine.sizingMode") }
@@ -80,31 +102,82 @@ final class PhotoEngineViewModel: ObservableObject {
     @Published var isCountingPhotos = false
     @Published var status = "Choose a folder of photos to begin."
     @Published var isRunning = false
-    @Published var result: PipelineResult?
+    @Published var result: PipelineResult? {
+        didSet {
+            analyzedByID = Dictionary((result?.analyzed ?? []).map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+        }
+    }
     @Published var errorMessage: String?
     @Published var progress: PipelineProgress?
-    @Published var rows: [CuratedRow] = []
+    @Published var stageStartedAt: Date?
+    @Published var rows: [CuratedRow] = [] {
+        didSet {
+            rowIndexByID = Dictionary(rows.enumerated().map { ($1.id, $0) }, uniquingKeysWith: { first, _ in first })
+            refreshDerivedRows()
+        }
+    }
     @Published var cleanupPlan: CleanupPlan?
     @Published var cleanupReport: CleanupReport?
     @Published var showingChooser = false
+    @Published var showingShortcuts = false
     @Published var workspace: StudioWorkspace = .album
+    @Published var workspaceBeforeAdjust: StudioWorkspace = .album
     @Published var confirmations: [ConfirmationMoment] = []
+    @Published var confirmationsBeyondCap = 0
     @Published var skippedConfirmationIDs: Set<String> = []
-    @Published var filter: LibraryFilter = .all
+    @Published var filter: LibraryFilter = .all {
+        didSet { refreshDerivedRows() }
+    }
     @Published var focusedID: PhotoID?
-    @Published var reviewMarks: [PhotoID: PhotoReviewMark] = [:]
-    @Published var groupsByPhoto: [PhotoID: PhotoGroup] = [:]
+    @Published var reviewMarks: [PhotoID: PhotoReviewMark] = [:] {
+        didSet { refreshDerivedRows() }
+    }
+    @Published var groupsByPhoto: [PhotoID: PhotoGroup] = [:] {
+        didSet { refreshDerivedRows() }
+    }
+    @Published private(set) var visibleRows: [CuratedRow] = []
+    @Published private(set) var filterCounts: [LibraryFilter: Int] = [:]
+    private var rowIndexByID: [PhotoID: Int] = [:]
+    private var analyzedByID: [PhotoID: AnalyzedPhoto] = [:]
     @Published var cellSize: Double = 176
     @Published var developRecipe = EditRecipe()
     @Published var showingOriginal = false
     @Published var surveying = false
+    @Published var albumMode: AlbumMode = .grid
     @Published var loupeZoom: LoupeZoom = .fit
     @Published var customRecipes: [PhotoID: EditRecipe] = [:]
     @Published var isReexportingLook = false
-    @Published var selectedLookID: String = "builtin.natural"
-    @Published var autoStraightenLook = true
-    @Published var lookTemperature: Double = 0
-    private var undoStack: [PhotoReviewMark] = []
+    @Published var selectedLookID: String = "builtin.natural" {
+        didSet {
+            UserDefaults.standard.set(selectedLookID, forKey: "PhotoEngine.selectedLookID")
+            lookIsApplied = false
+        }
+    }
+    @Published var autoStraightenLook = true {
+        didSet {
+            UserDefaults.standard.set(autoStraightenLook, forKey: "PhotoEngine.autoStraightenLook")
+            lookIsApplied = false
+        }
+    }
+    @Published var lookTemperature: Double = 0 {
+        didSet {
+            UserDefaults.standard.set(lookTemperature, forKey: "PhotoEngine.lookTemperature")
+            lookIsApplied = false
+        }
+    }
+    @Published var deliverParentFolder: URL = FileManager.default.homeDirectoryForCurrentUser
+        .appendingPathComponent("Pictures", isDirectory: true)
+        .appendingPathComponent("Photocore", isDirectory: true)
+    @Published var deliverWritesSidecarsBesideOriginals = false
+    @Published var isDelivering = false
+    @Published var deliverProgress: (done: Int, total: Int)?
+    @Published var lastDelivery: DeliveryReport?
+    /// True when the run's rendered JPEGs already match the chosen look and size.
+    @Published var lookIsApplied = false
+    @Published var lookRenderProgress: (done: Int, total: Int)?
+    @Published private(set) var horizonCache: [PhotoID: Double?] = [:]
+    private var undoStack: [[PhotoReviewMark]] = []
+    private var openUndoGroup: [PhotoReviewMark]?
 
     private let runner = PhotoPipelineRunner()
     private var processingTask: Task<Void, Never>?
@@ -135,6 +208,25 @@ final class PhotoEngineViewModel: ObservableObject {
         if defaults.object(forKey: "PhotoEngine.keepPercentage") != nil {
             keepPercentage = min(max(defaults.double(forKey: "PhotoEngine.keepPercentage"), 5), 90)
         }
+        if let raw = defaults.string(forKey: "PhotoEngine.selectedLookID") {
+            selectedLookID = raw
+        }
+        if defaults.object(forKey: "PhotoEngine.autoStraightenLook") != nil {
+            autoStraightenLook = defaults.bool(forKey: "PhotoEngine.autoStraightenLook")
+        }
+        if defaults.object(forKey: "PhotoEngine.lookTemperature") != nil {
+            lookTemperature = min(max(defaults.double(forKey: "PhotoEngine.lookTemperature"), -0.6), 0.6)
+        }
+        recentFolders = (defaults.stringArray(forKey: Self.recentFoldersKey) ?? [])
+            .map { URL(fileURLWithPath: $0, isDirectory: true) }
+            .filter { FileManager.default.fileExists(atPath: $0.path) }
+    }
+
+    func rememberRecentFolder(_ folder: URL) {
+        var list = recentFolders.filter { $0.standardizedFileURL != folder.standardizedFileURL }
+        list.insert(folder, at: 0)
+        recentFolders = Array(list.prefix(6))
+        UserDefaults.standard.set(recentFolders.map(\.path), forKey: Self.recentFoldersKey)
     }
 
     var targetCountInt: Int { max(1, Int(targetCount.rounded())) }
@@ -176,11 +268,13 @@ final class PhotoEngineViewModel: ObservableObject {
             let count = (try? PhotoFolderImporter().countSupportedPhotos(in: folder)) ?? 0
             await MainActor.run { [weak self] in
                 guard self?.selectedFolder == folder else { return }
-                self?.sourcePhotoCount = count > 0 ? count : nil
+                self?.sourcePhotoCount = count
                 self?.isCountingPhotos = false
             }
         }
     }
+
+    var folderHasNoPhotos: Bool { !isCountingPhotos && sourcePhotoCount == 0 }
 
     func process() {
         guard let selectedFolder else { return }
@@ -204,6 +298,7 @@ final class PhotoEngineViewModel: ObservableObject {
         errorMessage = nil
         progress = nil
         workspace = .album
+        albumMode = .grid
         focusedID = nil
         confirmations = []
         skippedConfirmationIDs = []
@@ -214,6 +309,9 @@ final class PhotoEngineViewModel: ObservableObject {
         let (progressUpdates, progressContinuation) = AsyncStream.makeStream(of: PipelineProgress.self)
         Task { @MainActor [weak self] in
             for await update in progressUpdates {
+                if self?.progress?.stage != update.stage {
+                    self?.stageStartedAt = Date()
+                }
                 self?.progress = update
                 self?.status = update.message
             }
@@ -256,7 +354,7 @@ final class PhotoEngineViewModel: ObservableObject {
         if let stored = try? runner.reviewMarks(for: result.analyzed.map(\.id)) {
             reviewMarks = Dictionary(stored.map { ($0.photoID, $0) }, uniquingKeysWith: { _, latest in latest })
         }
-        filter = rows.contains { $0.bucket == .selected || $0.bucket == .protected } ? .picks : .all
+        filter = count(.album) > 0 ? .album : .all
         confirmations = makeConfirmations()
         skippedConfirmationIDs = []
         seedInCameraRatings()
@@ -271,27 +369,29 @@ final class PhotoEngineViewModel: ObservableObject {
             status = "\(summary.sentence) \(confirmations.count) close moment\(confirmations.count == 1 ? "" : "s") to confirm."
         }
         processingTask = nil
+        lookIsApplied = false
+        lastDelivery = nil
+        if let selectedFolder { rememberRecentFolder(selectedFolder) }
     }
 
     struct AlbumSummary {
         var total: Int
         var kept: Int
-        var trash: Int
+        var unusable: Int
         var close: Int
         var pending: Int
 
         var sentence: String {
-            "\(total) in · \(kept) kept · \(trash) trash · \(close) close"
+            "\(total) in · \(kept) in album · \(unusable) unusable · \(close) close"
         }
     }
 
     var albumSummary: AlbumSummary {
-        let trash = rows.filter { $0.reasons.contains(where: PhotoTechnicalReject.isTechnicalRejectReason) }.count
         let close = rows.filter { $0.bucket == .review || $0.reasons.contains("close to a photo we kept") }.count
         return AlbumSummary(
             total: rows.count,
-            kept: count(.picks),
-            trash: trash,
+            kept: count(.album),
+            unusable: count(.unusable),
             close: close,
             pending: pendingConfirmations.count
         )
@@ -389,9 +489,9 @@ final class PhotoEngineViewModel: ObservableObject {
             cleanupPlan = nil
             cleanupReport = nil
             if removedExport {
-                status = "Excluded photo and moved its export to Trash."
+                status = "Removed from the album."
             } else {
-                status = "Saved your \(bucket.rawValue) override."
+                status = "Moved to \(bucket.displayName)."
             }
         } catch {
             errorMessage = error.localizedDescription
@@ -418,11 +518,6 @@ final class PhotoEngineViewModel: ObservableObject {
         processingTask = nil
     }
 
-    func revealExports() {
-        guard let result else { return }
-        NSWorkspace.shared.activateFileViewerSelecting([result.manifestURL])
-    }
-
     func selectFolder(_ folder: URL) {
         selectedFolder = folder
         result = nil
@@ -434,31 +529,46 @@ final class PhotoEngineViewModel: ObservableObject {
         focusedID = nil
         groupsByPhoto = [:]
         surveying = false
+        albumMode = .grid
         loupeZoom = .fit
         reviewMarks = [:]
         customRecipes = [:]
+        horizonCache = [:]
         undoStack.removeAll()
         filter = .all
         confirmations = []
         skippedConfirmationIDs = []
         workspace = .album
+        lookIsApplied = false
+        lastDelivery = nil
         status = "Ready to process \(folder.lastPathComponent)."
         refreshSourcePhotoCount()
     }
 
-    var visibleRows: [CuratedRow] {
-        rows
+    func row(for id: PhotoID) -> CuratedRow? {
+        rowIndexByID[id].map { rows[$0] }
+    }
+
+    private func refreshDerivedRows() {
+        var counts: [LibraryFilter: Int] = [:]
+        for row in rows {
+            for candidate in LibraryFilter.allCases where passes(candidate, row: row) {
+                counts[candidate, default: 0] += 1
+            }
+        }
+        filterCounts = counts
+        visibleRows = rows
             .filter { passes(filter, row: $0) }
             .sorted { ($0.rank ?? .max, -$0.score) < ($1.rank ?? .max, -$1.score) }
     }
 
     var focusedRow: CuratedRow? {
-        if let focusedID, let row = rows.first(where: { $0.id == focusedID }) { return row }
+        if let focusedID, let row = row(for: focusedID) { return row }
         return visibleRows.first
     }
 
     func count(_ filter: LibraryFilter) -> Int {
-        rows.filter { passes(filter, row: $0) }.count
+        filterCounts[filter] ?? 0
     }
 
     func mark(for id: PhotoID) -> PhotoReviewMark {
@@ -466,30 +576,24 @@ final class PhotoEngineViewModel: ObservableObject {
     }
 
     func analyzedPhoto(id: PhotoID) -> AnalyzedPhoto? {
-        result?.analyzed.first { $0.id == id }
+        analyzedByID[id]
     }
 
     func passes(_ filter: LibraryFilter, row: CuratedRow) -> Bool {
         switch filter {
+        case .album:
+            return isInAlbum(row)
+        case .alternates:
+            return row.bucket == .alternate && !isInAlbum(row)
+        case .needsLook:
+            return row.bucket == .review && !isInAlbum(row)
+        case .hidden:
+            return !isInAlbum(row) && (row.bucket == .hidden || mark(for: row.id).flag == .reject)
+        case .unusable:
+            return row.reasons.contains(where: PhotoTechnicalReject.isTechnicalRejectReason)
         case .all:
             return true
-        case .picks:
-            return row.bucket == .selected || row.bucket == .protected
-        case .alternates:
-            return row.bucket == .alternate
-        case .review:
-            return row.bucket == .review
-        case .closeHidden:
-            return row.bucket == .hidden
-                && row.reasons.contains("close to a photo we kept")
-                && !row.reasons.contains(where: PhotoTechnicalReject.isTechnicalRejectReason)
-        case .trash:
-            return row.reasons.contains(where: PhotoTechnicalReject.isTechnicalRejectReason)
-        case .duplicates:
-            return groupsByPhoto[row.id] != nil
-        case .rejected:
-            return row.bucket == .hidden || mark(for: row.id).flag == .reject
-        case .myPicks:
+        case .picked:
             return mark(for: row.id).flag == .pick
         case .starred:
             return mark(for: row.id).stars > 0
@@ -506,6 +610,43 @@ final class PhotoEngineViewModel: ObservableObject {
 
     var selectedLook: AlbumLook? {
         availableLooks.first { $0.id == selectedLookID } ?? availableLooks.first
+    }
+
+    /// `look` with the user's warmth and auto-straighten choices applied, rendered for `photo`.
+    /// Look previews, Adjust, Apply look and Deliver all go through here.
+    func recipe(for photo: AnalyzedPhoto, look: AlbumLook) -> EditRecipe {
+        var look = look
+        look.temperature += lookTemperature
+        look.autoStraighten = autoStraightenLook
+        let horizon: Double? = autoStraightenLook ? (horizonCache[photo.id] ?? nil) : nil
+        return look.recipe(for: photo, horizonDegrees: horizon)
+    }
+
+    var effectiveLook: AlbumLook {
+        var look = selectedLook ?? AlbumLook.builtins[0]
+        look.temperature += lookTemperature
+        look.autoStraighten = autoStraightenLook
+        return look
+    }
+
+    /// The album-look recipe for a photo before any per-photo Adjust edits.
+    func baseRecipe(for photo: AnalyzedPhoto) -> EditRecipe {
+        recipe(for: photo, look: selectedLook ?? AlbumLook.builtins[0])
+    }
+
+    /// In the album unless the user rejected it: AI keepers, protected photos, and the user's own picks.
+    func isInAlbum(_ row: CuratedRow) -> Bool {
+        let flag = mark(for: row.id).flag
+        if flag == .reject { return false }
+        return row.bucket == .selected || row.bucket == .protected || flag == .pick
+    }
+
+    var deliverRows: [CuratedRow] {
+        rows.filter(isInAlbum).sorted { ($0.rank ?? .max, -$0.score) < ($1.rank ?? .max, -$1.score) }
+    }
+
+    var lookSamplePhotos: [AnalyzedPhoto] {
+        deliverRows.prefix(9).compactMap { analyzedPhoto(id: $0.id) }
     }
 
     func importLook(from url: URL, kind: AlbumLook.Kind) {
@@ -530,14 +671,12 @@ final class PhotoEngineViewModel: ObservableObject {
 
     func applyAlbumLook() {
         guard let result, !isReexportingLook else { return }
-        let keepers = result.analyzed.filter { photo in
-            result.shortlist.selectedIDs.contains(photo.id)
-        }
+        let keepers = deliverRows.compactMap { analyzedPhoto(id: $0.id) }
+        let customs = customRecipes
         guard !keepers.isEmpty else { return }
-        var look = selectedLook ?? AlbumLook.builtins[0]
-        look.temperature = lookTemperature
-        look.autoStraighten = autoStraightenLook
+        let look = effectiveLook
         isReexportingLook = true
+        lookRenderProgress = (0, keepers.count)
         status = "Applying \(look.name) to \(keepers.count) keepers…"
         let exportDirectory = result.runDirectory.appendingPathComponent("shortlist", isDirectory: true)
         let exportSpecification = ExportSpecification(preset: exportPreset)
@@ -551,7 +690,7 @@ final class PhotoEngineViewModel: ObservableObject {
                     let horizon = look.autoStraighten
                         ? ApplePhotoRenderer.detectHorizonDegrees(url: photo.asset.url, orientation: photo.asset.metadata.orientation)
                         : nil
-                    let recipe = look.recipe(for: photo, horizonDegrees: horizon)
+                    let recipe = customs[photo.id] ?? look.recipe(for: photo, horizonDegrees: horizon)
                     let fileName = String(format: "%03d-%@.jpg", index + 1, photo.asset.url.deletingPathExtension().lastPathComponent)
                     let outputURL = exportDirectory.appendingPathComponent(fileName)
                     let exported = try renderer.render(
@@ -561,6 +700,7 @@ final class PhotoEngineViewModel: ObservableObject {
                         exportSpecification: exportSpecification
                     )
                     exports.append(exported)
+                    await self?.noteLookProgress(done: index + 1, total: keepers.count)
                 }
                 await self?.didApplyAlbumLook(exports: exports, runDirectory: runDirectory, lookName: look.name)
             } catch {
@@ -573,6 +713,7 @@ final class PhotoEngineViewModel: ObservableObject {
     private func didApplyAlbumLook(exports: [ExportedPhoto], runDirectory: URL, lookName: String) {
         guard let result else {
             isReexportingLook = false
+            lookRenderProgress = nil
             return
         }
         self.result = PipelineResult(
@@ -592,66 +733,22 @@ final class PhotoEngineViewModel: ObservableObject {
         )
         rows = Self.makeRows(result: self.result!)
         isReexportingLook = false
+        lookRenderProgress = nil
+        lookIsApplied = true
         status = "Applied \(lookName) to \(exports.count) keepers."
-        workspace = .album
+        workspace = .deliver
     }
 
     @MainActor
     private func noteLookFailure(_ error: Error) {
         isReexportingLook = false
+        lookRenderProgress = nil
         errorMessage = error.localizedDescription
         status = "Could not apply that look."
     }
 
-    func prepareHandoffPackage() {
-        guard let result else { return }
-        let accessed = selectedFolder?.startAccessingSecurityScopedResource() ?? false
-        defer {
-            if accessed { selectedFolder?.stopAccessingSecurityScopedResource() }
-        }
-        let root = result.runDirectory.appendingPathComponent("handoff", isDirectory: true)
-        let keepersDir = root.appendingPathComponent("01-keepers", isDirectory: true)
-        let alternatesDir = root.appendingPathComponent("02-alternates", isDirectory: true)
-        do {
-            try FileManager.default.createDirectory(at: keepersDir, withIntermediateDirectories: true)
-            try FileManager.default.createDirectory(at: alternatesDir, withIntermediateDirectories: true)
-            var written = 0
-            for row in rows where row.bucket == .selected || row.bucket == .protected || mark(for: row.id).flag == .pick {
-                let mark = sidecarMark(for: row)
-                let base = row.sourceURL.deletingPathExtension().lastPathComponent
-                // Always write XMP beside the master (RAW or HEIC) so Lightroom
-                // picks up ratings without importing our JPEG proofs first.
-                _ = try LightroomSidecar.write(mark, named: base, to: row.sourceURL.deletingLastPathComponent())
-                _ = try LightroomSidecar.write(mark, named: base, to: keepersDir)
-                if let export = result.exports.first(where: { $0.photoID == row.id }) {
-                    let source = URL(fileURLWithPath: export.outputPath)
-                    let dest = keepersDir.appendingPathComponent(source.lastPathComponent)
-                    if FileManager.default.fileExists(atPath: dest.path) {
-                        try FileManager.default.removeItem(at: dest)
-                    }
-                    try FileManager.default.copyItem(at: source, to: dest)
-                }
-                written += 1
-            }
-            for row in rows where row.bucket == .alternate {
-                let mark = sidecarMark(for: row)
-                let base = row.sourceURL.deletingPathExtension().lastPathComponent
-                _ = try LightroomSidecar.write(mark, named: base, to: alternatesDir)
-                written += 1
-            }
-            let readme = """
-            Photocore handoff
-            - 01-keepers: finished JPEGs plus XMP for Lightroom
-            - XMP was also written beside each master file (including RAW)
-            - 02-alternates: XMP for near-duplicates you may want later
-            Image originals were not modified.
-            """
-            try Data(readme.utf8).write(to: root.appendingPathComponent("README.txt"), options: .atomic)
-            status = "Packed \(written) files for Lightroom."
-            NSWorkspace.shared.activateFileViewerSelecting([root])
-        } catch {
-            errorMessage = error.localizedDescription
-        }
+    private func noteLookProgress(done: Int, total: Int) {
+        lookRenderProgress = (done, total)
     }
 
     func flagFocused(_ flag: ReviewFlag, advance: Bool) {
@@ -668,12 +765,56 @@ final class PhotoEngineViewModel: ObservableObject {
         }
     }
 
+    /// P: keep. In Confirm it keeps the focused frame (or the suggestion).
+    func pressPick() {
+        if workspace == .confirm {
+            if let moment = currentConfirmation, let focused = focusedID, focused != moment.suggestedID {
+                useConfirmationCandidate(focused)
+            } else {
+                acceptSuggestion()
+            }
+        } else {
+            flagFocused(.pick, advance: true)
+        }
+    }
+
+    /// X: not this one. In Confirm it drops a single-photo moment; it does nothing on multi-frame choices.
+    func pressReject() {
+        if workspace == .confirm {
+            if let moment = currentConfirmation, !moment.isChoice {
+                dropSuggestion()
+            }
+        } else {
+            flagFocused(.reject, advance: true)
+        }
+    }
+
+    func isStepDone(_ step: StudioWorkspace) -> Bool {
+        switch step {
+        case .confirm: return result != nil && pendingConfirmations.isEmpty
+        case .look: return lookIsApplied
+        case .deliver: return lastDelivery != nil
+        case .album, .adjust: return false
+        }
+    }
+
     func toggleSurvey() {
         guard let id = focusedRow?.id, groupsByPhoto[id] != nil else {
             surveying = false
             return
         }
         surveying.toggle()
+    }
+
+    func toggleLoupe() {
+        guard workspace == .album, result != nil else { return }
+        if albumMode == .grid {
+            if focusedID == nil { focusedID = visibleRows.first?.id }
+            albumMode = .loupe
+        } else {
+            albumMode = .grid
+            surveying = false
+        }
     }
 
     var pendingConfirmations: [ConfirmationMoment] {
@@ -689,27 +830,32 @@ final class PhotoEngineViewModel: ObservableObject {
 
     func acceptSuggestion() {
         guard let moment = currentConfirmation else { return }
-        updateMark(moment.suggestedID) { $0.flag = .pick }
-        for id in moment.candidateIDs where id != moment.suggestedID {
-            updateMark(id) { $0.flag = .reject }
+        performAsOneUndo {
+            updateMark(moment.suggestedID) { $0.flag = .pick }
+            for id in moment.candidateIDs where id != moment.suggestedID {
+                updateMark(id) { $0.flag = .reject }
+            }
         }
         status = confirmationStatus
     }
 
     func useConfirmationCandidate(_ id: PhotoID) {
-        guard let moment = currentConfirmation, moment.candidateIDs.contains(id) else { return }
+        guard let moment = currentConfirmation,
+              moment.candidateIDs.contains(id) || moment.hiddenRunnerUpIDs.contains(id) else { return }
         if id == moment.suggestedID {
             acceptSuggestion()
             return
         }
-        updateMark(id) { $0.flag = .pick }
-        if let row = rows.first(where: { $0.id == id }), row.bucket != .selected, row.bucket != .protected {
-            override(photoID: id, bucket: .selected)
-        }
-        for other in moment.candidateIDs where other != id {
-            updateMark(other) { $0.flag = .reject }
-            if rows.first(where: { $0.id == other })?.bucket == .selected {
-                override(photoID: other, bucket: .alternate)
+        performAsOneUndo {
+            updateMark(id) { $0.flag = .pick }
+            if let row = row(for: id), row.bucket != .selected, row.bucket != .protected {
+                override(photoID: id, bucket: .selected)
+            }
+            for other in moment.candidateIDs where other != id {
+                updateMark(other) { $0.flag = .reject }
+                if row(for: other)?.bucket == .selected {
+                    override(photoID: other, bucket: .alternate)
+                }
             }
         }
         status = confirmationStatus
@@ -717,8 +863,10 @@ final class PhotoEngineViewModel: ObservableObject {
 
     func dropSuggestion() {
         guard let moment = currentConfirmation else { return }
-        updateMark(moment.suggestedID) { $0.flag = .reject }
-        override(photoID: moment.suggestedID, bucket: .hidden)
+        performAsOneUndo {
+            updateMark(moment.suggestedID) { $0.flag = .reject }
+            override(photoID: moment.suggestedID, bucket: .hidden)
+        }
         status = confirmationStatus
     }
 
@@ -738,7 +886,7 @@ final class PhotoEngineViewModel: ObservableObject {
 
     private var confirmationStatus: String {
         let left = pendingConfirmations.count
-        if left == 0 { return "Confirmed. The album is ready to hand off." }
+        if left == 0 { return "All close calls confirmed." }
         return "\(left) close moment\(left == 1 ? "" : "s") left."
     }
 
@@ -747,19 +895,26 @@ final class PhotoEngineViewModel: ObservableObject {
         var covered = Set<PhotoID>()
         let groups = result?.grouping.groups ?? []
         for group in groups where group.kind != .exactDuplicate && group.memberIDs.count > 1 {
-            let visible = group.memberIDs.compactMap { id in rows.first { $0.id == id } }.filter { $0.bucket != .hidden }
+            let visible = group.memberIDs.compactMap { id in row(for: id) }.filter { $0.bucket != .hidden }
             guard visible.count >= 2 else { continue }
             let ranked = visible.sorted { $0.score > $1.score }
             guard let best = ranked.first, let second = ranked.dropFirst().first else { continue }
             let margin = best.score - second.score
             guard margin < 0.08 else { continue }
             covered.formUnion(ranked.map(\.id))
+            let candidates = Array(ranked.prefix(4).map(\.id))
+            let candidateSet = Set(candidates)
+            let runnersUp = group.memberIDs.filter { id in
+                guard !candidateSet.contains(id), let row = row(for: id) else { return false }
+                return !row.reasons.contains(where: PhotoTechnicalReject.isTechnicalRejectReason)
+            }
             moments.append(ConfirmationMoment(
                 id: group.id.uuidString,
                 suggestedID: best.id,
-                candidateIDs: Array(ranked.prefix(4).map(\.id)),
+                candidateIDs: candidates,
                 reason: best.reasons.first ?? "These frames are close.",
-                margin: margin
+                margin: margin,
+                hiddenRunnerUpIDs: runnersUp
             ))
         }
         for row in rows where row.bucket == .selected || row.bucket == .protected {
@@ -787,7 +942,28 @@ final class PhotoEngineViewModel: ObservableObject {
                 margin: 0.05
             ))
         }
-        return Array(moments.sorted { $0.margin < $1.margin }.prefix(16))
+        let sorted = moments.sorted { $0.margin < $1.margin }
+        confirmationsBeyondCap = max(0, sorted.count - 16)
+        return Array(sorted.prefix(16))
+    }
+
+    func suggestionExplanation(for moment: ConfirmationMoment) -> String {
+        guard moment.isChoice, let best = analyzedPhoto(id: moment.suggestedID) else { return moment.reason }
+        let others = moment.candidateIDs.filter { $0 != moment.suggestedID }.compactMap { analyzedPhoto(id: $0) }
+        guard !others.isEmpty else { return moment.reason }
+        func focus(_ photo: AnalyzedPhoto) -> Double { photo.signals.subjectSharpness ?? photo.signals.sharpness }
+        func eyesClosed(_ photo: AnalyzedPhoto) -> Bool { photo.signals.qualityFlags.contains(PhotoTechnicalReject.eyesClosed) }
+        var edges: [String] = []
+        if others.allSatisfy({ focus(best) - focus($0) > 0.05 }) { edges.append("is sharper") }
+        if best.signals.faceCount > 0, others.allSatisfy({ best.signals.faceQuality - $0.signals.faceQuality > 0.05 }) {
+            edges.append("has better faces")
+        }
+        if !eyesClosed(best), others.contains(where: eyesClosed) { edges.append("has open eyes") }
+        if others.allSatisfy({ best.signals.exposureQuality - $0.signals.exposureQuality > 0.05 }) {
+            edges.append("is better exposed")
+        }
+        guard !edges.isEmpty else { return "These frames are nearly identical. Either is a fine keep." }
+        return "Suggested because it " + ListFormatter.localizedString(byJoining: edges) + "."
     }
 
     func cycleLoupeZoom() {
@@ -814,10 +990,28 @@ final class PhotoEngineViewModel: ObservableObject {
         updateMark(id) { $0.color = color }
     }
 
+    /// Every mark changed inside `body` is undone by a single Undo.
+    func performAsOneUndo(_ body: () -> Void) {
+        openUndoGroup = []
+        body()
+        if let group = openUndoGroup, !group.isEmpty {
+            pushUndo(group)
+        }
+        openUndoGroup = nil
+    }
+
+    private func pushUndo(_ group: [PhotoReviewMark]) {
+        undoStack.append(group)
+        if undoStack.count > 80 { undoStack.removeFirst() }
+    }
+
     func updateMark(_ id: PhotoID, _ mutate: (inout PhotoReviewMark) -> Void) {
         var mark = mark(for: id)
-        undoStack.append(mark)
-        if undoStack.count > 80 { undoStack.removeFirst() }
+        if openUndoGroup != nil {
+            openUndoGroup?.append(mark)
+        } else {
+            pushUndo([mark])
+        }
         mutate(&mark)
         mark.stars = min(5, max(0, mark.stars))
         reviewMarks[id] = mark
@@ -829,14 +1023,16 @@ final class PhotoEngineViewModel: ObservableObject {
     }
 
     func undoMark() {
-        guard let previous = undoStack.popLast() else { return }
-        reviewMarks[previous.photoID] = previous
-        focusedID = previous.photoID
-        do {
-            try runner.saveReviewMark(previous)
-        } catch {
-            errorMessage = error.localizedDescription
+        guard let group = undoStack.popLast() else { return }
+        for previous in group.reversed() {
+            reviewMarks[previous.photoID] = previous
+            do {
+                try runner.saveReviewMark(previous)
+            } catch {
+                errorMessage = error.localizedDescription
+            }
         }
+        focusedID = group.first?.photoID
         syncDevelopRecipe()
     }
 
@@ -862,25 +1058,28 @@ final class PhotoEngineViewModel: ObservableObject {
             focusedID = rows.first { $0.bucket == .selected || $0.bucket == .protected }?.id
                 ?? visibleRows.first?.id
         }
-        syncDevelopRecipeFromAlbumLook()
+        syncDevelopRecipe()
+        if workspace != .adjust { workspaceBeforeAdjust = workspace }
         workspace = .adjust
         showingOriginal = false
     }
 
-    func syncDevelopRecipeFromAlbumLook() {
-        guard let row = focusedRow, let photo = analyzedPhoto(id: row.id) else { return }
-        if let custom = customRecipes[row.id] {
-            developRecipe = custom
-            return
+    /// Starts horizon detection for `photo` in the background if auto-straighten needs it.
+    func ensureHorizon(for photo: AnalyzedPhoto) {
+        guard autoStraightenLook, horizonCache[photo.id] == nil else { return }
+        horizonCache[photo.id] = .some(nil)  // mark as in-flight so we only start once
+        let url = photo.asset.url
+        let orientation = photo.asset.metadata.orientation
+        let id = photo.id
+        Task.detached(priority: .userInitiated) { [weak self] in
+            let degrees = ApplePhotoRenderer.detectHorizonDegrees(url: url, orientation: orientation)
+            await self?.storeHorizon(degrees, for: id)
         }
-        if var look = selectedLook {
-            look.temperature += lookTemperature
-            look.autoStraighten = autoStraightenLook
-            let horizon = look.autoStraighten
-                ? ApplePhotoRenderer.detectHorizonDegrees(url: photo.asset.url, orientation: photo.asset.metadata.orientation)
-                : nil
-            developRecipe = look.recipe(for: photo, horizonDegrees: horizon)
-        } else {
+    }
+
+    private func storeHorizon(_ degrees: Double?, for id: PhotoID) {
+        horizonCache[id] = .some(degrees)
+        if focusedID == id, customRecipes[id] == nil {
             syncDevelopRecipe()
         }
     }
@@ -889,9 +1088,10 @@ final class PhotoEngineViewModel: ObservableObject {
         guard let row = focusedRow, let photo = analyzedPhoto(id: row.id) else { return }
         if let custom = customRecipes[row.id] {
             developRecipe = custom
-        } else {
-            developRecipe = ApplePhotoRenderer.recipe(for: photo, style: style, intensity: styleIntensity)
+            return
         }
+        ensureHorizon(for: photo)
+        developRecipe = baseRecipe(for: photo)
     }
 
     func setDevelopRecipe(_ recipe: EditRecipe) {
@@ -901,15 +1101,17 @@ final class PhotoEngineViewModel: ObservableObject {
         }
     }
 
-    func applyLook(_ style: StylePreset) {
-        guard let row = focusedRow, let photo = analyzedPhoto(id: row.id) else { return }
-        setDevelopRecipe(ApplePhotoRenderer.recipe(for: photo, style: style, intensity: styleIntensity))
-    }
-
     func resetDevelopRecipe() {
         guard let id = focusedRow?.id else { return }
         customRecipes[id] = nil
         syncDevelopRecipe()
+    }
+
+    func resetDevelopValue(_ keyPath: WritableKeyPath<EditRecipe, Double>) {
+        guard let row = focusedRow, let photo = analyzedPhoto(id: row.id) else { return }
+        var recipe = developRecipe
+        recipe[keyPath: keyPath] = baseRecipe(for: photo)[keyPath: keyPath]
+        setDevelopRecipe(recipe)
     }
 
     func renderFocusedEdit() {
@@ -960,42 +1162,131 @@ final class PhotoEngineViewModel: ObservableObject {
         return mark
     }
 
-    func writeSidecars(besideOriginals: Bool) {
-        guard let result else { return }
-        let accessed = selectedFolder?.startAccessingSecurityScopedResource() ?? false
-        defer {
-            if accessed { selectedFolder?.stopAccessingSecurityScopedResource() }
+    func deliver() {
+        guard result != nil, !isDelivering else { return }
+        let exportByID = Dictionary(
+            (result?.exports ?? []).map { ($0.photoID, URL(fileURLWithPath: $0.outputPath)) },
+            uniquingKeysWith: { first, _ in first }
+        )
+        let jobs: [DeliveryJob] = deliverRows.enumerated().compactMap { index, row in
+            guard let photo = analyzedPhoto(id: row.id) else { return nil }
+            let custom = customRecipes[row.id]
+            return DeliveryJob(
+                photo: photo,
+                fileName: String(format: "%03d-%@.jpg", index + 1, row.sourceURL.deletingPathExtension().lastPathComponent),
+                mark: sidecarMark(for: row),
+                customRecipe: custom,
+                reusableExport: (lookIsApplied && custom == nil) ? exportByID[row.id] : nil
+            )
         }
-        let collection = result.runDirectory.appendingPathComponent("lightroom", isDirectory: true)
-        var entries: [PortableCullEntry] = []
-        do {
-            for row in rows {
-                let mark = sidecarMark(for: row)
-                let folder = besideOriginals ? row.sourceURL.deletingLastPathComponent() : collection
-                let base = besideOriginals
-                    ? row.sourceURL.deletingPathExtension().lastPathComponent
-                    : (row.relativePath as NSString).deletingPathExtension.replacingOccurrences(of: "/", with: " - ")
-                _ = try LightroomSidecar.write(mark, named: base, to: folder)
-                entries.append(PortableCullEntry(
-                    fileName: row.sourceURL.lastPathComponent,
-                    relativePath: row.relativePath,
-                    bucket: row.bucket.rawValue,
-                    flag: mark.flag.rawValue,
-                    stars: mark.stars,
-                    color: mark.color.rawValue,
-                    reasons: row.reasons
-                ))
+        guard !jobs.isEmpty else {
+            status = "Nothing in the album to deliver."
+            return
+        }
+        let sidecarJobs: [SidecarJob] = deliverWritesSidecarsBesideOriginals
+            ? rows.map { row in
+                SidecarJob(
+                    mark: sidecarMark(for: row),
+                    baseName: row.sourceURL.deletingPathExtension().lastPathComponent,
+                    folder: row.sourceURL.deletingLastPathComponent()
+                )
             }
-            try FileManager.default.createDirectory(at: collection, withIntermediateDirectories: true)
-            let decisionsURL = collection.appendingPathComponent("cull.json")
-            try LightroomSidecar.decisionsData(entries).write(to: decisionsURL, options: .atomic)
-            status = besideOriginals
-                ? "Wrote \(entries.count) sidecars next to the originals."
-                : "Wrote \(entries.count) sidecars into the export folder."
-            NSWorkspace.shared.activateFileViewerSelecting([decisionsURL])
-        } catch {
-            errorMessage = error.localizedDescription
+            : []
+        let entries = rows.map { row in
+            let mark = sidecarMark(for: row)
+            return PortableCullEntry(
+                fileName: row.sourceURL.lastPathComponent,
+                relativePath: row.relativePath,
+                bucket: row.bucket.rawValue,
+                flag: mark.flag.rawValue,
+                stars: mark.stars,
+                color: mark.color.rawValue,
+                reasons: row.reasons
+            )
         }
+        let destination = newDeliveryFolder()
+        let look = effectiveLook
+        let spec = ExportSpecification(preset: exportPreset)
+        let sourceFolder = selectedFolder
+        isDelivering = true
+        deliverProgress = (0, jobs.count)
+        status = "Exporting \(jobs.count) photos…"
+
+        Task.detached(priority: .userInitiated) { [weak self] in
+            let accessed = sourceFolder?.startAccessingSecurityScopedResource() ?? false
+            defer { if accessed { sourceFolder?.stopAccessingSecurityScopedResource() } }
+            do {
+                let fileManager = FileManager.default
+                try fileManager.createDirectory(at: destination, withIntermediateDirectories: true)
+                let renderer = ApplePhotoRenderer()
+                for (index, job) in jobs.enumerated() {
+                    let output = destination.appendingPathComponent(job.fileName)
+                    if let reusable = job.reusableExport, fileManager.fileExists(atPath: reusable.path) {
+                        try fileManager.copyItem(at: reusable, to: output)
+                    } else {
+                        let recipe: EditRecipe
+                        if let custom = job.customRecipe {
+                            recipe = custom
+                        } else {
+                            let horizon = look.autoStraighten
+                                ? ApplePhotoRenderer.detectHorizonDegrees(url: job.photo.asset.url, orientation: job.photo.asset.metadata.orientation)
+                                : nil
+                            recipe = look.recipe(for: job.photo, horizonDegrees: horizon)
+                        }
+                        _ = try renderer.render(photo: job.photo, outputURL: output, recipe: recipe, exportSpecification: spec)
+                    }
+                    try JPEGRatingStamp.stamp(job.mark, into: output)
+                    await self?.noteDeliverProgress(done: index + 1, total: jobs.count)
+                }
+                var written = 0
+                var skipped = 0
+                for sidecar in sidecarJobs {
+                    switch try LightroomSidecar.writePreservingExisting(sidecar.mark, named: sidecar.baseName, to: sidecar.folder) {
+                    case .written: written += 1
+                    case .skippedExistingSidecar: skipped += 1
+                    }
+                }
+                try LightroomSidecar.decisionsData(entries)
+                    .write(to: destination.appendingPathComponent("photocore-cull.json"), options: .atomic)
+                await self?.didDeliver(DeliveryReport(folder: destination, photoCount: jobs.count, sidecarsWritten: written, sidecarsSkipped: skipped))
+            } catch {
+                await self?.noteDeliverFailure(error)
+            }
+        }
+    }
+
+    /// Always a brand-new folder, so delivery never overwrites or deletes anything.
+    private func newDeliveryFolder() -> URL {
+        let shoot = selectedFolder?.lastPathComponent ?? "Album"
+        let day = Date().formatted(.iso8601.year().month().day())
+        let base = "\(shoot) \(day)"
+        var candidate = deliverParentFolder.appendingPathComponent(base, isDirectory: true)
+        var suffix = 2
+        while FileManager.default.fileExists(atPath: candidate.path) {
+            candidate = deliverParentFolder.appendingPathComponent("\(base) \(suffix)", isDirectory: true)
+            suffix += 1
+        }
+        return candidate
+    }
+
+    private func noteDeliverProgress(done: Int, total: Int) {
+        deliverProgress = (done, total)
+    }
+
+    private func didDeliver(_ report: DeliveryReport) {
+        isDelivering = false
+        deliverProgress = nil
+        lastDelivery = report
+        status = report.sidecarsSkipped == 0
+            ? "Delivered \(report.photoCount) photos."
+            : "Delivered \(report.photoCount) photos. Left \(report.sidecarsSkipped) existing sidecars untouched."
+    }
+
+    private func noteDeliverFailure(_ error: Error) {
+        isDelivering = false
+        deliverProgress = nil
+        errorMessage = error.localizedDescription
+        status = "Delivery stopped."
     }
 
     private func stepFocus(_ offset: Int) {
@@ -1098,4 +1389,25 @@ struct CuratedRow: Identifiable, Sendable {
     let score: Double
     let sourceURL: URL
     let previewURL: URL?
+}
+
+struct DeliveryJob: Sendable {
+    let photo: AnalyzedPhoto
+    let fileName: String
+    let mark: PhotoReviewMark
+    let customRecipe: EditRecipe?
+    let reusableExport: URL?
+}
+
+struct SidecarJob: Sendable {
+    let mark: PhotoReviewMark
+    let baseName: String
+    let folder: URL
+}
+
+struct DeliveryReport: Equatable {
+    let folder: URL
+    let photoCount: Int
+    let sidecarsWritten: Int
+    let sidecarsSkipped: Int
 }

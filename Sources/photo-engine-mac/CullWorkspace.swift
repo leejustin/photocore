@@ -60,6 +60,15 @@ struct CullWorkspace: View {
             }
             VStack {
                 HStack(spacing: 8) {
+                    Button {
+                        model.albumMode = .grid
+                        model.surveying = false
+                    } label: {
+                        Label("Grid", systemImage: "square.grid.2x2")
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+                    .keyboardShortcut(.cancelAction)
                     if let row = model.focusedRow, let index = model.visibleRows.firstIndex(where: { $0.id == row.id }) {
                         Text("\(index + 1) of \(model.visibleRows.count)")
                             .font(.caption.monospacedDigit().weight(.medium))
@@ -88,7 +97,7 @@ struct CullWorkspace: View {
                     }
                 }
                 Spacer()
-                Text("← → move    ↑ ↓ burst    P pick    X reject    S survey    F zoom    E eyes    1–5 stars    Z undo")
+                Text("Space grid    ← → move    ↑ ↓ burst    P pick    X reject    S survey    F zoom    E eyes    1–5 stars    Z undo")
                     .font(.caption2)
                     .foregroundStyle(.white.opacity(0.72))
                     .padding(.horizontal, 10)
@@ -115,7 +124,7 @@ struct CullWorkspace: View {
             ScrollView {
                 LazyVGrid(columns: [GridItem(.adaptive(minimum: 280), spacing: 12)], spacing: 12) {
                     ForEach(group.memberIDs, id: \.self) { id in
-                        if let row = model.rows.first(where: { $0.id == id }) {
+                        if let row = model.row(for: id) {
                             SurveyCell(model: model, row: row)
                         }
                     }
@@ -141,7 +150,7 @@ struct CullWorkspace: View {
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: 8) {
                     ForEach(group.memberIDs, id: \.self) { id in
-                        if let row = model.rows.first(where: { $0.id == id }) {
+                        if let row = model.row(for: id) {
                             Button {
                                 model.focusedID = id
                             } label: {
@@ -151,7 +160,7 @@ struct CullWorkspace: View {
                                     .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
                                     .overlay {
                                         RoundedRectangle(cornerRadius: 6, style: .continuous)
-                                            .strokeBorder(model.focusedID == id ? StudioChrome.pick : Color.clear, lineWidth: 2)
+                                            .strokeBorder(model.focusedID == id ? StudioChrome.focus : Color.clear, lineWidth: 2)
                                     }
                             }
                             .buttonStyle(.plain)
@@ -179,7 +188,7 @@ struct CullWorkspace: View {
                                 .clipShape(RoundedRectangle(cornerRadius: 5, style: .continuous))
                                 .overlay {
                                     RoundedRectangle(cornerRadius: 5, style: .continuous)
-                                        .strokeBorder(model.focusedID == row.id ? StudioChrome.pick : Color.white.opacity(0.08), lineWidth: model.focusedID == row.id ? 2 : 1)
+                                        .strokeBorder(model.focusedID == row.id ? StudioChrome.focus : Color.white.opacity(0.08), lineWidth: model.focusedID == row.id ? 2 : 1)
                                 }
                                 .opacity(model.mark(for: row.id).flag == .reject || row.bucket == .hidden ? 0.4 : 1)
                         }
@@ -416,7 +425,7 @@ private struct SurveyCell: View {
             .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
             .overlay {
                 RoundedRectangle(cornerRadius: 10, style: .continuous)
-                    .strokeBorder(model.focusedID == row.id ? StudioChrome.pick : Color.white.opacity(0.08), lineWidth: model.focusedID == row.id ? 2 : 1)
+                    .strokeBorder(model.focusedID == row.id ? StudioChrome.focus : Color.white.opacity(0.08), lineWidth: model.focusedID == row.id ? 2 : 1)
             }
         }
         .buttonStyle(.plain)

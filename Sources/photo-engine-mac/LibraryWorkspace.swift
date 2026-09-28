@@ -5,7 +5,7 @@ struct LibraryWorkspace: View {
     @ObservedObject var model: PhotoEngineViewModel
 
     private var columns: [GridItem] {
-        [GridItem(.adaptive(minimum: model.cellSize, maximum: model.cellSize + 48), spacing: 10)]
+        [GridItem(.adaptive(minimum: model.cellSize, maximum: model.cellSize + 48), spacing: 6)]
     }
 
     var body: some View {
@@ -15,17 +15,26 @@ struct LibraryWorkspace: View {
                 ContentUnavailableView {
                     Label("Nothing in \(model.filter.title.lowercased())", systemImage: model.filter.symbol)
                 } description: {
-                    Text("Switch sets in the sidebar, or run the cull again with a gentler setting.")
+                    Text("Try another set in the sidebar, or run again with a gentler cull.")
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
-                ScrollView {
-                    LazyVGrid(columns: columns, spacing: 10) {
-                        ForEach(model.visibleRows) { row in
-                            PhotoGridCell(model: model, row: row)
+                ScrollViewReader { proxy in
+                    ScrollView {
+                        LazyVGrid(columns: columns, spacing: 6) {
+                            ForEach(model.visibleRows) { row in
+                                PhotoGridCell(model: model, row: row, mark: model.mark(for: row.id), isFocused: model.focusedID == row.id, isInAlbum: model.isInAlbum(row))
+                                    .id(row.id)
+                            }
+                        }
+                        .padding(18)
+                    }
+                    .onChange(of: model.focusedID) { _, id in
+                        guard let id else { return }
+                        withAnimation(.easeOut(duration: 0.15)) {
+                            proxy.scrollTo(id)
                         }
                     }
-                    .padding(18)
                 }
             }
         }
@@ -36,7 +45,7 @@ struct LibraryWorkspace: View {
         HStack(alignment: .firstTextBaseline, spacing: 16) {
             VStack(alignment: .leading, spacing: 3) {
                 Text(headline)
-                    .font(.title2.weight(.semibold))
+                    .font(StudioType.title)
                 Text(subtitle)
                     .font(.subheadline)
                     .foregroundStyle(StudioChrome.secondary)
@@ -70,7 +79,7 @@ struct LibraryWorkspace: View {
         var parts = [model.filter.title]
         if model.result != nil {
             let summary = model.albumSummary
-            parts.append("\(summary.trash) trash")
+            parts.append("\(summary.unusable) unusable")
             let waiting = summary.pending
             parts.append(waiting == 0 ? "Nothing to confirm" : "\(waiting) to confirm")
         }
@@ -81,111 +90,110 @@ struct LibraryWorkspace: View {
 }
 
 private struct PhotoGridCell: View {
-    @ObservedObject var model: PhotoEngineViewModel
+    let model: PhotoEngineViewModel
     let row: CuratedRow
+    let mark: PhotoReviewMark
+    let isFocused: Bool
+    let isInAlbum: Bool
 
-    private var mark: PhotoReviewMark { model.mark(for: row.id) }
-    private var isFocused: Bool { model.focusedID == row.id }
+    private var isDimmed: Bool { row.bucket == .hidden || mark.flag == .reject }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            ZStack(alignment: .topLeading) {
-                StudioChrome.elevated
-                CachedThumbnail(url: row.previewURL ?? row.sourceURL, maxPixelSize: 480)
-                    .padding(8)
-                if row.bucket == .hidden || mark.flag == .reject {
-                    Color.black.opacity(0.42)
-                }
-                VStack {
-                    HStack {
-                        bucketChip
-                        Spacer()
-                        if mark.flag == .pick {
-                            Image(systemName: "flag.fill")
-                                .font(.caption.weight(.bold))
-                                .foregroundStyle(StudioChrome.pick)
-                        } else if mark.flag == .reject {
-                            Image(systemName: "xmark")
-                                .font(.caption.weight(.bold))
-                                .foregroundStyle(StudioChrome.reject)
-                        }
-                    }
-                    Spacer()
-                    HStack {
-                        if mark.stars > 0 {
-                            Text(String(repeating: "★", count: mark.stars))
-                                .font(.caption2)
-                                .foregroundStyle(StudioChrome.pick)
-                        }
-                        Spacer()
-                        if mark.color != .none {
-                            Circle().fill(mark.color.swatch).frame(width: 8, height: 8)
-                        }
-                    }
-                }
-                .padding(8)
-            }
-            .aspectRatio(1, contentMode: .fit)
-            .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+        Color.black
             .overlay {
-                RoundedRectangle(cornerRadius: 10, style: .continuous)
-                    .strokeBorder(isFocused ? StudioChrome.pick : Color.clear, lineWidth: 2)
+                CachedThumbnail(url: row.previewURL ?? row.sourceURL, maxPixelSize: 480, contentMode: .fill)
+                    .saturation(isDimmed ? 0 : 1)
+                    .opacity(isDimmed ? 0.45 : 1)
             }
-            Text(row.sourceURL.lastPathComponent)
-                .font(.caption2)
-                .foregroundStyle(StudioChrome.secondary)
-                .lineLimit(1)
-        }
-        .contentShape(Rectangle())
-        .onTapGesture {
-            model.focusedID = row.id
-        }
-        .contextMenu {
-            Button("Pick") { model.updateMark(row.id) { $0.flag = .pick } }
-            Button("Reject") { model.updateMark(row.id) { $0.flag = .reject } }
-            Button("Protect") { model.override(photoID: row.id, bucket: .protected) }
-            if row.bucket == .hidden || row.bucket == .review || row.bucket == .alternate {
-                Button("Restore to album") { model.restoreToAlbum(row.id) }
+            .overlay(alignment: .topLeading) { bucketBadge.padding(6) }
+            .overlay(alignment: .topTrailing) { flagBadge.padding(6) }
+            .overlay(alignment: .bottom) { marksBar }
+            .aspectRatio(1, contentMode: .fit)
+            .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+            .overlay {
+                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                    .strokeBorder(isFocused ? StudioChrome.focus : Color.clear, lineWidth: 2)
             }
-            Button("Adjust…") {
+            .contentShape(Rectangle())
+            .onTapGesture(count: 2) {
                 model.focusedID = row.id
-                model.openAdjust()
+                model.albumMode = .loupe
             }
-            Menu("Stars") {
-                ForEach(0...5, id: \.self) { stars in
-                    Button(stars == 0 ? "Clear" : String(repeating: "★", count: stars)) {
-                        model.updateMark(row.id) { $0.stars = stars }
-                    }
-                }
+            .onTapGesture {
+                model.focusedID = row.id
             }
-        }
-        .accessibilityLabel("\(row.sourceURL.lastPathComponent), \(row.bucket.displayName)")
+            .help(row.sourceURL.lastPathComponent)
+            .contextMenu { contextMenuItems }
+            .accessibilityLabel("\(row.sourceURL.lastPathComponent), \(row.bucket.displayName)")
     }
 
     @ViewBuilder
-    private var bucketChip: some View {
+    private var bucketBadge: some View {
         switch row.bucket {
-        case .selected, .protected:
-            Text("AI")
-                .font(.caption2.weight(.bold))
-                .padding(.horizontal, 5)
-                .padding(.vertical, 2)
-                .background(StudioChrome.pick.opacity(0.9), in: Capsule())
-                .foregroundStyle(.black)
-        case .review:
-            Text("?")
-                .font(.caption2.weight(.bold))
-                .padding(.horizontal, 5)
-                .padding(.vertical, 2)
-                .background(.white.opacity(0.16), in: Capsule())
-        case .alternate:
-            Text("ALT")
-                .font(.system(size: 9, weight: .bold))
-                .padding(.horizontal, 5)
-                .padding(.vertical, 2)
-                .background(.white.opacity(0.12), in: Capsule())
-        case .hidden:
-            EmptyView()
+        case .protected: badge("lock.fill", tint: StudioChrome.text)
+        case .alternate: badge("rectangle.on.rectangle", tint: StudioChrome.secondary)
+        case .review: badge("questionmark", tint: StudioChrome.text)
+        case .selected, .hidden: EmptyView()
+        }
+    }
+
+    @ViewBuilder
+    private var flagBadge: some View {
+        switch mark.flag {
+        case .pick: badge("flag.fill", tint: StudioChrome.pick)
+        case .reject: badge("xmark", tint: StudioChrome.reject)
+        case .unflagged: EmptyView()
+        }
+    }
+
+    @ViewBuilder
+    private var marksBar: some View {
+        if mark.stars > 0 || mark.color != .none {
+            HStack(spacing: 4) {
+                if mark.stars > 0 {
+                    Text(String(repeating: "★", count: mark.stars))
+                        .font(.caption2)
+                        .foregroundStyle(StudioChrome.pick)
+                }
+                Spacer()
+                if mark.color != .none {
+                    Circle().fill(mark.color.swatch).frame(width: 8, height: 8)
+                }
+            }
+            .padding(.horizontal, 8)
+            .padding(.vertical, 6)
+            .background(LinearGradient(colors: [.clear, .black.opacity(0.6)], startPoint: .top, endPoint: .bottom))
+        }
+    }
+
+    private func badge(_ symbol: String, tint: Color) -> some View {
+        Image(systemName: symbol)
+            .font(.system(size: 10, weight: .bold))
+            .foregroundStyle(tint)
+            .frame(width: 20, height: 20)
+            .background(.black.opacity(0.55), in: Circle())
+    }
+
+    @ViewBuilder
+    private var contextMenuItems: some View {
+        Button("Open") { model.focusedID = row.id; model.albumMode = .loupe }
+        Divider()
+        Button("Pick") { model.updateMark(row.id) { $0.flag = .pick } }
+        Button("Reject") { model.updateMark(row.id) { $0.flag = .reject } }
+        Button("Protect") { model.override(photoID: row.id, bucket: .protected) }
+        if !isInAlbum {
+            Button("Restore to album") { model.restoreToAlbum(row.id) }
+        }
+        Button("Adjust…") {
+            model.focusedID = row.id
+            model.openAdjust()
+        }
+        Menu("Stars") {
+            ForEach(0...5, id: \.self) { stars in
+                Button(stars == 0 ? "Clear" : String(repeating: "★", count: stars)) {
+                    model.updateMark(row.id) { $0.stars = stars }
+                }
+            }
         }
     }
 }

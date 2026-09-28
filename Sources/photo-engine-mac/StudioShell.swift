@@ -6,22 +6,58 @@ import UniformTypeIdentifiers
 
 struct ContentView: View {
     @ObservedObject var model: PhotoEngineViewModel
-    @State private var showingExport = false
-    @State private var confirmingCleanup = false
-    @State private var confirmingSidecars = false
+    @AppStorage("PhotoEngine.sidebarVisible") private var sidebarVisible = true
+    @State private var isDropTargeted = false
 
     var body: some View {
         VStack(spacing: 0) {
-            topBar
-            Rectangle().fill(StudioChrome.hairline).frame(height: 1)
+            if let error = model.errorMessage {
+                ErrorBanner(message: error) { model.errorMessage = nil }
+            }
             HStack(spacing: 0) {
-                sidebar
-                    .frame(width: 248)
-                Rectangle().fill(StudioChrome.hairline).frame(width: 1)
+                if sidebarVisible && model.result != nil {
+                    sidebar
+                        .frame(width: 248)
+                    Rectangle().fill(StudioChrome.hairline).frame(width: 1)
+                }
                 workspace
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
         }
+        .toolbar {
+            ToolbarItem(placement: .navigation) {
+                if model.result != nil {
+                    Button {
+                        withAnimation(.easeOut(duration: 0.15)) { sidebarVisible.toggle() }
+                    } label: {
+                        Image(systemName: "sidebar.left")
+                    }
+                    .help("Show or hide the sidebar (⌃⌘S)")
+                    .keyboardShortcut("s", modifiers: [.command, .control])
+                }
+            }
+            ToolbarItem(placement: .principal) {
+                if model.result != nil {
+                    StepNavigator(model: model)
+                } else {
+                    Text("Photocore").font(.headline)
+                }
+            }
+            ToolbarItem(placement: .primaryAction) {
+                if model.isRunning {
+                    Button("Cancel", role: .cancel) { model.cancel() }
+                } else if model.result != nil {
+                    Button {
+                        model.workspace = .album
+                        model.albumMode = .grid
+                    } label: {
+                        Label("Album", systemImage: "square.grid.2x2")
+                    }
+                    .help("Browse every photo (⌘4)")
+                }
+            }
+        }
+        .toolbarBackground(StudioChrome.panel, for: .windowToolbar)
         .background(StudioChrome.canvas)
         .foregroundStyle(StudioChrome.text)
         .preferredColorScheme(.dark)
@@ -34,7 +70,8 @@ struct ContentView: View {
                 model.errorMessage = error.localizedDescription
             }
         }
-        .onDrop(of: [.fileURL], isTargeted: nil) { providers in
+        .onDrop(of: [.fileURL], isTargeted: $isDropTargeted) { providers in
+            guard !model.isRunning else { return false }
             guard let provider = providers.first else { return false }
             _ = provider.loadObject(ofClass: URL.self) { object, _ in
                 guard let url = object else { return }
@@ -45,75 +82,25 @@ struct ContentView: View {
             }
             return true
         }
-        .alert("Move exact duplicates to Trash?", isPresented: $confirmingCleanup) {
-            Button("Move to Trash", role: .destructive) { model.executeCleanup() }
-            Button("Cancel", role: .cancel) {}
-        } message: {
-            Text("Only byte-identical copies with a verified retained photo are moved. Near-duplicates stay put.")
-        }
-        .alert("Write sidecars next to the originals?", isPresented: $confirmingSidecars) {
-            Button("Write Sidecars") { model.writeSidecars(besideOriginals: true) }
-            Button("Cancel", role: .cancel) {}
-        } message: {
-            Text("Photocore adds an .xmp file beside each photo. The image files themselves are not modified. Lightroom reads the stars, color labels, and pick keywords.")
-        }
-        .sheet(isPresented: $showingExport) {
-            ExportSheet(model: model, writeBesideOriginals: { confirmingSidecars = true })
-        }
-    }
-
-    private var topBar: some View {
-        HStack(spacing: 16) {
-            HStack(spacing: 8) {
-                RoundedRectangle(cornerRadius: 2, style: .continuous)
-                    .fill(StudioChrome.pick)
-                    .frame(width: 10, height: 10)
-                Text("Photocore")
-                    .font(.system(size: 17, weight: .semibold))
-            }
-            workspaceSwitch
-            Spacer()
-            Text(model.status)
-                .font(.caption)
-                .foregroundStyle(StudioChrome.secondary)
-                .lineLimit(1)
-            if model.result != nil {
-                Button("Hand off") { showingExport = true }
-            }
-            if model.isRunning {
-                Button("Cancel", role: .cancel) { model.cancel() }
-            } else {
-                Button("Curate") { model.process() }
-                    .buttonStyle(.borderedProminent)
-                    .tint(StudioChrome.pick)
-                    .disabled(model.selectedFolder == nil)
-                    .keyboardShortcut(.return, modifiers: .command)
-            }
-        }
-        .padding(.horizontal, 16)
-        .padding(.vertical, 12)
-        .background(StudioChrome.panel)
-    }
-
-    private var workspaceSwitch: some View {
-        HStack(spacing: 2) {
-            ForEach(StudioWorkspace.allCases) { workspace in
-                Button {
-                    model.workspace = workspace
-                } label: {
-                    Text(workspace.title)
-                        .font(.subheadline.weight(.medium))
-                        .padding(.horizontal, 12)
-                        .padding(.vertical, 6)
-                        .background(model.workspace == workspace ? Color.white.opacity(0.12) : Color.clear, in: Capsule())
-                        .foregroundStyle(model.workspace == workspace ? StudioChrome.text : StudioChrome.secondary)
+        .overlay {
+            if isDropTargeted {
+                ZStack {
+                    StudioChrome.canvas.opacity(0.6)
+                    RoundedRectangle(cornerRadius: 16, style: .continuous)
+                        .strokeBorder(StudioChrome.pick, style: StrokeStyle(lineWidth: 3, dash: [10, 6]))
+                        .padding(12)
+                    Label("Drop to open this folder", systemImage: "folder.badge.plus")
+                        .font(.title3.weight(.semibold))
                 }
-                .buttonStyle(.plain)
-                .disabled(model.result == nil)
+                .allowsHitTesting(false)
             }
         }
-        .padding(3)
-        .background(Color.white.opacity(0.04), in: Capsule())
+        .overlay(alignment: .bottom) {
+            if model.result != nil && !model.isRunning {
+                StatusToast(message: model.status)
+            }
+        }
+        .sheet(isPresented: $model.showingShortcuts) { ShortcutsSheet() }
     }
 
     @ViewBuilder
@@ -125,13 +112,19 @@ struct ContentView: View {
         } else {
             switch model.workspace {
             case .album:
-                LibraryWorkspace(model: model)
+                if model.albumMode == .loupe {
+                    CullWorkspace(model: model)
+                } else {
+                    LibraryWorkspace(model: model)
+                }
             case .confirm:
                 ConfirmWorkspace(model: model)
             case .look:
                 LookWorkspace(model: model)
             case .adjust:
                 AdjustWorkspace(model: model)
+            case .deliver:
+                DeliverWorkspace(model: model)
             }
         }
     }
@@ -139,26 +132,22 @@ struct ContentView: View {
     private var sidebar: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 18) {
-                sourceSection
+                Button { model.showingChooser = true } label: {
+                    Label(model.selectedFolder?.lastPathComponent ?? "Choose a folder", systemImage: "folder")
+                        .lineLimit(1)
+                }
+                .buttonStyle(.plain)
+                .font(.callout.weight(.medium))
                 if model.result != nil {
                     filterSection
                 }
-                if model.result == nil {
-                    settingsSection
-                } else {
-                    DisclosureGroup("Adjust and run again") {
-                        settingsSection
-                            .padding(.top, 8)
-                    }
-                    .font(.callout)
-                    cleanupSection
+                DisclosureGroup("Run again with new settings") {
+                    CurationSettingsForm(model: model)
+                        .padding(.top, 8)
+                    Button("Run again") { model.process() }
+                        .disabled(model.isRunning || model.selectedFolder == nil)
                 }
-                if let errorMessage = model.errorMessage {
-                    Text(errorMessage)
-                        .font(.caption)
-                        .foregroundStyle(StudioChrome.reject)
-                        .textSelection(.enabled)
-                }
+                .font(.callout)
             }
             .padding(14)
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -167,62 +156,49 @@ struct ContentView: View {
         .scrollIndicators(.hidden)
     }
 
-    private var sourceSection: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            StudioSectionHeader(title: "Shoot")
-            Button { model.showingChooser = true } label: {
-                HStack(spacing: 8) {
-                    Image(systemName: "folder")
-                    Text(model.selectedFolder?.lastPathComponent ?? "Choose a folder")
-                        .lineLimit(1)
-                    Spacer()
-                }
-                .padding(8)
-                .background(StudioChrome.elevated, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
-            }
-            .buttonStyle(.plain)
-            if model.isCountingPhotos {
-                Text("Counting photos…")
-                    .font(.caption)
-                    .foregroundStyle(StudioChrome.secondary)
-            } else if let estimate = model.shortlistEstimateText {
-                Text(estimate)
-                    .font(.caption)
-                    .foregroundStyle(StudioChrome.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-        }
-    }
-
     private var filterSection: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            StudioSectionHeader(title: "Library")
-            ForEach(LibraryFilter.allCases) { filter in
-                Button {
-                    model.filter = filter
-                    model.focusedID = model.visibleRows.first?.id
-                } label: {
-                    HStack(spacing: 8) {
-                        Image(systemName: filter.symbol)
-                            .frame(width: 16)
-                            .foregroundStyle(model.filter == filter ? StudioChrome.pick : StudioChrome.secondary)
-                        Text(filter.title)
-                        Spacer()
-                        Text("\(model.count(filter))")
-                            .font(.caption.monospacedDigit())
-                            .foregroundStyle(StudioChrome.tertiary)
-                    }
-                    .font(.callout)
-                    .padding(.horizontal, 8)
-                    .padding(.vertical, 6)
-                    .background(model.filter == filter ? Color.white.opacity(0.08) : Color.clear, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
-                }
-                .buttonStyle(.plain)
+        VStack(alignment: .leading, spacing: 14) {
+            VStack(alignment: .leading, spacing: 2) {
+                StudioSectionHeader(title: "Library")
+                ForEach(LibraryFilter.library) { filterButton($0) }
+            }
+            VStack(alignment: .leading, spacing: 2) {
+                StudioSectionHeader(title: "Your marks")
+                ForEach(LibraryFilter.marks) { filterButton($0) }
             }
         }
     }
 
-    private var settingsSection: some View {
+    private func filterButton(_ filter: LibraryFilter) -> some View {
+        Button {
+            model.filter = filter
+            model.focusedID = model.visibleRows.first?.id
+        } label: {
+            HStack(spacing: 8) {
+                Image(systemName: filter.symbol)
+                    .frame(width: 16)
+                    .foregroundStyle(model.filter == filter ? StudioChrome.pick : StudioChrome.secondary)
+                Text(filter.title)
+                Spacer()
+                Text("\(model.count(filter))")
+                    .font(.caption.monospacedDigit())
+                    .foregroundStyle(StudioChrome.tertiary)
+            }
+            .font(.callout)
+            .padding(.leading, filter.isIndented ? 18 : 0)
+            .padding(.horizontal, 8)
+            .padding(.vertical, 6)
+            .background(model.filter == filter ? Color.white.opacity(0.08) : Color.clear, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+        }
+        .buttonStyle(.plain)
+    }
+
+}
+
+struct CurationSettingsForm: View {
+    @ObservedObject var model: PhotoEngineViewModel
+
+    var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             labeledMenu("Occasion") {
                 Picker("Occasion", selection: $model.mode) {
@@ -234,11 +210,7 @@ struct ContentView: View {
                     ForEach(CullingAggressiveness.allCases, id: \.self) { Text($0.displayName).tag($0) }
                 }
             }
-            Text(cullDescription)
-                .font(.caption2)
-                .foregroundStyle(StudioChrome.tertiary)
-                .fixedSize(horizontal: false, vertical: true)
-            Text(model.mode.cullHint)
+            Text("\(cullDescription) \(model.mode.cullHint)")
                 .font(.caption2)
                 .foregroundStyle(StudioChrome.tertiary)
                 .fixedSize(horizontal: false, vertical: true)
@@ -252,41 +224,6 @@ struct ContentView: View {
                 captionSlider("Keep \(model.targetCountInt)", value: $model.targetCount, range: 5...150, step: 1)
             case .percentage:
                 captionSlider("Keep \(model.keepPercentageInt)%", value: $model.keepPercentage, range: 5...90, step: 1)
-            }
-            labeledMenu("Look") {
-                Picker("Look", selection: $model.style) {
-                    ForEach(StylePreset.allCases, id: \.self) { Text($0.displayName).tag($0) }
-                }
-            }
-            Text("One look for the whole album.")
-                .font(.caption2)
-                .foregroundStyle(StudioChrome.tertiary)
-            labeledMenu("Export") {
-                Picker("Export", selection: $model.exportPreset) {
-                    ForEach(ExportPreset.allCases, id: \.self) { Text($0.displayName).tag($0) }
-                }
-            }
-        }
-    }
-
-    private var cleanupSection: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            StudioSectionHeader(title: "Duplicates")
-            if let report = model.cleanupReport {
-                Text("Moved \(report.movedPhotoIDs.count) exact copies to Trash.")
-                    .font(.caption)
-                    .foregroundStyle(StudioChrome.secondary)
-            } else if let plan = model.cleanupPlan {
-                Text("\(plan.candidates.count) exact copies · \(studioByteCount(plan.estimatedBytes))")
-                    .font(.caption)
-                    .foregroundStyle(StudioChrome.secondary)
-                Button("Move exact copies to Trash", role: .destructive) { confirmingCleanup = true }
-                    .disabled(plan.candidates.isEmpty)
-            } else {
-                Text("Sources stay where they are until you ask.")
-                    .font(.caption)
-                    .foregroundStyle(StudioChrome.tertiary)
-                Button("Review exact copies") { model.prepareCleanup() }
             }
         }
     }
@@ -320,26 +257,98 @@ struct ContentView: View {
     }
 }
 
+private struct StepNavigator: View {
+    @ObservedObject var model: PhotoEngineViewModel
+
+    var body: some View {
+        HStack(spacing: 8) {
+            ForEach(Array(StudioWorkspace.steps.enumerated()), id: \.element) { index, step in
+                if index > 0 {
+                    Rectangle()
+                        .fill(StudioChrome.hairline)
+                        .frame(width: 20, height: 1)
+                }
+                Button {
+                    model.workspace = step
+                } label: {
+                    HStack(spacing: 6) {
+                        ZStack {
+                            Circle()
+                                .fill(fill(for: step))
+                                .frame(width: 18, height: 18)
+                            if model.isStepDone(step) && model.workspace != step {
+                                Image(systemName: "checkmark")
+                                    .font(.system(size: 9, weight: .heavy))
+                                    .foregroundStyle(.black)
+                            } else {
+                                Text("\(index + 1)")
+                                    .font(.system(size: 10, weight: .bold))
+                                    .foregroundStyle(model.workspace == step ? .black : StudioChrome.secondary)
+                            }
+                        }
+                        Text(step.title)
+                            .font(.subheadline.weight(.medium))
+                            .foregroundStyle(model.workspace == step ? StudioChrome.text : StudioChrome.secondary)
+                        if step == .confirm, !model.pendingConfirmations.isEmpty {
+                            Text("\(model.pendingConfirmations.count)")
+                                .font(.caption2.weight(.bold).monospacedDigit())
+                                .padding(.horizontal, 5)
+                                .padding(.vertical, 1)
+                                .background(StudioChrome.pick.opacity(0.25), in: Capsule())
+                        }
+                    }
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 4)
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+            }
+        }
+    }
+
+    private func fill(for step: StudioWorkspace) -> Color {
+        if model.workspace == step { return StudioChrome.pick }
+        if model.isStepDone(step) { return Color.white.opacity(0.75) }
+        return Color.white.opacity(0.10)
+    }
+}
+
 private struct WelcomeView: View {
     @ObservedObject var model: PhotoEngineViewModel
 
     var body: some View {
-        VStack(spacing: 28) {
-            Spacer()
+        ScrollView {
+            VStack(spacing: 28) {
+                if let folder = model.selectedFolder {
+                    ready(folder)
+                } else {
+                    intro
+                }
+                if !model.recentFolders.isEmpty {
+                    recent
+                }
+            }
+            .padding(40)
+            .frame(maxWidth: .infinity)
+        }
+        .background(StudioChrome.canvas)
+    }
+
+    private var intro: some View {
+        VStack(spacing: 24) {
             VStack(spacing: 10) {
                 Text("We cull it.\nYou confirm the close calls.")
-                    .font(.system(size: 40, weight: .semibold, design: .serif))
+                    .font(StudioType.hero)
                     .multilineTextAlignment(.center)
                 Text("Drop a folder. Photocore keeps the strong frames, hides the rest, and only asks when two photos are actually close.")
-                    .font(.body)
                     .foregroundStyle(StudioChrome.secondary)
                     .multilineTextAlignment(.center)
                     .frame(maxWidth: 480)
             }
             HStack(spacing: 18) {
-                welcomeStep("1", "Run", "Bursts collapse. A look is applied to every keeper.")
+                welcomeStep("1", "Run", "Bursts collapse. Blurry and blank frames drop out.")
                 welcomeStep("2", "Confirm", "A short queue of close calls. Return keeps the suggestion.")
-                welcomeStep("3", "Hand off", "Finished JPEGs, plus stars and flags Lightroom can read.")
+                welcomeStep("3", "Deliver", "Finished JPEGs with stars and labels Lightroom reads.")
             }
             VStack(spacing: 8) {
                 Button("Choose Folder…") { model.showingChooser = true }
@@ -350,11 +359,83 @@ private struct WelcomeView: View {
                     .font(.caption)
                     .foregroundStyle(StudioChrome.tertiary)
             }
-            Spacer()
         }
-        .padding(32)
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .background(StudioChrome.canvas)
+        .padding(.top, 40)
+    }
+
+    private func ready(_ folder: URL) -> some View {
+        VStack(alignment: .leading, spacing: 18) {
+            HStack(spacing: 10) {
+                Image(systemName: "folder.fill")
+                    .font(.title2)
+                    .foregroundStyle(StudioChrome.pick)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(folder.lastPathComponent)
+                        .font(StudioType.display)
+                    Text(countLine)
+                        .foregroundStyle(model.folderHasNoPhotos ? StudioChrome.reject : StudioChrome.secondary)
+                }
+            }
+            if !model.folderHasNoPhotos {
+                CurationSettingsForm(model: model)
+                Button {
+                    model.process()
+                } label: {
+                    Text(curateTitle)
+                        .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(.borderedProminent)
+                .tint(StudioChrome.pick)
+                .controlSize(.large)
+                .keyboardShortcut(.return, modifiers: .command)
+                .disabled(model.isCountingPhotos)
+            }
+            Button("Choose a different folder…") { model.showingChooser = true }
+                .buttonStyle(.link)
+        }
+        .padding(24)
+        .frame(maxWidth: 520)
+        .background(StudioChrome.panel, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+        .padding(.top, 40)
+    }
+
+    private var countLine: String {
+        if model.isCountingPhotos { return "Counting photos…" }
+        if model.folderHasNoPhotos { return "No JPEG, HEIC, or RAW photos in this folder." }
+        return model.shortlistEstimateText ?? ""
+    }
+
+    private var curateTitle: String {
+        guard let count = model.sourcePhotoCount, count > 0 else { return "Curate" }
+        return "Curate \(count.formatted()) photos"
+    }
+
+    private var recent: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            StudioSectionHeader(title: "Recent")
+            ForEach(model.recentFolders, id: \.self) { url in
+                Button {
+                    model.selectFolder(url)
+                } label: {
+                    HStack {
+                        Image(systemName: "folder")
+                            .foregroundStyle(StudioChrome.secondary)
+                        Text(url.lastPathComponent)
+                        Spacer()
+                        Text(url.deletingLastPathComponent().path.replacingOccurrences(of: NSHomeDirectory(), with: "~"))
+                            .font(.caption)
+                            .foregroundStyle(StudioChrome.tertiary)
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+                    }
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 7)
+                    .background(StudioChrome.elevated, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+                }
+                .buttonStyle(.plain)
+            }
+        }
+        .frame(maxWidth: 520)
     }
 
     private func welcomeStep(_ number: String, _ title: String, _ detail: String) -> some View {
@@ -389,7 +470,7 @@ private struct ProcessingView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 22) {
             Text("Working through the shoot")
-                .font(.system(size: 28, weight: .semibold, design: .serif))
+                .font(StudioType.display)
             Text(model.status)
                 .foregroundStyle(StudioChrome.secondary)
             if let progress = model.progress, progress.total > 0 {
@@ -398,6 +479,18 @@ private struct ProcessingView: View {
             } else {
                 ProgressView()
                     .controlSize(.small)
+            }
+            if let progress = model.progress, progress.total > 0 {
+                HStack {
+                    Text("\(progress.completed.formatted()) of \(progress.total.formatted())")
+                        .monospacedDigit()
+                    Spacer()
+                    if let eta = etaText {
+                        Text(eta)
+                    }
+                }
+                .font(.caption)
+                .foregroundStyle(StudioChrome.secondary)
             }
             VStack(alignment: .leading, spacing: 10) {
                 ForEach(Array(stages.enumerated()), id: \.offset) { index, stage in
@@ -411,11 +504,22 @@ private struct ProcessingView: View {
                     .font(.callout)
                 }
             }
-            Spacer()
+            Button("Cancel") { model.cancel() }
         }
         .padding(36)
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .frame(maxWidth: 560, alignment: .leading)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(StudioChrome.canvas)
+    }
+
+    private var etaText: String? {
+        guard let progress = model.progress, progress.stage == .analyzing,
+              progress.completed >= 5, progress.total > progress.completed,
+              let started = model.stageStartedAt else { return nil }
+        let elapsed = Date().timeIntervalSince(started)
+        let remaining = elapsed / Double(progress.completed) * Double(progress.total - progress.completed)
+        let text = Duration.seconds(remaining).formatted(.units(allowed: [.hours, .minutes, .seconds], width: .wide, maximumUnitCount: 1))
+        return "About \(text) left"
     }
 
     private var currentIndex: Int {
@@ -433,48 +537,52 @@ private struct ProcessingView: View {
     }
 }
 
-private struct ExportSheet: View {
-    @ObservedObject var model: PhotoEngineViewModel
-    var writeBesideOriginals: () -> Void
-    @Environment(\.dismiss) private var dismiss
+private struct StatusToast: View {
+    let message: String
+    @State private var visible = false
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 16) {
-            Text("Hand this shoot off")
-                .font(.title2.weight(.semibold))
-            Text("\(model.count(.picks)) AI picks · \(model.count(.myPicks)) of your picks · \(model.count(.trash)) trash · \(model.count(.rejected)) rejected. Stars, colors, and flags are written as XMP. Image pixels stay untouched.")
-                .foregroundStyle(StudioChrome.secondary)
-                .fixedSize(horizontal: false, vertical: true)
-            VStack(alignment: .leading, spacing: 8) {
-                Button("Pack keepers for Lightroom") {
-                    model.prepareHandoffPackage()
-                    dismiss()
-                }
-                .buttonStyle(.borderedProminent)
-                .tint(StudioChrome.pick)
-                Button("Save sidecars in the export folder") {
-                    model.writeSidecars(besideOriginals: false)
-                    dismiss()
-                }
-                Button("Save sidecars next to the originals…") {
-                    dismiss()
-                    writeBesideOriginals()
-                }
-                Button("Reveal rendered JPEGs") { model.revealExports() }
-            }
-            Text("Pack keepers writes finished JPEGs and XMP into handoff/01-keepers. Lightroom reads Rating and Label from the sidecar. Pick and reject become Photocore Pick / Photocore Reject keywords.")
-                .font(.caption)
-                .foregroundStyle(StudioChrome.tertiary)
-                .fixedSize(horizontal: false, vertical: true)
-            HStack {
-                Spacer()
-                Button("Done") { dismiss() }
-                    .keyboardShortcut(.cancelAction)
+        Group {
+            if visible {
+                Text(message)
+                    .font(.callout)
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 8)
+                    .background(.ultraThinMaterial, in: Capsule())
+                    .overlay(Capsule().strokeBorder(StudioChrome.hairline))
+                    .transition(.move(edge: .bottom).combined(with: .opacity))
             }
         }
-        .padding(24)
-        .frame(width: 460)
-        .background(StudioChrome.panel)
+        .padding(.bottom, 18)
+        .animation(.easeOut(duration: 0.2), value: visible)
+        .task(id: message) {
+            visible = true
+            try? await Task.sleep(for: .seconds(3))
+            visible = false
+        }
+        .allowsHitTesting(false)
+    }
+}
+
+private struct ErrorBanner: View {
+    let message: String
+    let dismiss: () -> Void
+
+    var body: some View {
+        HStack(alignment: .firstTextBaseline, spacing: 10) {
+            Image(systemName: "exclamationmark.triangle.fill")
+                .foregroundStyle(StudioChrome.reject)
+            Text(message)
+                .textSelection(.enabled)
+                .fixedSize(horizontal: false, vertical: true)
+            Spacer()
+            Button("Dismiss", action: dismiss)
+                .buttonStyle(.borderless)
+        }
+        .font(.callout)
+        .padding(.horizontal, 16)
+        .padding(.vertical, 10)
+        .background(StudioChrome.reject.opacity(0.14))
     }
 }
 
@@ -495,27 +603,20 @@ private struct CullKeyCommands: View {
             }
             key(.upArrow) { model.focusSibling(offset: -1) }
             key(.downArrow) { model.focusSibling(offset: 1) }
-            key("p") {
-                if model.workspace == .confirm {
-                    if let moment = model.currentConfirmation, let focused = model.focusedID, focused != moment.suggestedID {
-                        model.useConfirmationCandidate(focused)
-                    } else {
-                        model.acceptSuggestion()
-                    }
-                } else {
-                    model.flagFocused(.pick, advance: true)
-                }
-            }
-            key("x") {
-                if model.workspace == .confirm { model.skipConfirmation() }
-                else { model.flagFocused(.reject, advance: true) }
-            }
+            key("p") { model.pressPick() }
+            key("x") { model.pressReject() }
             key("u") { model.flagFocused(.unflagged, advance: false) }
             key("z") { model.undoMark() }
-            key("c") { model.workspace = .confirm }
-            key("l") { model.workspace = .look }
-            key("d") { model.openAdjust() }
-            key("s") { model.toggleSurvey() }
+            key("s") {
+                if model.workspace == .album, model.albumMode == .loupe { model.toggleSurvey() }
+            }
+            key(.space) { model.toggleLoupe() }
+            key("g") {
+                if model.workspace == .album {
+                    model.albumMode = .grid
+                    model.surveying = false
+                }
+            }
             key("f") { model.cycleLoupeZoom() }
             key("e") { model.zoomToEyes() }
             key("0") { model.setStars(0) }

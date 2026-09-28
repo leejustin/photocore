@@ -9,13 +9,21 @@ enum LoupeZoom: String {
     case face
 }
 
+enum AlbumMode: String {
+    case grid
+    case loupe
+}
+
 enum StudioWorkspace: String, CaseIterable, Identifiable {
     case album
     case confirm
     case look
     case adjust
+    case deliver
 
     var id: String { rawValue }
+
+    static let steps: [StudioWorkspace] = [.confirm, .look, .deliver]
 
     var title: String {
         switch self {
@@ -23,53 +31,53 @@ enum StudioWorkspace: String, CaseIterable, Identifiable {
         case .confirm: "Confirm"
         case .look: "Look"
         case .adjust: "Adjust"
+        case .deliver: "Deliver"
         }
     }
 }
 
 enum LibraryFilter: String, CaseIterable, Identifiable {
-    case all
-    case picks
+    case album
     case alternates
-    case review
-    case closeHidden
-    case trash
-    case duplicates
-    case rejected
-    case myPicks
+    case needsLook
+    case hidden
+    case unusable
+    case all
+    case picked
     case starred
+
+    static let library: [LibraryFilter] = [.album, .alternates, .needsLook, .hidden, .unusable, .all]
+    static let marks: [LibraryFilter] = [.picked, .starred]
 
     var id: String { rawValue }
 
     var title: String {
         switch self {
-        case .all: "All photos"
-        case .picks: "AI picks"
+        case .album: "Album"
         case .alternates: "Alternates"
-        case .review: "Close calls"
-        case .closeHidden: "Hidden but close"
-        case .trash: "Technical trash"
-        case .duplicates: "Similar"
-        case .rejected: "Rejected"
-        case .myPicks: "My picks"
+        case .needsLook: "Needs a look"
+        case .hidden: "Hidden"
+        case .unusable: "Unusable"
+        case .all: "All photos"
+        case .picked: "Picked"
         case .starred: "Starred"
         }
     }
 
     var symbol: String {
         switch self {
-        case .all: "square.grid.2x2"
-        case .picks: "sparkles"
+        case .album: "photo.stack"
         case .alternates: "rectangle.on.rectangle"
-        case .review: "questionmark.circle"
-        case .closeHidden: "eye.slash"
-        case .trash: "trash"
-        case .duplicates: "square.on.square"
-        case .rejected: "xmark"
-        case .myPicks: "flag.fill"
+        case .needsLook: "questionmark.circle"
+        case .hidden: "eye.slash"
+        case .unusable: "exclamationmark.triangle"
+        case .all: "square.grid.2x2"
+        case .picked: "flag.fill"
         case .starred: "star.fill"
         }
     }
+
+    var isIndented: Bool { self == .unusable }
 }
 
 enum StudioChrome {
@@ -82,6 +90,14 @@ enum StudioChrome {
     static let tertiary = Color.white.opacity(0.38)
     static let pick = Color(red: 0.95, green: 0.76, blue: 0.34)
     static let reject = Color(red: 0.89, green: 0.34, blue: 0.31)
+    /// Keyboard/selection focus. Amber (`pick`) is reserved for picks and primary actions.
+    static let focus = Color.white.opacity(0.9)
+}
+
+enum StudioType {
+    static let hero = Font.system(size: 40, weight: .semibold, design: .serif)
+    static let display = Font.system(size: 28, weight: .semibold, design: .serif)
+    static let title = Font.system(size: 20, weight: .semibold, design: .serif)
 }
 
 extension ReviewColor {
@@ -100,11 +116,11 @@ extension ReviewColor {
 extension SelectionBucket {
     var displayName: String {
         switch self {
-        case .selected: "AI pick"
+        case .selected: "In album"
         case .protected: "Protected"
         case .alternate: "Alternate"
-        case .review: "Close call"
-        case .hidden: "Rejected"
+        case .review: "Needs a look"
+        case .hidden: "Hidden"
         }
     }
 }
@@ -144,6 +160,7 @@ final class ThumbnailCache: @unchecked Sendable {
 struct CachedThumbnail: View {
     let url: URL
     var maxPixelSize: Int = 360
+    var contentMode: ContentMode = .fit
 
     @State private var image: NSImage?
 
@@ -152,7 +169,7 @@ struct CachedThumbnail: View {
             if let image {
                 Image(nsImage: image)
                     .resizable()
-                    .aspectRatio(contentMode: .fit)
+                    .aspectRatio(contentMode: contentMode)
             } else {
                 ProgressView()
                     .controlSize(.small)

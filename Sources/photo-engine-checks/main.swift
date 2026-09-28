@@ -22,6 +22,7 @@ struct PhotoEngineChecks {
             ("Vision feature prints round-trip", visionFeaturePrintRoundTrip),
             ("catalog persists session records", catalogPersistsSession),
             ("Lightroom sidecars carry ratings", lightroomSidecarCarriesRatings),
+            ("sidecars never replace foreign XMP", sidecarsNeverReplaceForeignXMP),
             ("older edit recipes still decode", olderEditRecipesStillDecode),
             ("cleanup preview is conservative", cleanupPreviewIsConservative),
             ("import IDs and warnings", stableIDsAndImportWarnings),
@@ -308,6 +309,39 @@ struct PhotoEngineChecks {
         let unflagged = LightroomSidecar.document(for: PhotoReviewMark(photoID: PhotoID()))
         try expect(!unflagged.contains("xmp:Label"), "empty color was written as a label")
         try expect(!unflagged.contains("Photocore Pick") && !unflagged.contains("Photocore Reject"), "unflagged photo was given a keyword")
+    }
+
+    private static func sidecarsNeverReplaceForeignXMP() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("PhotoEngineChecks-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let foreign = root.appendingPathComponent("DSC0001.xmp")
+        let lightroomXML = "<x:xmpmeta xmlns:x=\"adobe:ns:meta/\" x:xmptk=\"Adobe XMP Core 7.0\"><crs:Exposure2012>+0.50</crs:Exposure2012></x:xmpmeta>"
+        try Data(lightroomXML.utf8).write(to: foreign)
+        let mark = PhotoReviewMark(photoID: PhotoID(), flag: .pick, stars: 3)
+
+        let first = try LightroomSidecar.writePreservingExisting(mark, named: "DSC0001", to: root)
+        if case .skippedExistingSidecar(let url) = first {
+            try expect(url.lastPathComponent == "DSC0001.xmp", "skipped the wrong sidecar")
+        } else {
+            try expect(false, "a Lightroom sidecar was replaced")
+        }
+        let untouched = try String(contentsOf: foreign, encoding: .utf8)
+        try expect(untouched == lightroomXML, "a Lightroom sidecar was modified")
+
+        let fresh = try LightroomSidecar.writePreservingExisting(mark, named: "DSC0002", to: root)
+        if case .written = fresh {} else { try expect(false, "a new sidecar was not written") }
+
+        let rewrite = try LightroomSidecar.writePreservingExisting(
+            PhotoReviewMark(photoID: PhotoID(), flag: .reject, stars: 1),
+            named: "DSC0002",
+            to: root
+        )
+        if case .written = rewrite {} else { try expect(false, "Photocore could not update its own sidecar") }
+        let updated = try String(contentsOf: root.appendingPathComponent("DSC0002.xmp"), encoding: .utf8)
+        try expect(updated.contains("xmp:Rating=\"1\""), "Photocore sidecar was not updated")
     }
 
     private static func olderEditRecipesStillDecode() throws {
