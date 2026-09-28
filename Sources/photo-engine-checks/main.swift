@@ -44,6 +44,7 @@ struct PhotoEngineChecks {
             ("focus ranking needs enough samples", focusRankingNeedsSamples),
             ("older recipes keep their rendering", olderRecipesKeepRendering),
             ("auto recipe enables enhancement", autoRecipeEnablesEnhancement),
+            ("exports are chronological", exportsAreChronological),
         ]
 
         for (name, check) in checks {
@@ -702,6 +703,25 @@ struct PhotoEngineChecks {
         try expect(recipe.exposure == 0, "exposure guess must be off when auto enhancement is on")
     }
 
+    private static func exportsAreChronological() throws {
+        let fixture = try FixtureDirectory()
+        defer { fixture.remove() }
+        // File names are reverse chronological; capture dates put a first.
+        try fixture.writeJPEG(name: "c.jpg", red: 0.2, date: Date(timeIntervalSince1970: 3_000))
+        try fixture.writeJPEG(name: "b.jpg", red: 0.5, date: Date(timeIntervalSince1970: 2_000))
+        try fixture.writeJPEG(name: "a.jpg", red: 0.8, date: Date(timeIntervalSince1970: 1_000))
+        var profile = ScoringProfile.default(for: .everyday)
+        profile.targetCount = 3
+        // The fixtures share a layout, so keep the visual threshold from collapsing them.
+        profile.nearDuplicateVisualDistance = 0.05
+        let result = try PhotoPipelineRunner().run(folder: fixture.source, outputDirectory: fixture.output, profile: profile)
+        let names = try FileManager.default.contentsOfDirectory(
+            at: result.runDirectory.appendingPathComponent("shortlist"),
+            includingPropertiesForKeys: nil
+        ).map(\.lastPathComponent).sorted()
+        try expect(names == ["001-a.jpg", "002-b.jpg", "003-c.jpg"], "exports were \(names), not capture order")
+    }
+
     private static func pruningIgnoresForeignFolders() throws {
         let fixture = try FixtureDirectory()
         defer { fixture.remove() }
@@ -760,7 +780,7 @@ private struct FixtureDirectory {
 
     func remove() { try? FileManager.default.removeItem(at: root) }
 
-    func writeJPEG(name: String, red: CGFloat, includeMetadata: Bool = false) throws {
+    func writeJPEG(name: String, red: CGFloat, includeMetadata: Bool = false, date: Date? = nil) throws {
         let width = 128
         let height = 128
         let context = try PhotoEngineChecks.require(
@@ -814,6 +834,15 @@ private struct FixtureDirectory {
                 kCGImagePropertyGPSLongitude: 122.0,
                 kCGImagePropertyGPSLongitudeRef: "W"
             ]
+        }
+        if let date {
+            let formatter = DateFormatter()
+            formatter.locale = Locale(identifier: "en_US_POSIX")
+            formatter.timeZone = TimeZone(secondsFromGMT: 0)
+            formatter.dateFormat = "yyyy:MM:dd HH:mm:ss"
+            var exif = properties[kCGImagePropertyExifDictionary] as? [CFString: Any] ?? [:]
+            exif[kCGImagePropertyExifDateTimeOriginal] = formatter.string(from: date)
+            properties[kCGImagePropertyExifDictionary] = exif
         }
         CGImageDestinationAddImage(destination, image, properties as CFDictionary)
         try PhotoEngineChecks.expect(CGImageDestinationFinalize(destination), "could not finalize fixture")
