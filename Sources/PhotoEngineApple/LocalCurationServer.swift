@@ -29,6 +29,27 @@ public struct WorkerSecurity: Sendable {
             .appendingPathComponent("Photocore/worker-runs", isDirectory: true)
         return WorkerSecurity(token: token, allowedRoots: roots, allowedOrigins: origins, outputRoot: outputRoot)
     }
+
+    /// Constant-time bearer check. Length mismatches fail closed without comparing the secret.
+    public func acceptsAuthorization(_ header: String?) -> Bool {
+        let expected = Array("Bearer \(token)".utf8)
+        let provided = Array((header ?? "").utf8)
+        guard expected.count == provided.count else { return false }
+        var difference: UInt8 = 0
+        for (left, right) in zip(expected, provided) { difference |= left ^ right }
+        return difference == 0
+    }
+
+    /// A readable directory strictly inside an allowed root, or nil.
+    public func sourceDirectory(at path: String) -> URL? {
+        let url = URL(fileURLWithPath: path, isDirectory: true)
+        let canonical = PhotoPipelineRunner.canonicalPath(url)
+        var isDirectory: ObjCBool = false
+        guard FileManager.default.fileExists(atPath: canonical, isDirectory: &isDirectory), isDirectory.boolValue else { return nil }
+        let prefixes = allowedRoots.map { PhotoPipelineRunner.canonicalPath($0) + "/" }
+        guard prefixes.contains(where: { canonical.hasPrefix($0) }) else { return nil }
+        return URL(fileURLWithPath: canonical, isDirectory: true)
+    }
 }
 
 public struct CurationJobRequest: Codable, Sendable, Equatable {
@@ -156,13 +177,7 @@ public final class LocalCurationServer: @unchecked Sendable {
     }
 
     private func tokenMatches(_ header: String?) -> Bool {
-        guard let token = security?.token else { return false }
-        let expected = Array("Bearer \(token)".utf8)
-        let provided = Array((header ?? "").utf8)
-        guard expected.count == provided.count else { return false }
-        var difference: UInt8 = 0
-        for (a, b) in zip(expected, provided) { difference |= a ^ b }
-        return difference == 0
+        security?.acceptsAuthorization(header) ?? false
     }
 
     private func accept(_ connection: NWConnection) {

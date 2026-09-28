@@ -342,6 +342,27 @@ public final class PhotoCatalog: @unchecked Sendable {
         return try snapshot(from: statement)
     }
 
+    public func sessionSettings(id: SessionID) throws -> ScoringProfile? {
+        var statement: OpaquePointer?
+        guard sqlite3_prepare_v2(database, "SELECT settings FROM sessions WHERE id = ?", -1, &statement, nil) == SQLITE_OK, let statement else {
+            throw CatalogError.statementFailed(String(cString: sqlite3_errmsg(database)))
+        }
+        defer { sqlite3_finalize(statement) }
+        bindText(statement, 1, id.description)
+        let step = sqlite3_step(statement)
+        if step == SQLITE_DONE { return nil }
+        guard step == SQLITE_ROW else {
+            throw CatalogError.statementFailed(String(cString: sqlite3_errmsg(database)))
+        }
+        return try decoder.decode(ScoringProfile.self, from: blobData(statement, column: 0))
+    }
+
+    public func deleteSession(_ id: SessionID) throws {
+        try execute("DELETE FROM custom_recipes WHERE session_id = ?", bind: { bindText($0, 1, id.description) })
+        try execute("DELETE FROM jobs WHERE session_id = ?", bind: { bindText($0, 1, id.description) })
+        try execute("DELETE FROM sessions WHERE id = ?", bind: { bindText($0, 1, id.description) })
+    }
+
     public func recordRunLocation(sessionID: SessionID, manifestURL: URL, runDirectory: URL) throws {
         try execute(
             "UPDATE sessions SET manifest_path = ?, run_directory = ? WHERE id = ?",

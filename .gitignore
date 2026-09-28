@@ -7,7 +7,6 @@
 # Release binaries go in dist/ (not ignored — copy after: swift build -c release)
 
 .swiftpm/
-Package.resolved
 
 # Xcode user and build state
 DerivedData/

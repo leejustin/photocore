@@ -9,6 +9,7 @@ public struct CurationSession: Sendable {
     public var marks: [PhotoID: PhotoReviewMark]
     public var customRecipes: [PhotoID: EditRecipe]
     public var lookSettings: LookSettings
+    public var skippedConfirmationIDs: Set<String> = []
 
     public init(result: PipelineResult, marks: [PhotoID: PhotoReviewMark] = [:], customRecipes: [PhotoID: EditRecipe] = [:], lookSettings: LookSettings) {
         self.result = result

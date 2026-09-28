@@ -1,0 +1,210 @@
+openapi: 3.0.3
+info:
+  title: Photocore
+  version: "2.0.0"
+  description: |
+    Local curation API. Bind is 127.0.0.1 only. Every route except GET /healthz
+    requires Authorization: Bearer. Clients never choose an output path.
+servers:
+  - url: http://127.0.0.1:8787
+paths:
+  /healthz:
+    get:
+      summary: Liveness
+      security: []
+      responses:
+        "200":
+          description: Process is up
+  /v2/readyz:
+    get:
+      summary: Catalog, disk, and Vision checks
+      responses:
+        "200":
+          description: Ready or not
+  /v2/openapi.yaml:
+    get:
+      summary: This contract
+      responses:
+        "200":
+          description: OpenAPI document
+  /v2/sessions:
+    get:
+      summary: Paginated session list
+      parameters:
+        - $ref: "#/components/parameters/limit"
+        - $ref: "#/components/parameters/cursor"
+      responses:
+        "200":
+          description: Session summaries
+    post:
+      summary: Start a curate job
+      responses:
+        "202":
+          description: Job
+  /v2/sessions/{sid}:
+    get:
+      summary: Session detail
+      parameters:
+        - $ref: "#/components/parameters/sid"
+      responses:
+        "200":
+          description: Session detail
+    delete:
+      summary: Delete a run directory Photocore created, and its catalog rows
+      parameters:
+        - $ref: "#/components/parameters/sid"
+      responses:
+        "204":
+          description: Deleted
+  /v2/sessions/{sid}/photos:
+    get:
+      summary: Photos in a set
+      parameters:
+        - $ref: "#/components/parameters/sid"
+        - name: set
+          in: query
+          schema:
+            type: string
+            enum: [album, alternates, needsLook, hidden, unusable, all]
+      responses:
+        "200":
+          description: Photo page
+  /v2/sessions/{sid}/photos/{pid}:
+    patch:
+      summary: Update a mark, bucket, or recipe
+      parameters:
+        - $ref: "#/components/parameters/sid"
+        - $ref: "#/components/parameters/pid"
+        - name: If-Match
+          in: header
+          required: true
+          schema: { type: string }
+      responses:
+        "200":
+          description: Updated photo
+        "412":
+          description: precondition_failed
+  /v2/sessions/{sid}/groups:
+    get:
+      responses:
+        "200":
+          description: Groups
+  /v2/sessions/{sid}/confirmations:
+    get:
+      responses:
+        "200":
+          description: Confirmation queue
+  /v2/sessions/{sid}/confirmations/{mid}/resolve:
+    post:
+      responses:
+        "200":
+          description: Updated confirmation queue
+  /v2/sessions/{sid}/look:
+    get:
+      responses:
+        "200":
+          description: Look settings
+    put:
+      responses:
+        "200":
+          description: Stored look settings
+  /v2/sessions/{sid}/deliveries:
+    post:
+      responses:
+        "202":
+          description: Deliver job
+  /v2/sessions/{sid}/deliveries/{jid}/files:
+    get:
+      responses:
+        "200":
+          description: Delivered files
+  /v2/media/{sid}/{pid}/thumb:
+    get:
+      responses:
+        "200":
+          description: JPEG thumbnail
+        "304":
+          description: Not modified
+  /v2/media/{sid}/{pid}/preview:
+    get:
+      parameters:
+        - name: size
+          in: query
+          schema: { type: integer, default: 1600 }
+      responses:
+        "200":
+          description: Rendered JPEG
+        "304":
+          description: Not modified
+  /v2/media/{sid}/deliveries/{jid}/{file}:
+    get:
+      responses:
+        "200":
+          description: Delivered JPEG
+        "206":
+          description: Range
+  /v2/looks:
+    get:
+      responses:
+        "200":
+          description: Built-in and imported looks
+    post:
+      responses:
+        "201":
+          description: Imported look
+  /v2/jobs:
+    get:
+      responses:
+        "200":
+          description: Jobs
+  /v2/jobs/{jid}:
+    get:
+      responses:
+        "200":
+          description: Job
+  /v2/jobs/{jid}/cancel:
+    post:
+      responses:
+        "202":
+          description: Job
+  /v2/jobs/{jid}/events:
+    get:
+      responses:
+        "200":
+          description: text/event-stream
+components:
+  parameters:
+    sid:
+      name: sid
+      in: path
+      required: true
+      schema: { type: string }
+    pid:
+      name: pid
+      in: path
+      required: true
+      schema: { type: string }
+    limit:
+      name: limit
+      in: query
+      schema: { type: integer, default: 50 }
+    cursor:
+      name: cursor
+      in: query
+      schema: { type: string }
+  securitySchemes:
+    bearer:
+      type: http
+      scheme: bearer
+  schemas:
+    Error:
+      type: object
+      properties:
+        error:
+          type: object
+          properties:
+            code: { type: string }
+            message: { type: string }
+            details: { type: object }
+security:
+  - bearer: []
