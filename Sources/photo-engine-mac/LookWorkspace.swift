@@ -109,6 +109,14 @@ struct LookWorkspace: View {
                     .foregroundStyle(StudioChrome.tertiary)
                     .frame(width: 32, alignment: .trailing)
             }
+            if model.lookSamplePhotos.contains(where: { $0.asset.metadata.format.isRawMaster && PhotoFormatSupport.companionJPEG(for: $0.asset.url) != nil }) {
+                Picker("Start from", selection: $model.renderBase) {
+                    Text("RAW").tag(RenderBase.raw)
+                    Text("Camera JPEG").tag(RenderBase.cameraJPEG)
+                }
+                .pickerStyle(.segmented)
+                .frame(width: 200)
+            }
             Spacer()
             Button("Import LUT…") { importingLUT = true }
             Button("Import XMP…") { importingXMP = true }

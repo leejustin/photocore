@@ -165,6 +165,12 @@ final class PhotoEngineViewModel: ObservableObject {
             lookIsApplied = false
         }
     }
+    @Published var renderBase: RenderBase = .raw {
+        didSet {
+            UserDefaults.standard.set(renderBase.rawValue, forKey: "PhotoEngine.renderBase")
+            lookIsApplied = false
+        }
+    }
     @Published var deliverParentFolder: URL = FileManager.default.homeDirectoryForCurrentUser
         .appendingPathComponent("Pictures", isDirectory: true)
         .appendingPathComponent("Photocore", isDirectory: true)
@@ -216,6 +222,9 @@ final class PhotoEngineViewModel: ObservableObject {
         }
         if defaults.object(forKey: "PhotoEngine.lookTemperature") != nil {
             lookTemperature = min(max(defaults.double(forKey: "PhotoEngine.lookTemperature"), -0.6), 0.6)
+        }
+        if let raw = defaults.string(forKey: "PhotoEngine.renderBase"), let value = RenderBase(rawValue: raw) {
+            renderBase = value
         }
         recentFolders = (defaults.stringArray(forKey: Self.recentFoldersKey) ?? [])
             .map { URL(fileURLWithPath: $0, isDirectory: true) }
@@ -285,6 +294,7 @@ final class PhotoEngineViewModel: ObservableObject {
         let sizingMode = sizingMode
         let keepPercentageInt = keepPercentageInt
         let targetCountInt = targetCountInt
+        let renderBase = renderBase
         let exportSpecification = ExportSpecification(preset: exportPreset)
         let outputURL = FileManager.default.homeDirectoryForCurrentUser
             .appendingPathComponent("PhotoEngine Exports", isDirectory: true)
@@ -330,6 +340,7 @@ final class PhotoEngineViewModel: ObservableObject {
                 profile.sizingMode = sizingMode
                 profile.keepPercentage = Double(keepPercentageInt)
                 profile.targetCount = targetCountInt
+                profile.renderBase = renderBase
                 let result = try runner.run(
                     folder: selectedFolder,
                     outputDirectory: outputURL,
@@ -619,7 +630,9 @@ final class PhotoEngineViewModel: ObservableObject {
         look.temperature += lookTemperature
         look.autoStraighten = autoStraightenLook
         let horizon: Double? = autoStraightenLook ? (horizonCache[photo.id] ?? nil) : nil
-        return look.recipe(for: photo, horizonDegrees: horizon)
+        var recipe = look.recipe(for: photo, horizonDegrees: horizon)
+        recipe.base = renderBase
+        return recipe
     }
 
     var effectiveLook: AlbumLook {

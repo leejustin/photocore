@@ -26,8 +26,18 @@ public enum PhotoFormatSupport {
         case "heif": return .heif
         case "dng": return .dng
         case let ext where rawExtensions.contains(ext): return .raw
-        default: return .unknown
+        default:         return .unknown
         }
+    }
+
+    /// The camera's own JPEG shot alongside a RAW master (same folder and file stem).
+    public static func companionJPEG(for rawURL: URL) -> URL? {
+        let stem = rawURL.deletingPathExtension()
+        for ext in ["JPG", "jpg", "JPEG", "jpeg"] {
+            let candidate = stem.appendingPathExtension(ext)
+            if FileManager.default.fileExists(atPath: candidate.path) { return candidate }
+        }
+        return nil
     }
 
     public static func shouldSkipImport(_ url: URL) -> Bool {

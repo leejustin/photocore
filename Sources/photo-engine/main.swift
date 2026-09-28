@@ -42,6 +42,13 @@ struct PhotoEngineCommand {
             let folder = URL(fileURLWithPath: arguments[1], isDirectory: true).standardizedFileURL
             let sheet = option(arguments, name: "--sheet").map { URL(fileURLWithPath: $0) }
             try Calibration.run(folder: folder, sheet: sheet)
+        case "compare-render":
+            guard arguments.count >= 2 else { throw PhotoEngineError.invalidArgument("compare-render requires a manifest path") }
+            let manifest = URL(fileURLWithPath: arguments[1])
+            let count = option(arguments, name: "--count").flatMap(Int.init) ?? 6
+            let sheet = option(arguments, name: "--sheet").map { URL(fileURLWithPath: $0) }
+                ?? URL(fileURLWithPath: "photocore-compare.jpg")
+            try RenderComparison.run(manifest: manifest, count: count, sheet: sheet)
         case "help", "--help", "-h":
             printUsage()
         default:
@@ -94,6 +101,14 @@ struct PhotoEngineCommand {
                 throw PhotoEngineError.invalidArgument("Style intensity must be a number between 0 and 1.")
             }
             profile.styleIntensity = intensity
+        }
+        if let rawBase = option(arguments, name: "--base") {
+            switch rawBase {
+            case "raw": profile.renderBase = .raw
+            case "camera": profile.renderBase = .cameraJPEG
+            default:
+                throw PhotoEngineError.invalidArgument("Unknown base '\(rawBase)'. Use raw or camera.")
+            }
         }
         let exportPreset: ExportPreset
         if let rawSize = option(arguments, name: "--size") {
@@ -227,8 +242,9 @@ struct PhotoEngineCommand {
 
         Usage:
           photo-engine catalog <folder>
-          photo-engine run <folder> [--profile everyday|groupEvent|trip|creative] [--cull gentle|balanced|highlights] [--target N | --keep-percent P] [--style natural|warm|vibrant|soft|blackAndWhite] [--intensity 0...1] [--size full|compact] [--output folder]
+          photo-engine run <folder> [--profile everyday|groupEvent|trip|creative] [--cull gentle|balanced|highlights] [--target N | --keep-percent P] [--style natural|warm|vibrant|soft|blackAndWhite] [--intensity 0...1] [--size full|compact] [--base raw|camera] [--output folder]
           photo-engine calibrate <folder> [--sheet out.jpg]
+          photo-engine compare-render <manifest.json> [--count 6] [--sheet out.jpg]
           photo-engine serve [--port 8787]
           photo-engine smoke-test
           photo-engine version

@@ -483,6 +483,7 @@ public struct ScoringProfile: Codable, Sendable, Equatable {
     /// A focus pull or a small reframe inside one second is still the same moment.
     public var momentVisualDistance: Double
     public var momentWindow: TimeInterval
+    public var renderBase: RenderBase
     public var rejection: RejectionPolicy
 
     public init(
@@ -498,6 +499,7 @@ public struct ScoringProfile: Codable, Sendable, Equatable {
         nearDuplicateVisualDistance: Double,
         momentVisualDistance: Double? = nil,
         momentWindow: TimeInterval = 3,
+        renderBase: RenderBase = .raw,
         maxBurstDuration: TimeInterval? = nil,
         aggressiveness: CullingAggressiveness = .balanced,
         style: StylePreset = .natural,
@@ -524,6 +526,7 @@ public struct ScoringProfile: Codable, Sendable, Equatable {
         self.nearDuplicateVisualDistance = nearDuplicateVisualDistance
         self.momentVisualDistance = momentVisualDistance ?? min(nearDuplicateVisualDistance + 0.12, 0.66)
         self.momentWindow = momentWindow
+        self.renderBase = renderBase
         self.rejection = rejection ?? .default(for: mode)
     }
 
@@ -578,7 +581,7 @@ public struct ScoringProfile: Codable, Sendable, Equatable {
         case mode, aggressiveness, style, styleIntensity, sizingMode, keepPercentage
         case sharpnessWeight, exposureWeight, faceWeight, aestheticWeight, diversityWeight
         case targetCount, burstWindow, maxBurstDuration
-        case nearDuplicateHammingDistance, nearDuplicateVisualDistance, momentVisualDistance, momentWindow
+        case nearDuplicateHammingDistance, nearDuplicateVisualDistance, momentVisualDistance, momentWindow, renderBase
         case rejection
     }
 
@@ -607,6 +610,7 @@ public struct ScoringProfile: Codable, Sendable, Equatable {
         momentVisualDistance = try container.decodeIfPresent(Double.self, forKey: .momentVisualDistance)
             ?? min(nearDuplicateVisualDistance + 0.12, 0.66)
         momentWindow = try container.decodeIfPresent(TimeInterval.self, forKey: .momentWindow) ?? 3
+        renderBase = try container.decodeIfPresent(RenderBase.self, forKey: .renderBase) ?? .raw
         rejection = try container.decodeIfPresent(RejectionPolicy.self, forKey: .rejection) ?? .default(for: mode)
     }
 
@@ -630,6 +634,7 @@ public struct ScoringProfile: Codable, Sendable, Equatable {
         try container.encode(nearDuplicateVisualDistance, forKey: .nearDuplicateVisualDistance)
         try container.encode(momentVisualDistance, forKey: .momentVisualDistance)
         try container.encode(momentWindow, forKey: .momentWindow)
+        try container.encode(renderBase, forKey: .renderBase)
         try container.encode(rejection, forKey: .rejection)
     }
 }
@@ -861,6 +866,13 @@ public struct Shortlist: Codable, Sendable, Equatable {
     }
 }
 
+public enum RenderBase: String, Codable, Sendable, CaseIterable {
+    /// Decode the RAW master with Core Image (falls back to the file itself for non-RAW).
+    case raw
+    /// Start from the camera's own JPEG shot alongside the RAW, when one exists.
+    case cameraJPEG
+}
+
 public struct EditRecipe: Codable, Sendable, Equatable {
     public var style: StylePreset
     public var styleIntensity: Double
@@ -880,6 +892,10 @@ public struct EditRecipe: Codable, Sendable, Equatable {
     public var straighten: Double
     /// Optional imported look (LUT / XMP preset) applied after the base recipe.
     public var albumLookID: String?
+    /// Apple's automatic tone, color, and face adjustments, applied before the look.
+    public var autoEnhance: Bool
+    /// RAW decode versus the camera JPEG shot alongside the RAW.
+    public var base: RenderBase
 
     public init(
         style: StylePreset = .natural,
@@ -894,7 +910,9 @@ public struct EditRecipe: Codable, Sendable, Equatable {
         tint: Double = 0,
         clarity: Double = 0,
         straighten: Double = 0,
-        albumLookID: String? = nil
+        albumLookID: String? = nil,
+        autoEnhance: Bool = false,
+        base: RenderBase = .raw
     ) {
         self.style = style
         self.styleIntensity = styleIntensity
@@ -909,11 +927,13 @@ public struct EditRecipe: Codable, Sendable, Equatable {
         self.clarity = clarity
         self.straighten = straighten
         self.albumLookID = albumLookID
+        self.autoEnhance = autoEnhance
+        self.base = base
     }
 
     private enum CodingKeys: String, CodingKey {
         case style, styleIntensity, exposure, contrast, saturation, highlights, shadows, sharpening
-        case temperature, tint, clarity, straighten, albumLookID
+        case temperature, tint, clarity, straighten, albumLookID, autoEnhance, base
     }
 
     public init(from decoder: Decoder) throws {
@@ -931,6 +951,27 @@ public struct EditRecipe: Codable, Sendable, Equatable {
         clarity = try container.decodeIfPresent(Double.self, forKey: .clarity) ?? 0
         straighten = try container.decodeIfPresent(Double.self, forKey: .straighten) ?? 0
         albumLookID = try container.decodeIfPresent(String.self, forKey: .albumLookID)
+        autoEnhance = try container.decodeIfPresent(Bool.self, forKey: .autoEnhance) ?? false
+        base = try container.decodeIfPresent(RenderBase.self, forKey: .base) ?? .raw
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(style, forKey: .style)
+        try container.encode(styleIntensity, forKey: .styleIntensity)
+        try container.encode(exposure, forKey: .exposure)
+        try container.encode(contrast, forKey: .contrast)
+        try container.encode(saturation, forKey: .saturation)
+        try container.encode(highlights, forKey: .highlights)
+        try container.encode(shadows, forKey: .shadows)
+        try container.encode(sharpening, forKey: .sharpening)
+        try container.encode(temperature, forKey: .temperature)
+        try container.encode(tint, forKey: .tint)
+        try container.encode(clarity, forKey: .clarity)
+        try container.encode(straighten, forKey: .straighten)
+        try container.encodeIfPresent(albumLookID, forKey: .albumLookID)
+        try container.encode(autoEnhance, forKey: .autoEnhance)
+        try container.encode(base, forKey: .base)
     }
 }
 
