@@ -1067,7 +1067,7 @@ public enum PhotoEngineError: LocalizedError, Sendable {
     case exportFailed(URL, String)
     case unsafeOutputDirectory(source: URL, output: URL)
 
-    public var errorDescription: String {
+    public var errorDescription: String? {
         switch self {
         case .invalidFolder(let url): "Not a readable folder: \(url.path)"
         case .unreadableImage(let url): "Could not read image: \(url.path)"
