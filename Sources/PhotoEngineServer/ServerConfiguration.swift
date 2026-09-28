@@ -17,10 +17,13 @@ public struct ServerConfiguration: Sendable {
         self.tokenWasGenerated = tokenWasGenerated
     }
 
-    public static func fromEnvironment(_ environment: [String: String] = ProcessInfo.processInfo.environment) -> ServerConfiguration {
+    public static func fromEnvironment(_ environment: [String: String] = ProcessInfo.processInfo.environment) throws -> ServerConfiguration {
         var token = environment["PHOTO_ENGINE_TOKEN"] ?? ""
         var generated = false
-        if token.isEmpty {
+        if let filePath = environment["PHOTO_ENGINE_TOKEN_FILE"], !filePath.isEmpty {
+            token = try tokenFromFile(URL(fileURLWithPath: filePath))
+            generated = false
+        } else if token.isEmpty {
             token = UUID().uuidString
             generated = true
         }
@@ -35,5 +38,32 @@ public struct ServerConfiguration: Sendable {
             mediaCacheDirectory: cache,
             tokenWasGenerated: generated
         )
+    }
+
+    /// Reads a token file. Creates a mode-600 file when it is missing.
+    private static func tokenFromFile(_ url: URL) throws -> String {
+        let fileManager = FileManager.default
+        if fileManager.fileExists(atPath: url.path) {
+            let token = try String(contentsOf: url, encoding: .utf8).trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !token.isEmpty else {
+                throw ServerConfigurationError.emptyTokenFile(url.path)
+            }
+            return token
+        }
+        try fileManager.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+        let token = UUID().uuidString
+        try Data(token.utf8).write(to: url, options: .atomic)
+        try fileManager.setAttributes([.posixPermissions: 0o600], ofItemAtPath: url.path)
+        return token
+    }
+}
+
+enum ServerConfigurationError: Error, CustomStringConvertible {
+    case emptyTokenFile(String)
+
+    var description: String {
+        switch self {
+        case .emptyTokenFile(let path): "PHOTO_ENGINE_TOKEN_FILE is empty: \(path)"
+        }
     }
 }

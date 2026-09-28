@@ -59,6 +59,24 @@ curl -X POST http://127.0.0.1:8787/v1/jobs \
 
 A hosted service can be this same binary on an Apple Silicon worker, with upload and accounts added in front. Vision stays on the Mac either way.
 
+The v2 API is `photocore-server`, bound to `127.0.0.1:8787`. Install it as a LaunchAgent so Vision and Core Image run in the logged-in user session (`outputs/deploy/com.photocore.server.plist`). `ProcessType` is `Interactive` so those frameworks stay at full priority. Do not install it as a LaunchDaemon.
+
+```bash
+cp .build/release/photocore-server /usr/local/bin/
+cp outputs/deploy/com.photocore.server.plist ~/Library/LaunchAgents/
+launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.photocore.server.plist
+```
+
+`PHOTO_ENGINE_TOKEN_FILE` points at a mode-600 file. If that file is missing, the server generates a token and creates it. The token is not printed when it comes from the file. `PHOTO_ENGINE_ALLOWED_ROOTS` is a colon-separated list of directories a `sourcePath` may live under.
+
+Expose the API on a tailnet, and only there:
+
+```bash
+tailscale serve --bg --https=443 http://127.0.0.1:8787
+```
+
+Put the frontend origin (the Tailscale MagicDNS name, or a dev server) in `PHOTO_ENGINE_ALLOWED_ORIGINS`. Do not bind the server to `0.0.0.0` or forward a router port.
+
 Each run is written beneath `<output>/runs/<timestamp>-<id>/`, so rerunning with a smaller target cannot leave stale JPEGs in the current shortlist. Analysis and export never modify source files. Camera, lens, exposure, and capture metadata are retained in exports while GPS and XMP location metadata are removed by default. The optional cleanup action is separate and only proposes verified byte-identical copies.
 
 `photo-engine-checks` is a fixture-driven regression executable that exercises grouping, bounded burst duration, deterministic selection, culling/style controls, Vision descriptor round-trips, durable catalog records, stable IDs, corrupt-file reporting, isolated outputs, metadata sanitization, warm-cache metrics, and unsafe output paths. It is deliberately runnable with the standalone Swift Command Line Tools installed on this machine; it can be migrated to XCTest/Swift Testing without changing the fixture coverage when the app moves into an Xcode project.

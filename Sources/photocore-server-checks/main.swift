@@ -9,6 +9,7 @@ import PhotoEngineServer
 @main
 struct ServerChecks {
     static func main() async throws {
+        try tokenFileIsPrivate()
         let root = FileManager.default.temporaryDirectory.appendingPathComponent("photocore-server-checks-\(UUID().uuidString)", isDirectory: true)
         let source = root.appendingPathComponent("shoot", isDirectory: true)
         let output = root.appendingPathComponent("output", isDirectory: true)
@@ -37,7 +38,21 @@ struct ServerChecks {
             try await exercise(port: port, token: token, source: source)
             group.cancelAll()
         }
-        print("All 8 server checks passed")
+        print("All 9 server checks passed")
+    }
+
+    private static func tokenFileIsPrivate() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("photocore-token-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let url = directory.appendingPathComponent("server-token")
+        let created = try ServerConfiguration.fromEnvironment(["PHOTO_ENGINE_TOKEN_FILE": url.path, "PHOTO_ENGINE_ALLOWED_ROOTS": directory.path])
+        try expect(created.tokenWasGenerated == false, "a file token was printed as a generated session token")
+        let text = try String(contentsOf: url, encoding: .utf8).trimmingCharacters(in: .whitespacesAndNewlines)
+        try expect(text == created.security.token && !text.isEmpty, "token file was not created")
+        let mode = try FileManager.default.attributesOfItem(atPath: url.path)[.posixPermissions] as? NSNumber
+        try expect(mode?.uint16Value == 0o600, "token file mode was \(mode?.uint16Value ?? 0)")
+        let again = try ServerConfiguration.fromEnvironment(["PHOTO_ENGINE_TOKEN_FILE": url.path, "PHOTO_ENGINE_ALLOWED_ROOTS": directory.path])
+        try expect(again.security.token == text, "existing token file was replaced")
     }
 
     private static func exercise(port: Int, token: String, source: URL) async throws {
