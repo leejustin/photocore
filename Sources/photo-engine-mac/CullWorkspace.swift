@@ -28,8 +28,8 @@ struct CullWorkspace: View {
                 filmstrip
             }
             inspector
-                .frame(width: 300)
-                .background(StudioChrome.panel)
+                .frame(width: 280)
+                .background(StudioChrome.canvas)
         }
         .background(Color.black)
         .task(id: "\(loupeURL?.path ?? "")|\(model.loupeZoom == .fit ? 1600 : 4096)|\(showEdited)") {
@@ -65,45 +65,32 @@ struct CullWorkspace: View {
                         model.albumMode = .grid
                         model.surveying = false
                     } label: {
-                        Label("Grid", systemImage: "square.grid.2x2")
+                        Text("Grid")
                     }
-                    .buttonStyle(.bordered)
-                    .controlSize(.small)
+                    .buttonStyle(StudioQuietButtonStyle())
                     .keyboardShortcut(.cancelAction)
                     if let row = model.focusedRow, let index = model.visibleRows.firstIndex(where: { $0.id == row.id }) {
                         Text("\(index + 1) of \(model.visibleRows.count)")
-                            .font(.caption.monospacedDigit().weight(.medium))
-                            .padding(.horizontal, 8)
-                            .padding(.vertical, 4)
-                            .background(.black.opacity(0.55), in: Capsule())
+                            .font(.caption.monospacedDigit())
+                            .foregroundStyle(StudioChrome.secondary)
                     }
                     Spacer()
                     if model.focusedRow.flatMap({ model.groupsByPhoto[$0.id] }) != nil {
                         Button("Survey") { model.toggleSurvey() }
-                            .buttonStyle(.bordered)
-                            .controlSize(.small)
+                            .buttonStyle(StudioQuietButtonStyle())
                     }
                     if model.focusedRow.flatMap({ model.primaryFaceBox(for: $0.id) }) != nil {
                         Button("Eyes") { model.zoomToEyes() }
-                            .buttonStyle(.bordered)
-                            .controlSize(.small)
+                            .buttonStyle(StudioQuietButtonStyle())
                     }
                     Button(model.loupeZoom == .fit ? "100%" : "Fit") { model.cycleLoupeZoom() }
-                        .buttonStyle(.bordered)
-                        .controlSize(.small)
+                        .buttonStyle(StudioQuietButtonStyle())
                     if model.focusedRow?.previewURL != nil {
                         Button(showEdited ? "Edited" : "Original") { showEdited.toggle() }
-                            .buttonStyle(.bordered)
-                            .controlSize(.small)
+                            .buttonStyle(StudioQuietButtonStyle())
                     }
                 }
                 Spacer()
-                Text("Space grid    ← → move    ↑ ↓ burst    P pick    X reject    S survey    F zoom    E eyes    1–5 stars    Z undo")
-                    .font(.caption2)
-                    .foregroundStyle(.white.opacity(0.72))
-                    .padding(.horizontal, 10)
-                    .padding(.vertical, 6)
-                    .background(.black.opacity(0.55), in: Capsule())
             }
             .padding(16)
         }
@@ -117,8 +104,7 @@ struct CullWorkspace: View {
                     .font(.headline)
                 Spacer()
                 Button("Close survey") { model.surveying = false }
-                    .buttonStyle(.bordered)
-                    .controlSize(.small)
+                    .buttonStyle(StudioQuietButtonStyle())
             }
             .padding(.horizontal, 18)
             .padding(.top, 14)
@@ -172,7 +158,7 @@ struct CullWorkspace: View {
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 8)
-        .background(StudioChrome.panel)
+        .background(StudioChrome.canvas)
     }
 
     private var filmstrip: some View {
@@ -221,7 +207,7 @@ struct CullWorkspace: View {
                             .textSelection(.enabled)
                         Text(row.bucket.displayName)
                             .font(.subheadline)
-                            .foregroundStyle(StudioChrome.pick)
+                            .foregroundStyle(StudioChrome.secondary)
                     }
 
                     HStack(spacing: 8) {
@@ -336,12 +322,11 @@ struct CullWorkspace: View {
 
     private func flagButton(_ title: String, system: String, active: Bool, tint: Color, action: @escaping () -> Void) -> some View {
         Button(action: action) {
-            Label(title, systemImage: system)
-                .font(.callout.weight(.semibold))
-                .frame(maxWidth: .infinity)
-                .padding(.vertical, 7)
-                .background(active ? tint : Color.white.opacity(0.06), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
-                .foregroundStyle(active && title == "Pick" ? Color.black : StudioChrome.text)
+            Text(title)
+                .font(.system(size: 13))
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.vertical, 4)
+                .foregroundStyle(active ? tint : StudioChrome.secondary)
         }
         .buttonStyle(.plain)
     }
@@ -358,13 +343,13 @@ struct CullWorkspace: View {
             .foregroundStyle(StudioChrome.secondary)
             GeometryReader { geo in
                 ZStack(alignment: .leading) {
-                    Capsule().fill(Color.white.opacity(0.08))
-                    Capsule()
-                        .fill(StudioChrome.pick)
+                    Rectangle().fill(Color.white.opacity(0.08))
+                    Rectangle()
+                        .fill(StudioChrome.text.opacity(0.72))
                         .frame(width: max(0, geo.size.width * CGFloat(min(max(value, 0), 1))))
                 }
             }
-            .frame(height: 4)
+            .frame(height: 2)
         }
     }
 
@@ -395,12 +380,10 @@ private struct SurveyCell: View {
                 VStack(alignment: .leading, spacing: 3) {
                     HStack {
                         if row.bucket == .selected || row.bucket == .protected {
-                            Text("AI")
-                                .font(.caption2.weight(.bold))
-                                .padding(.horizontal, 5)
-                                .padding(.vertical, 2)
-                                .background(StudioChrome.pick, in: Capsule())
-                                .foregroundStyle(.black)
+                            Text("Kept")
+                                .font(.system(size: 11))
+                                .foregroundStyle(StudioChrome.text)
+                                .shadow(color: .black.opacity(0.8), radius: 2, y: 1)
                         }
                         Spacer()
                         if mark.flag == .pick {
@@ -423,10 +406,10 @@ private struct SurveyCell: View {
                 .padding(10)
             }
             .aspectRatio(3 / 2, contentMode: .fit)
-            .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+            .clipShape(RoundedRectangle(cornerRadius: 2, style: .continuous))
             .overlay {
-                RoundedRectangle(cornerRadius: 10, style: .continuous)
-                    .strokeBorder(model.focusedID == row.id ? StudioChrome.focus : Color.white.opacity(0.08), lineWidth: model.focusedID == row.id ? 2 : 1)
+                RoundedRectangle(cornerRadius: 2, style: .continuous)
+                    .strokeBorder(model.focusedID == row.id ? StudioChrome.focus : Color.white.opacity(0.08), lineWidth: 1)
             }
         }
         .buttonStyle(.plain)

@@ -16,7 +16,7 @@ struct AdjustWorkspace: View {
             Rectangle().fill(StudioChrome.hairline).frame(width: 1)
             controls
                 .frame(width: 280)
-                .background(StudioChrome.panel)
+                .background(StudioChrome.canvas)
         }
         .background(StudioChrome.canvas)
         .onAppear {
@@ -69,7 +69,9 @@ struct AdjustWorkspace: View {
                 } else if model.focusedRow != nil {
                     ProgressView().controlSize(.small)
                 } else {
-                    ContentUnavailableView("Nothing focused", systemImage: "slider.horizontal.3", description: Text("Pick a keeper in the album, then open Adjust."))
+                    Text("Pick a keeper in the album, then open Adjust.")
+                        .font(.system(size: 13))
+                        .foregroundStyle(StudioChrome.secondary)
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -99,7 +101,7 @@ struct AdjustWorkspace: View {
             .padding(.horizontal, 18)
             .padding(.vertical, 10)
         }
-        .background(StudioChrome.panel)
+        .background(StudioChrome.canvas)
     }
 
     private var controls: some View {
@@ -120,21 +122,21 @@ struct AdjustWorkspace: View {
 
                 Divider().overlay(StudioChrome.hairline)
 
-                HStack(spacing: 8) {
+                HStack(spacing: 16) {
                     Button("Reset") { model.resetDevelopRecipe() }
                     Spacer()
-                    Button("Save JPEG") { model.renderFocusedEdit() }
-                        .buttonStyle(.borderedProminent)
-                        .tint(StudioChrome.pick)
+                    Button("Save a copy") { model.renderFocusedEdit() }
+                        .buttonStyle(StudioButtonStyle(primary: true))
                         .disabled(model.focusedRow == nil)
                 }
 
-                Text("Saves into ~/Pictures/Photocore/<shoot> edits. Source files stay untouched.")
+                Text("Saves a copy. The original file stays untouched.")
                     .font(.caption2)
                     .foregroundStyle(StudioChrome.tertiary)
                     .fixedSize(horizontal: false, vertical: true)
             }
             .padding(16)
+            .buttonStyle(StudioQuietButtonStyle())
         }
     }
 

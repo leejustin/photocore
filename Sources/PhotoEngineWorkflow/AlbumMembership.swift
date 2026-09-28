@@ -25,7 +25,7 @@ public struct AlbumSummary: Sendable, Equatable {
     }
 
     public var sentence: String {
-        "\(total) in · \(kept) in album · \(unusable) unusable · \(close) close"
+        "\(kept) kept from \(total)."
     }
 
     public static func make(rows: [CuratedRow], marks: [PhotoID: PhotoReviewMark], pendingConfirmations: Int) -> AlbumSummary {

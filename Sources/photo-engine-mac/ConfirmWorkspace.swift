@@ -27,21 +27,17 @@ struct ConfirmWorkspace: View {
 
     private func momentView(_ moment: ConfirmationMoment) -> some View {
         VStack(alignment: .leading, spacing: 14) {
-            summaryStrip
             HStack(alignment: .firstTextBaseline) {
-                VStack(alignment: .leading, spacing: 4) {
-                    Text(progressTitle)
-                        .font(.caption.weight(.semibold))
-                        .foregroundStyle(StudioChrome.pick)
-                    Text(moment.isChoice ? "Which frame should we keep?" : "Keep this one?")
-                        .font(StudioType.display)
-                    Text(model.suggestionExplanation(for: moment))
-                        .font(.body)
-                        .foregroundStyle(StudioChrome.secondary)
-                }
+                Text(progressTitle)
+                    .font(.system(size: 12))
+                    .foregroundStyle(StudioChrome.tertiary)
+                Text(model.suggestionExplanation(for: moment))
+                    .font(.system(size: 12))
+                    .foregroundStyle(StudioChrome.secondary)
+                    .lineLimit(1)
                 Spacer()
                 HStack(spacing: 8) {
-                    Button(model.loupeZoom == .face ? "Full frame" : "Check eyes") {
+                    Button(model.loupeZoom == .face ? "Full photo" : "Zoom to a face") {
                         model.loupeZoom = model.loupeZoom == .face ? .fit : .face
                     }
                     Button("Skip") { model.skipConfirmation() }
@@ -61,7 +57,7 @@ struct ConfirmWorkspace: View {
             } else if let row = model.row(for: moment.suggestedID) {
                 confirmPreview(for: row)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    .background(Color.black, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+                    .background(Color.black)
             }
 
             if showingRunnersUp {
@@ -88,51 +84,30 @@ struct ConfirmWorkspace: View {
             }
 
             HStack(spacing: 10) {
-                Button(moment.isChoice ? "Keep the suggestion" : "Keep it") {
+                Button(moment.isChoice ? "Keep this one" : "Keep it") {
                     model.acceptSuggestion()
                 }
-                .buttonStyle(.borderedProminent)
-                .tint(StudioChrome.pick)
+                .buttonStyle(StudioButtonStyle(primary: true))
                 .keyboardShortcut(.return, modifiers: [])
                 if let focused = model.focusedID, focused != moment.suggestedID, moment.candidateIDs.contains(focused) || moment.hiddenRunnerUpIDs.contains(focused) {
-                    Button("Use this frame") { model.useConfirmationCandidate(focused) }
+                    Button("Use this photo") { model.useConfirmationCandidate(focused) }
                 }
                 if !moment.isChoice {
                     Button("Drop it") { model.dropSuggestion() }
                 }
                 if !moment.hiddenRunnerUpIDs.isEmpty {
-                    Button(showingRunnersUp ? "Hide other frames" : "Show \(moment.hiddenRunnerUpIDs.count) other frames") {
+                    Button(showingRunnersUp ? "Hide other photos" : "Show \(moment.hiddenRunnerUpIDs.count) other photos") {
                         showingRunnersUp.toggle()
                     }
                 }
                 Spacer()
-                Text("Return keeps the suggestion · P keeps the selected frame · X drops · Esc skips · E checks eyes")
-                    .font(.caption)
-                    .foregroundStyle(StudioChrome.tertiary)
+                if model.pendingConfirmations.contains(where: \.isChoice) {
+                    Button("Let Photocore pick the duplicates") { model.acceptRemainingChoices() }
+                }
             }
         }
         .padding(22)
-    }
-
-    private var summaryStrip: some View {
-        let summary = model.albumSummary
-        return HStack(spacing: 16) {
-            summaryChip("\(summary.total)", "in")
-            summaryChip("\(summary.kept)", "kept")
-            summaryChip("\(summary.unusable)", "unusable")
-            summaryChip("\(summary.pending)", "for you")
-            Spacer()
-        }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 8)
-        .background(StudioChrome.elevated, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
-    }
-
-    private func summaryChip(_ value: String, _ label: String) -> some View {
-        HStack(spacing: 4) {
-            Text(value).font(.caption.weight(.semibold).monospacedDigit())
-            Text(label).font(.caption).foregroundStyle(StudioChrome.tertiary)
-        }
+        .buttonStyle(StudioQuietButtonStyle())
     }
 
     private func candidate(_ row: CuratedRow, moment: ConfirmationMoment) -> some View {
@@ -147,18 +122,16 @@ struct ConfirmWorkspace: View {
                     confirmPreview(for: row)
                     if suggested {
                         Text("Suggestion")
-                            .font(.caption2.weight(.bold))
-                            .padding(.horizontal, 6)
-                            .padding(.vertical, 3)
-                            .background(StudioChrome.pick, in: Capsule())
-                            .foregroundStyle(.black)
+                            .font(.system(size: 11))
+                            .foregroundStyle(StudioChrome.text)
+                            .shadow(color: .black.opacity(0.8), radius: 3, y: 1)
                             .padding(10)
                     }
                 }
-                .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+                .clipShape(RoundedRectangle(cornerRadius: 2, style: .continuous))
                 .overlay {
-                    RoundedRectangle(cornerRadius: 10, style: .continuous)
-                        .strokeBorder(focused ? StudioChrome.focus : Color.clear, lineWidth: 2)
+                    RoundedRectangle(cornerRadius: 2, style: .continuous)
+                        .strokeBorder(focused ? StudioChrome.focus : Color.white.opacity(0.08), lineWidth: 1)
                 }
                 VStack(alignment: .leading, spacing: 2) {
                     Text(row.sourceURL.lastPathComponent)
@@ -184,27 +157,27 @@ struct ConfirmWorkspace: View {
 
     private var finished: some View {
         VStack(spacing: 14) {
-            Text("Nothing else needs you.")
-                .font(StudioType.display)
+            Text("That's every close call.")
+                .font(.system(size: 22, weight: .regular))
             Text(model.albumSummary.sentence)
                 .foregroundStyle(StudioChrome.secondary)
                 .multilineTextAlignment(.center)
                 .frame(maxWidth: 440)
             if model.confirmationsBeyondCap > 0 {
-                Text("We showed you the 16 closest calls. \(model.confirmationsBeyondCap) more were clear enough to decide automatically.")
+                Text("The other \(model.confirmationsBeyondCap) were clear enough to decide automatically.")
                     .font(.caption)
                     .foregroundStyle(StudioChrome.tertiary)
             }
-            HStack(spacing: 10) {
-                Button("Choose the look") { model.workspace = .look }
-                    .buttonStyle(.borderedProminent)
-                    .tint(StudioChrome.pick)
-                Button("Browse the album") {
+            HStack(spacing: 16) {
+                Button("Choose a style") { model.workspace = .look }
+                    .buttonStyle(StudioButtonStyle(primary: true))
+                Button("See the album") {
                     model.workspace = .album
                     model.albumMode = .grid
                 }
             }
         }
+        .buttonStyle(StudioQuietButtonStyle())
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 

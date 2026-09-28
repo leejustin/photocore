@@ -47,6 +47,8 @@ Launch the Mac studio:
 
 ```bash
 swift run photo-engine-mac
+# or a real .app with icon (opens after build):
+./Scripts/package-app.sh
 ```
 
 After a run, Photocore opens **Confirm**: a short queue of moments where two frames are close or a keeper looks soft or blinky. Return keeps the suggestion. **Look** previews built-in looks, imported `.cube` LUTs or Lightroom `.xmp` presets live on your keepers. **Deliver** exports finished JPEGs into a new folder under `~/Pictures/Photocore`, with stars and color labels embedded for Lightroom. It can optionally write `.xmp` sidecars beside RAW/HEIC originals, and never replaces an existing sidecar. **Album** (⌘4) browses every photo; double-click or Space opens a large view with burst survey and eye zoom. **Adjust** (⌘D) offers basic sliders for one photo, and that edit is used on delivery. Technical misses (extreme blur, blank frames, unusable exposures, single-subject blinks) are hidden as *Unusable*. ⌘/ lists every shortcut.

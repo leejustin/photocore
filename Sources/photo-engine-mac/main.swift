@@ -11,11 +11,13 @@ struct PhotoEngineMacApp: App {
     @StateObject private var model = PhotoEngineViewModel()
 
     var body: some Scene {
-        WindowGroup("Photocore") {
+        WindowGroup {
             ContentView(model: model)
                 .frame(minWidth: 1100, minHeight: 720)
+                .navigationTitle(model.windowTitle)
         }
-        .windowToolbarStyle(.unified(showsTitle: false))
+        .windowStyle(.hiddenTitleBar)
+        .defaultSize(width: 1440, height: 900)
         .commands {
             CommandGroup(replacing: .newItem) {
                 Button("Choose Folder…") { model.showingChooser = true }
@@ -28,13 +30,13 @@ struct PhotoEngineMacApp: App {
                 .disabled(model.recentFolders.isEmpty)
             }
             CommandMenu("Go") {
-                Button("Confirm") { model.workspace = .confirm }
+                Button("Check") { model.workspace = .confirm }
                     .keyboardShortcut("1", modifiers: .command)
                     .disabled(model.result == nil)
-                Button("Look") { model.workspace = .look }
+                Button("Style") { model.workspace = .look }
                     .keyboardShortcut("2", modifiers: .command)
                     .disabled(model.result == nil)
-                Button("Deliver") { model.workspace = .deliver }
+                Button("Save") { model.workspace = .deliver }
                     .keyboardShortcut("3", modifiers: .command)
                     .disabled(model.result == nil)
                 Divider()
@@ -242,6 +244,13 @@ final class PhotoEngineViewModel: ObservableObject {
     var targetCountInt: Int { max(1, Int(targetCount.rounded())) }
     var keepPercentageInt: Int { max(5, min(90, Int(keepPercentage.rounded()))) }
 
+    var windowTitle: String {
+        if let name = selectedFolder?.lastPathComponent, !name.isEmpty {
+            return "Photocore — \(name)"
+        }
+        return "Photocore"
+    }
+
     var shortlistEstimateText: String? {
         guard let sourcePhotoCount, sourcePhotoCount > 0 else { return nil }
         switch sizingMode {
@@ -381,9 +390,9 @@ final class PhotoEngineViewModel: ObservableObject {
         progress = nil
         let summary = albumSummary
         if confirmations.isEmpty {
-            status = "\(summary.sentence) Choose a look when you are ready."
+            status = "\(summary.kept) photos kept. Choose a style when you're ready."
         } else {
-            status = "\(summary.sentence) \(confirmations.count) close moment\(confirmations.count == 1 ? "" : "s") to confirm."
+            status = "\(summary.kept) photos kept. \(confirmations.count) close call\(confirmations.count == 1 ? "" : "s") to check."
         }
         processingTask = nil
         lookIsApplied = false
@@ -864,6 +873,28 @@ final class PhotoEngineViewModel: ObservableObject {
         status = confirmationStatus
     }
 
+    /// Accepts the suggested frame in every remaining duplicate set. Single-photo questions stay in the queue.
+    func acceptRemainingChoices() {
+        let moments = pendingConfirmations.filter(\.isChoice)
+        guard !moments.isEmpty else { return }
+        performAsOneUndo {
+            for moment in moments {
+                let resolution = ConfirmationBuilder.resolution(for: moment, action: .accept, rows: rows)
+                for change in resolution.marks {
+                    updateMark(change.photoID) { $0.flag = change.flag }
+                }
+            }
+        }
+        let left = pendingConfirmations.count
+        if left == 0 {
+            status = moments.count == 1
+                ? "Kept the suggested frame."
+                : "Kept the suggested frame in \(moments.count) duplicate sets."
+        } else {
+            status = "Kept the suggested duplicates. \(left) still need a look."
+        }
+    }
+
     func focusConfirmation(offset: Int) {
         guard let moment = currentConfirmation else { return }
         let ids = moment.candidateIDs
@@ -874,7 +905,7 @@ final class PhotoEngineViewModel: ObservableObject {
 
     private var confirmationStatus: String {
         let left = pendingConfirmations.count
-        if left == 0 { return "All close calls confirmed." }
+        if left == 0 { return "All the close calls are settled." }
         return "\(left) close moment\(left == 1 ? "" : "s") left."
     }
 
@@ -1176,15 +1207,15 @@ final class PhotoEngineViewModel: ObservableObject {
         deliverProgress = nil
         lastDelivery = report
         status = report.sidecarsSkipped == 0
-            ? "Delivered \(report.photoCount) photos."
-            : "Delivered \(report.photoCount) photos. Left \(report.sidecarsSkipped) existing sidecars untouched."
+            ? "Saved \(report.photoCount) photos."
+            : "Saved \(report.photoCount) photos. Left \(report.sidecarsSkipped) existing files untouched."
     }
 
     private func noteDeliverFailure(_ error: Error) {
         isDelivering = false
         deliverProgress = nil
         errorMessage = error.localizedDescription
-        status = "Delivery stopped."
+        status = "Saving stopped."
     }
 
     private func stepFocus(_ offset: Int) {

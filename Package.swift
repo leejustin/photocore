@@ -27,7 +27,14 @@ let package = Package(
         .target(name: "PhotoEngineApple", dependencies: ["PhotoEngineCore", "PhotoEnginePersistence"]),
         .target(name: "PhotoEngineWorkflow", dependencies: ["PhotoEngineCore", "PhotoEnginePersistence", "PhotoEngineApple"]),
         .executableTarget(name: "photo-engine", dependencies: ["PhotoEngineApple", "PhotoEngineCore", "PhotoEngineWorkflow"]),
-        .executableTarget(name: "photo-engine-mac", dependencies: ["PhotoEngineApple", "PhotoEngineCore", "PhotoEngineWorkflow"]),
+        .executableTarget(
+            name: "photo-engine-mac",
+            dependencies: ["PhotoEngineApple", "PhotoEngineCore", "PhotoEngineWorkflow"],
+            resources: [
+                .copy("Resources/welcome-macro.jpg"),
+                .copy("Resources/AppIcon.png")
+            ]
+        ),
         .executableTarget(name: "photo-engine-checks", dependencies: ["PhotoEngineApple", "PhotoEngineCore", "PhotoEnginePersistence", "PhotoEngineWorkflow"]),
         .target(
             name: "PhotoEngineServer",

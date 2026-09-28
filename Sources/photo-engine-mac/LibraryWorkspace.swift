@@ -6,87 +6,56 @@ struct LibraryWorkspace: View {
     @ObservedObject var model: PhotoEngineViewModel
 
     private var columns: [GridItem] {
-        [GridItem(.adaptive(minimum: model.cellSize, maximum: model.cellSize + 48), spacing: 6)]
+        [GridItem(.adaptive(minimum: model.cellSize, maximum: model.cellSize + 48), spacing: 2)]
     }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            header
             if model.visibleRows.isEmpty {
-                ContentUnavailableView {
-                    Label("Nothing in \(model.filter.title.lowercased())", systemImage: model.filter.symbol)
-                } description: {
-                    Text("Try another set in the sidebar, or run again with a gentler cull.")
-                }
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                Text("Nothing in \(model.filter.title.lowercased()).")
+                    .font(StudioType.ui)
+                    .foregroundStyle(StudioChrome.secondary)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
                 ScrollViewReader { proxy in
                     ScrollView {
-                        LazyVGrid(columns: columns, spacing: 6) {
+                        LazyVGrid(columns: columns, spacing: 1) {
                             ForEach(model.visibleRows) { row in
                                 PhotoGridCell(model: model, row: row, mark: model.mark(for: row.id), isFocused: model.focusedID == row.id, isInAlbum: model.isInAlbum(row))
                                     .id(row.id)
                             }
                         }
-                        .padding(18)
+                        .padding(1)
                     }
                     .onChange(of: model.focusedID) { _, id in
                         guard let id else { return }
-                        withAnimation(.easeOut(duration: 0.15)) {
+                        withAnimation(StudioChrome.ease) {
                             proxy.scrollTo(id)
                         }
+                        prewarmAround(id)
+                    }
+                    .onAppear { prewarmAround(model.focusedID) }
+                    .onChange(of: model.filter) { _, _ in
+                        prewarmAround(model.visibleRows.first?.id)
                     }
                 }
             }
         }
-        .background(StudioChrome.canvas)
+        .background(StudioChrome.photo)
     }
 
-    private var header: some View {
-        HStack(alignment: .firstTextBaseline, spacing: 16) {
-            VStack(alignment: .leading, spacing: 3) {
-                Text(headline)
-                    .font(StudioType.title)
-                Text(subtitle)
-                    .font(.subheadline)
-                    .foregroundStyle(StudioChrome.secondary)
-            }
-            Spacer()
-            HStack(spacing: 8) {
-                Image(systemName: "square.grid.3x3")
-                    .foregroundStyle(StudioChrome.tertiary)
-                Slider(value: $model.cellSize, in: 120...260, step: 8)
-                    .frame(width: 120)
-            }
-            if !model.pendingConfirmations.isEmpty {
-                Button("Confirm \(model.pendingConfirmations.count)") { model.workspace = .confirm }
-                    .buttonStyle(.borderedProminent)
-                    .tint(StudioChrome.pick)
-            }
-        }
-        .padding(.horizontal, 18)
-        .padding(.vertical, 14)
-    }
-
-    private var headline: String {
-        if model.result != nil {
-            let summary = model.albumSummary
-            return "\(summary.kept) kept from \(summary.total)"
-        }
-        return "\(model.rows.count) photos"
-    }
-
-    private var subtitle: String {
-        var parts = [model.filter.title]
-        if model.result != nil {
-            let summary = model.albumSummary
-            parts.append("\(summary.unusable) unusable")
-            let waiting = summary.pending
-            parts.append(waiting == 0 ? "Nothing to confirm" : "\(waiting) to confirm")
-        }
-        parts.append(model.mode.displayName)
-        parts.append(model.aggressiveness.displayName)
-        return parts.joined(separator: "  ·  ")
+    private func prewarmAround(_ id: PhotoID?) {
+        let rows = model.visibleRows
+        guard !rows.isEmpty else { return }
+        let index = id.flatMap { focused in rows.firstIndex(where: { $0.id == focused }) } ?? 0
+        let start = max(0, index - 12)
+        let end = min(rows.count, index + 36)
+        let urls = rows[start..<end].map { $0.previewURL ?? $0.sourceURL }
+        ThumbnailCache.shared.prewarm(urls: urls, maxPixelSize: 480)
+        // Loupe-sized warm for the focused and next few.
+        let loupeEnd = min(rows.count, index + 6)
+        let loupeURLs = rows[index..<loupeEnd].map { $0.previewURL ?? $0.sourceURL }
+        ThumbnailCache.shared.prewarm(urls: loupeURLs, maxPixelSize: 1600)
     }
 }
 
@@ -110,10 +79,11 @@ private struct PhotoGridCell: View {
             .overlay(alignment: .topTrailing) { flagBadge.padding(6) }
             .overlay(alignment: .bottom) { marksBar }
             .aspectRatio(1, contentMode: .fit)
-            .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+            .clipShape(Rectangle())
             .overlay {
-                RoundedRectangle(cornerRadius: 8, style: .continuous)
-                    .strokeBorder(isFocused ? StudioChrome.focus : Color.clear, lineWidth: 2)
+                Rectangle()
+                    .strokeBorder(StudioChrome.focus, lineWidth: isFocused ? 1 : 0)
+                    .animation(StudioChrome.ease, value: isFocused)
             }
             .contentShape(Rectangle())
             .onTapGesture(count: 2) {
@@ -161,18 +131,16 @@ private struct PhotoGridCell: View {
                     Circle().fill(mark.color.swatch).frame(width: 8, height: 8)
                 }
             }
-            .padding(.horizontal, 8)
-            .padding(.vertical, 6)
-            .background(LinearGradient(colors: [.clear, .black.opacity(0.6)], startPoint: .top, endPoint: .bottom))
+            .padding(.horizontal, 6)
+            .padding(.vertical, 4)
         }
     }
 
     private func badge(_ symbol: String, tint: Color) -> some View {
         Image(systemName: symbol)
-            .font(.system(size: 10, weight: .bold))
+            .font(.system(size: 9, weight: .semibold))
             .foregroundStyle(tint)
-            .frame(width: 20, height: 20)
-            .background(.black.opacity(0.55), in: Circle())
+            .shadow(color: .black.opacity(0.85), radius: 2, y: 1)
     }
 
     @ViewBuilder

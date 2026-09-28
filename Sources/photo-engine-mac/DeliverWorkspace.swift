@@ -8,30 +8,26 @@ struct DeliverWorkspace: View {
     @ObservedObject var model: PhotoEngineViewModel
     @State private var choosingFolder = false
     @State private var confirmingCleanup = false
+    @State private var showCleanup = false
+    @State private var showLightroom = false
 
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 22) {
-                VStack(alignment: .leading, spacing: 4) {
-                    Text("Deliver")
-                        .font(StudioType.display)
-                    Text(summary)
-                        .foregroundStyle(StudioChrome.secondary)
-                }
+                Text(summary)
+                    .font(.system(size: 13))
+                    .foregroundStyle(StudioChrome.secondary)
                 outputCard
                 HStack {
                     Spacer()
-                    Button("Export \(model.deliverRows.count) photos") { model.deliver() }
-                        .buttonStyle(.borderedProminent)
-                        .tint(StudioChrome.pick)
-                        .controlSize(.large)
+                    Button("Save \(model.deliverRows.count) photos") { model.deliver() }
+                        .buttonStyle(StudioButtonStyle(primary: true))
                         .disabled(model.isDelivering || model.deliverRows.isEmpty)
                 }
                 if let progress = model.deliverProgress {
                     VStack(alignment: .leading, spacing: 6) {
                         ProgressView(value: Double(progress.done), total: Double(max(progress.total, 1)))
-                            .tint(StudioChrome.pick)
-                        Text("Exporting \(progress.done) of \(progress.total)")
+                        Text("Saving \(progress.done) of \(progress.total)")
                             .font(.caption.monospacedDigit())
                             .foregroundStyle(StudioChrome.secondary)
                     }
@@ -39,15 +35,20 @@ struct DeliverWorkspace: View {
                 if let report = model.lastDelivery, !model.isDelivering {
                     delivered(report)
                 }
-                DisclosureGroup("Tidy up the source folder") {
-                    cleanup
-                        .padding(.top, 8)
+                Button(showCleanup ? "Hide cleanup" : "Remove exact copies") {
+                    showCleanup.toggle()
                 }
-                .foregroundStyle(StudioChrome.secondary)
+                .buttonStyle(.plain)
+                .font(.system(size: 12))
+                .foregroundStyle(StudioChrome.tertiary)
+                if showCleanup {
+                    cleanup
+                }
             }
             .padding(28)
             .frame(maxWidth: 640, alignment: .leading)
             .frame(maxWidth: .infinity)
+            .buttonStyle(StudioQuietButtonStyle())
         }
         .background(StudioChrome.canvas)
         .fileImporter(isPresented: $choosingFolder, allowedContentTypes: [.folder]) { result in
@@ -59,18 +60,18 @@ struct DeliverWorkspace: View {
             Button("Move to Trash", role: .destructive) { model.executeCleanup() }
             Button("Cancel", role: .cancel) {}
         } message: {
-            Text("Only byte-identical copies with a verified retained photo are moved. Near-duplicates stay put.")
+            Text("Only identical copies of photos you kept are moved. Similar photos stay where they are.")
         }
     }
 
     private var summary: String {
         let look = model.selectedLook?.name ?? model.style.displayName
-        return "\(model.deliverRows.count) photos · Look: \(look) · \(model.exportPreset.displayName)"
+        return "\(model.deliverRows.count) photos · \(look) · \(sizeName(model.exportPreset))"
     }
 
     private var outputCard: some View {
         VStack(alignment: .leading, spacing: 14) {
-            StudioSectionHeader(title: "Output")
+            StudioSectionHeader(title: "Save to")
             HStack(alignment: .firstTextBaseline) {
                 Text("Folder")
                     .foregroundStyle(StudioChrome.secondary)
@@ -79,7 +80,7 @@ struct DeliverWorkspace: View {
                     Text(model.deliverParentFolder.path.replacingOccurrences(of: NSHomeDirectory(), with: "~"))
                         .lineLimit(1)
                         .truncationMode(.middle)
-                    Text("A new folder named after the shoot is created each time.")
+                    Text("Finished photos go in a new folder named after this set.")
                         .font(.caption)
                         .foregroundStyle(StudioChrome.tertiary)
                 }
@@ -91,43 +92,56 @@ struct DeliverWorkspace: View {
                     .foregroundStyle(StudioChrome.secondary)
                     .frame(width: 60, alignment: .leading)
                 Picker("Size", selection: $model.exportPreset) {
-                    ForEach(ExportPreset.allCases, id: \.self) { Text($0.displayName).tag($0) }
+                    Text("Full size").tag(ExportPreset.full)
+                    Text("For sharing").tag(ExportPreset.compact)
                 }
                 .pickerStyle(.segmented)
                 .labelsHidden()
                 .frame(width: 220)
                 Spacer()
             }
-            VStack(alignment: .leading, spacing: 2) {
-                Toggle("Also write Lightroom sidecars beside the originals", isOn: $model.deliverWritesSidecarsBesideOriginals)
-                    .toggleStyle(.checkbox)
-                Text("Stars, labels, and pick keywords as .xmp next to each RAW/HEIC. Existing .xmp files are never replaced.")
-                    .font(.caption)
-                    .foregroundStyle(StudioChrome.tertiary)
-                    .padding(.leading, 20)
-                    .fixedSize(horizontal: false, vertical: true)
+            Button(showLightroom ? "Hide Lightroom options" : "Lightroom options") {
+                showLightroom.toggle()
             }
-            Text("Stars and color labels are embedded in each exported JPEG. Lightroom reads them on import.")
-                .font(.caption)
-                .foregroundStyle(StudioChrome.tertiary)
-                .fixedSize(horizontal: false, vertical: true)
+            .buttonStyle(.plain)
+            .font(.system(size: 12))
+            .foregroundStyle(StudioChrome.tertiary)
+            if showLightroom {
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("Saved photos include star ratings. Lightroom can read them when you import the folder.")
+                        .font(.caption)
+                        .foregroundStyle(StudioChrome.tertiary)
+                        .fixedSize(horizontal: false, vertical: true)
+                    Toggle("Also write those ratings next to the original files", isOn: $model.deliverWritesSidecarsBesideOriginals)
+                        .toggleStyle(.checkbox)
+                    Text("Existing files next to the originals are never replaced.")
+                        .font(.caption)
+                        .foregroundStyle(StudioChrome.tertiary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
         }
-        .padding(16)
-        .background(StudioChrome.panel, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .padding(.vertical, 4)
+    }
+
+    private func sizeName(_ preset: ExportPreset) -> String {
+        switch preset {
+        case .full: "full size"
+        case .compact: "for sharing"
+        }
     }
 
     private func delivered(_ report: DeliveryReport) -> some View {
         HStack(spacing: 10) {
-            Image(systemName: "checkmark.circle.fill")
-                .foregroundStyle(StudioChrome.pick)
-            Text("Exported \(report.photoCount) photos to \(report.folder.lastPathComponent)")
+            Image(systemName: "checkmark")
+                .foregroundStyle(StudioChrome.text)
+            Text("Saved \(report.photoCount) photos to \(report.folder.lastPathComponent)")
             Spacer()
             Button("Show in Finder") {
                 NSWorkspace.shared.activateFileViewerSelecting([report.folder])
             }
         }
-        .padding(12)
-        .background(StudioChrome.elevated, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+        .padding(.vertical, 8)
     }
 
     @ViewBuilder
@@ -142,7 +156,7 @@ struct DeliverWorkspace: View {
                 Button("Move exact copies to Trash", role: .destructive) { confirmingCleanup = true }
                     .disabled(plan.candidates.isEmpty)
             } else {
-                Text("Finds byte-identical copies of photos you kept. Nothing moves until you confirm.")
+                Text("Finds identical copies of photos you kept. Nothing moves until you confirm.")
                     .font(.caption)
                     .foregroundStyle(StudioChrome.tertiary)
                 Button("Find exact copies") { model.prepareCleanup() }
