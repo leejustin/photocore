@@ -46,13 +46,13 @@ public final class PhotoFolderImporter: @unchecked Sendable {
         self.fileManager = fileManager
     }
 
-    public func importFolder(_ folder: URL, thumbnailMaxPixelSize: Int = 512) throws -> [ImportedPhoto] {
+    public func importFolder(_ folder: URL, thumbnailMaxPixelSize: Int = AppleAnalysisEngine.analysisPixelSize) throws -> [ImportedPhoto] {
         try importFolderReport(folder, thumbnailMaxPixelSize: thumbnailMaxPixelSize).photos
     }
 
     public func importFolderReport(
         _ folder: URL,
-        thumbnailMaxPixelSize: Int = 512,
+        thumbnailMaxPixelSize: Int = AppleAnalysisEngine.analysisPixelSize,
         shouldCancel: @Sendable () -> Bool = { false }
     ) throws -> ImportBatch {
         var isDirectory: ObjCBool = false
@@ -310,10 +310,13 @@ public enum PhotoThumbnailProvider {
 }
 
 public struct AppleAnalysisEngine: Sendable {
+    /// Long edge of the upright thumbnail Vision and focus measurement share.
+    public static let analysisPixelSize = 1024
+
     public init() {}
 
     public func analyze(asset: PhotoAsset, thumbnailData: Data? = nil) throws -> AnalysisSignals {
-        let thumbnail = try thumbnailData ?? ImageMetadataReader.thumbnailData(url: asset.url, maxPixelSize: 768)
+        let thumbnail = try thumbnailData ?? ImageMetadataReader.thumbnailData(url: asset.url, maxPixelSize: Self.analysisPixelSize)
         guard let imageSource = CGImageSourceCreateWithData(thumbnail as CFData, nil),
               let image = CGImageSourceCreateImageAtIndex(imageSource, 0, nil) else {
             throw PhotoEngineError.unreadableImage(asset.url)
@@ -326,7 +329,7 @@ public struct AppleAnalysisEngine: Sendable {
             contentHash = try SHA256Hasher.hash(url: asset.url)
         }
         let pixels = PixelStatistics(image: image)
-        let vision = try visionSignals(url: asset.url, orientation: asset.metadata.orientation)
+        let vision = try visionSignals(image: image)
         let subject = SubjectFocusAssessment(image: image, faces: vision.faces)
         var qualityFlags = subject.flags
         if vision.faces.count > 0 && vision.faceQuality < 0.35 {
@@ -372,13 +375,13 @@ public struct AppleAnalysisEngine: Sendable {
         )
     }
 
-    private func visionSignals(url: URL, orientation: Int) throws -> (featurePrint: Data?, faces: [FaceSignal], faceQuality: Double, aestheticScore: Double?, aestheticUtility: Bool?) {
+    private func visionSignals(image: CGImage) throws -> (featurePrint: Data?, faces: [FaceSignal], faceQuality: Double, aestheticScore: Double?, aestheticUtility: Bool?) {
         let featureRequest = VNGenerateImageFeaturePrintRequest()
         featureRequest.revision = VNGenerateImageFeaturePrintRequestRevision2
         let faceRequest = VNDetectFaceCaptureQualityRequest()
         faceRequest.revision = VNDetectFaceCaptureQualityRequestRevision3
         let landmarksRequest = VNDetectFaceLandmarksRequest()
-        let handler = VNImageRequestHandler(url: url, orientation: CGImagePropertyOrientation(exifOrientation: orientation), options: [:])
+        let handler = VNImageRequestHandler(cgImage: image, options: [:])
 
         var requests: [VNRequest] = [featureRequest, faceRequest, landmarksRequest]
         var aestheticsRequest: VNCalculateImageAestheticsScoresRequest?

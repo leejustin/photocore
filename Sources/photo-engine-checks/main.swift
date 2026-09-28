@@ -35,6 +35,9 @@ struct PhotoEngineChecks {
             ("pruning ignores folders Photocore did not create", pruningIgnoresForeignFolders),
             ("output inside source is rejected through symlinks", outputInsideSourceRejectedThroughSymlinks),
             ("engine errors have readable descriptions", engineErrorsAreReadable),
+            ("vision distance drives grouping", visionDistanceDrivesGrouping),
+            ("moment window uses the looser threshold", momentWindowUsesLooserThreshold),
+            ("legacy visual thresholds migrate", legacyVisualThresholdsMigrate),
         ]
 
         for (name, check) in checks {
@@ -246,6 +249,7 @@ struct PhotoEngineChecks {
         var highlights = ScoringProfile.default(for: .everyday)
         highlights.apply(aggressiveness: .highlights)
         try expect(gentle.nearDuplicateHammingDistance < highlights.nearDuplicateHammingDistance, "culling presets did not change duplicate strictness")
+        try expect(gentle.nearDuplicateVisualDistance < highlights.nearDuplicateVisualDistance, "culling presets did not change visual strictness")
         try expect(gentle.maxBurstDuration >= gentle.burstWindow, "gentle burst bounds became invalid")
 
         let photo = analyzed(index: 0, hash: "style", perceptualHash: 0, date: nil)
@@ -577,6 +581,58 @@ struct PhotoEngineChecks {
     private static func jpegCount(in directory: URL) throws -> Int {
         try FileManager.default.contentsOfDirectory(at: directory, includingPropertiesForKeys: nil)
             .filter { $0.pathExtension.lowercased() == "jpg" }.count
+    }
+
+    /// Fixture feature prints are nil; give each photo a fake one so the provider is consulted.
+    private static func withFakePrint(_ photo: AnalyzedPhoto, _ tag: UInt8) -> AnalyzedPhoto {
+        var signals = photo.signals
+        signals.featurePrint = Data([tag])
+        return AnalyzedPhoto(asset: photo.asset, signals: signals)
+    }
+
+    private static func visionDistanceDrivesGrouping() throws {
+        let date = Date(timeIntervalSince1970: 10_000)
+        let photos = [
+            withFakePrint(analyzed(index: 0, hash: "a", perceptualHash: 0, date: date), 0),
+            withFakePrint(analyzed(index: 1, hash: "b", perceptualHash: .max, date: date.addingTimeInterval(6)), 1),
+            withFakePrint(analyzed(index: 2, hash: "c", perceptualHash: 0, date: date.addingTimeInterval(9)), 2)
+        ]
+        let profile = ScoringProfile.default(for: .everyday)
+        // 0↔1 look alike to Vision even though their hashes are opposite; 2 is a different scene
+        // even though its hash matches 0.
+        let grouping = PhotoGroupingEngine.group(photos, profile: profile) { lhs, rhs in
+            let pair = Set([lhs.featurePrint!.first!, rhs.featurePrint!.first!])
+            return pair == Set([0, 1]) ? 0.35 : 0.9
+        }
+        try expect(grouping.groups.count == 1, "expected one Vision-driven group")
+        try expect(Set(grouping.groups[0].memberIDs) == Set([photos[0].id, photos[1].id]), "hash overrode Vision")
+    }
+
+    private static func momentWindowUsesLooserThreshold() throws {
+        let date = Date(timeIntervalSince1970: 20_000)
+        let quick = [
+            withFakePrint(analyzed(index: 0, hash: "a", perceptualHash: 0, date: date), 0),
+            withFakePrint(analyzed(index: 1, hash: "b", perceptualHash: 0, date: date.addingTimeInterval(0.8)), 1)
+        ]
+        let slow = [
+            withFakePrint(analyzed(index: 2, hash: "c", perceptualHash: 0, date: date), 2),
+            withFakePrint(analyzed(index: 3, hash: "d", perceptualHash: 0, date: date.addingTimeInterval(8)), 3)
+        ]
+        let profile = ScoringProfile.default(for: .everyday)
+        let distance: VisualDistanceProvider = { _, _ in 0.58 }  // between 0.50 and the moment threshold
+        try expect(PhotoGroupingEngine.group(quick, profile: profile, visualDistance: distance).groups.count == 1, "focus-pull pair within 1s should group")
+        try expect(PhotoGroupingEngine.group(slow, profile: profile, visualDistance: distance).groups.isEmpty, "0.58 at 8s apart should not group")
+    }
+
+    private static func legacyVisualThresholdsMigrate() throws {
+        var legacy = ScoringProfile.default(for: .groupEvent)
+        legacy.nearDuplicateVisualDistance = 9
+        var json = try JSONSerialization.jsonObject(with: JSONEncoder().encode(legacy)) as! [String: Any]
+        json.removeValue(forKey: "momentVisualDistance")
+        json.removeValue(forKey: "momentWindow")
+        let decoded = try JSONDecoder().decode(ScoringProfile.self, from: JSONSerialization.data(withJSONObject: json))
+        try expect(decoded.nearDuplicateVisualDistance < 1, "legacy 9 was not migrated to the Vision scale")
+        try expect(decoded.momentVisualDistance > decoded.nearDuplicateVisualDistance, "moment threshold missing after migration")
     }
 
     private static func pruningIgnoresForeignFolders() throws {
