@@ -139,9 +139,88 @@ struct StudioSectionHeader: View {
     let title: String
 
     var body: some View {
-        Text(title)
-            .font(.system(size: 11))
+        Text(title.uppercased())
+            .font(StudioType.caption)
+            .tracking(1.0)
             .foregroundStyle(StudioChrome.tertiary)
+    }
+}
+
+struct StudioHairline: View {
+    var axis: Axis = .horizontal
+
+    var body: some View {
+        Rectangle()
+            .fill(StudioChrome.hairline)
+            .frame(width: axis == .vertical ? 1 : nil, height: axis == .horizontal ? 1 : nil)
+    }
+}
+
+struct StudioEmptyCopy: View {
+    let title: String
+    var detail: String?
+
+    var body: some View {
+        VStack(spacing: 8) {
+            Text(title)
+                .font(StudioType.title)
+            if let detail {
+                Text(detail)
+                    .font(StudioType.ui)
+                    .foregroundStyle(StudioChrome.secondary)
+                    .multilineTextAlignment(.center)
+                    .frame(maxWidth: 360)
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+}
+
+/// Sharp filmstrip / candidate thumb. No rounded cards.
+struct StudioThumb: View {
+    let url: URL
+    var width: CGFloat
+    var height: CGFloat
+    var maxPixelSize: Int = 240
+    var isFocused = false
+    var isDimmed = false
+
+    var body: some View {
+        CachedThumbnail(url: url, maxPixelSize: maxPixelSize, contentMode: .fill)
+            .frame(width: width, height: height)
+            .clipped()
+            .opacity(isDimmed ? 0.4 : 1)
+            .overlay {
+                Rectangle()
+                    .strokeBorder(isFocused ? StudioChrome.focus : StudioChrome.hairline, lineWidth: isFocused ? 1 : 0.5)
+            }
+    }
+}
+
+struct StudioMeter: View {
+    let title: String
+    let value: Double
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            HStack {
+                Text(title)
+                Spacer()
+                Text("\(Int((min(max(value, 0), 1) * 100).rounded()))")
+                    .monospacedDigit()
+            }
+            .font(StudioType.caption)
+            .foregroundStyle(StudioChrome.secondary)
+            GeometryReader { geo in
+                ZStack(alignment: .leading) {
+                    Rectangle().fill(Color.white.opacity(0.06))
+                    Rectangle()
+                        .fill(StudioChrome.text.opacity(0.55))
+                        .frame(width: max(0, geo.size.width * CGFloat(min(max(value, 0), 1))))
+                }
+            }
+            .frame(height: 1)
+        }
     }
 }
 
@@ -161,10 +240,10 @@ private struct StudioButtonLabel: View {
 
     var body: some View {
         configuration.label
-            .font(.system(size: 13, weight: primary ? .medium : .regular))
-            .foregroundStyle(primary ? StudioChrome.canvas : StudioChrome.text.opacity(configuration.isPressed ? 1 : 0.8))
-            .padding(.horizontal, primary ? 14 : 2)
-            .padding(.vertical, primary ? 7 : 2)
+            .font(primary ? StudioType.uiMedium : StudioType.ui)
+            .foregroundStyle(primary ? StudioChrome.photo : StudioChrome.text.opacity(configuration.isPressed ? 1 : 0.78))
+            .padding(.horizontal, primary ? 16 : 2)
+            .padding(.vertical, primary ? 8 : 2)
             .background {
                 if primary {
                     Rectangle().fill(StudioChrome.text.opacity(configuration.isPressed ? 0.82 : 1))
@@ -178,10 +257,10 @@ private struct StudioButtonLabel: View {
 struct StudioQuietButtonStyle: ButtonStyle {
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
-            .font(.system(size: 12))
-            .foregroundStyle(StudioChrome.text.opacity(configuration.isPressed ? 1 : 0.7))
-            .padding(.horizontal, 6)
-            .padding(.vertical, 3)
+            .font(StudioType.caption)
+            .foregroundStyle(StudioChrome.text.opacity(configuration.isPressed ? 1 : 0.62))
+            .padding(.horizontal, 4)
+            .padding(.vertical, 2)
     }
 }
 

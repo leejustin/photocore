@@ -138,24 +138,26 @@ struct ContentView: View {
 
     private var sidebar: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 22) {
+            VStack(alignment: .leading, spacing: 24) {
                 if model.result != nil {
                     filterSection
                 }
                 Button(showSettings ? "Hide settings" : "Settings") {
                     withAnimation(StudioChrome.ease) { showSettings.toggle() }
                 }
-                    .buttonStyle(.plain)
-                    .font(StudioType.caption)
-                    .foregroundStyle(StudioChrome.tertiary)
+                .buttonStyle(.plain)
+                .font(StudioType.caption)
+                .foregroundStyle(StudioChrome.tertiary)
                 if showSettings {
                     CurationSettingsForm(model: model)
                     Button("Run again") { model.process() }
                         .buttonStyle(StudioButtonStyle(primary: true))
                         .disabled(model.isRunning || model.selectedFolder == nil)
+                        .padding(.top, 4)
                 }
             }
-            .padding(16)
+            .padding(.horizontal, 14)
+            .padding(.vertical, 18)
             .frame(maxWidth: .infinity, alignment: .leading)
         }
         .background(StudioChrome.canvas)
@@ -163,34 +165,39 @@ struct ContentView: View {
     }
 
     private var filterSection: some View {
-        VStack(alignment: .leading, spacing: 14) {
+        VStack(alignment: .leading, spacing: 16) {
             VStack(alignment: .leading, spacing: 2) {
                 StudioSectionHeader(title: "Library")
+                    .padding(.bottom, 4)
                 ForEach(LibraryFilter.library) { filterButton($0) }
             }
             VStack(alignment: .leading, spacing: 2) {
                 StudioSectionHeader(title: "Yours")
+                    .padding(.bottom, 4)
                 ForEach(LibraryFilter.marks) { filterButton($0) }
             }
         }
     }
 
     private func filterButton(_ filter: LibraryFilter) -> some View {
-        Button {
+        let selected = model.filter == filter
+        return Button {
             model.filter = filter
             model.focusedID = model.visibleRows.first?.id
         } label: {
             HStack(spacing: 8) {
                 Text(filter.title)
-                    .foregroundStyle(model.filter == filter ? StudioChrome.text : StudioChrome.secondary)
+                    .foregroundStyle(selected ? StudioChrome.text : StudioChrome.secondary)
                 Spacer()
                 Text("\(model.count(filter))")
-                    .font(.system(size: 12).monospacedDigit())
+                    .font(StudioType.caption.monospacedDigit())
                     .foregroundStyle(StudioChrome.tertiary)
             }
-            .font(.system(size: 13))
-            .padding(.leading, filter.isIndented ? 14 : 0)
-            .padding(.vertical, 4)
+            .font(selected ? StudioType.uiMedium : StudioType.ui)
+            .padding(.leading, filter.isIndented ? 12 : 0)
+            .padding(.vertical, 5)
+            .padding(.horizontal, 8)
+            .background(selected ? StudioChrome.elevated : Color.clear)
         }
         .buttonStyle(.plain)
     }
@@ -213,7 +220,7 @@ struct CurationSettingsForm: View {
                 }
             }
             Text(cullDescription)
-                .font(.caption2)
+                .font(StudioType.caption)
                 .foregroundStyle(StudioChrome.tertiary)
                 .fixedSize(horizontal: false, vertical: true)
             labeledMenu("How many") {
@@ -242,7 +249,7 @@ struct CurationSettingsForm: View {
     private func labeledMenu<Content: View>(_ title: String, @ViewBuilder content: () -> Content) -> some View {
         VStack(alignment: .leading, spacing: 4) {
             Text(title)
-                .font(.caption)
+                .font(StudioType.caption)
                 .foregroundStyle(StudioChrome.secondary)
             content()
                 .labelsHidden()
@@ -253,7 +260,7 @@ struct CurationSettingsForm: View {
     private func captionSlider(_ title: String, value: Binding<Double>, range: ClosedRange<Double>, step: Double) -> some View {
         VStack(alignment: .leading, spacing: 4) {
             Text(title)
-                .font(.caption.monospacedDigit())
+                .font(StudioType.caption.monospacedDigit())
                 .foregroundStyle(StudioChrome.secondary)
             Slider(value: value, in: range, step: step)
         }
@@ -267,22 +274,32 @@ private struct StudioTopBar: View {
 
     var body: some View {
         ZStack {
-            HStack(spacing: 22) {
+            HStack(spacing: 0) {
                 ForEach(steps) { step in
+                    let selected = model.workspace == step
                     Button {
-                        if step == .album { model.albumMode = .grid }
-                        model.workspace = step
+                        withAnimation(StudioChrome.ease) {
+                            if step == .album { model.albumMode = .grid }
+                            model.workspace = step
+                        }
                     } label: {
                         HStack(spacing: 6) {
                             Text(step.title)
                             if step == .confirm, !model.pendingConfirmations.isEmpty {
                                 Text("\(model.pendingConfirmations.count)")
+                                    .font(StudioType.caption.monospacedDigit())
                                     .foregroundStyle(StudioChrome.tertiary)
-                                    .monospacedDigit()
                             }
                         }
-                        .font(model.workspace == step ? StudioType.uiMedium : StudioType.ui)
-                        .foregroundStyle(model.workspace == step ? StudioChrome.text : StudioChrome.tertiary)
+                        .font(selected ? StudioType.uiMedium : StudioType.ui)
+                        .foregroundStyle(selected ? StudioChrome.text : StudioChrome.tertiary)
+                        .padding(.horizontal, 14)
+                        .padding(.vertical, 8)
+                        .overlay(alignment: .bottom) {
+                            Rectangle()
+                                .fill(selected ? StudioChrome.text : Color.clear)
+                                .frame(height: 1)
+                        }
                     }
                     .buttonStyle(.plain)
                 }
@@ -294,18 +311,19 @@ private struct StudioTopBar: View {
                         .truncationMode(.middle)
                 }
                 .buttonStyle(.plain)
-                .font(.system(size: 13))
+                .font(StudioType.ui)
                 .foregroundStyle(StudioChrome.secondary)
-                .frame(maxWidth: 200, alignment: .leading)
+                .frame(maxWidth: 180, alignment: .leading)
                 Spacer()
                 trailing
-                    .frame(width: 160, alignment: .trailing)
+                    .frame(minWidth: 100, alignment: .trailing)
             }
         }
         .padding(.leading, 78)
         .padding(.trailing, 18)
-        .padding(.top, 14)
-        .padding(.bottom, 10)
+        .padding(.top, 10)
+        .padding(.bottom, 0)
+        .background(StudioChrome.canvas)
     }
 
     @ViewBuilder
@@ -314,14 +332,14 @@ private struct StudioTopBar: View {
             Button("Done") { model.workspace = model.workspaceBeforeAdjust }
                 .buttonStyle(StudioQuietButtonStyle())
         } else if model.workspace == .album, model.albumMode == .grid {
-            HStack(spacing: 12) {
+            HStack(spacing: 10) {
                 Button("−") { model.cellSize = max(120, model.cellSize - 16) }
-                    .buttonStyle(.plain)
                 Button("+") { model.cellSize = min(260, model.cellSize + 16) }
-                    .buttonStyle(.plain)
             }
-            .font(.system(size: 14))
-            .foregroundStyle(StudioChrome.tertiary)
+            .buttonStyle(StudioQuietButtonStyle())
+        } else {
+            Button("?") { model.showingShortcuts = true }
+                .buttonStyle(StudioQuietButtonStyle())
         }
     }
 }

@@ -13,31 +13,56 @@ struct LookWorkspace: View {
     private var samples: [AnalyzedPhoto] { model.lookSamplePhotos }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 16) {
-            Text("Your original photos stay untouched.")
-                .font(.system(size: 12))
-                .foregroundStyle(StudioChrome.secondary)
-            lookStrip
-            controls
-            if samples.isEmpty {
-                Text("Check the close calls, then choose a style.")
-                    .font(.system(size: 13))
+        VStack(spacing: 0) {
+            HStack(alignment: .firstTextBaseline) {
+                Text("Your originals stay untouched.")
+                    .font(StudioType.ui)
                     .foregroundStyle(StudioChrome.secondary)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-            } else {
-                ScrollView {
-                    LazyVGrid(columns: [GridItem(.adaptive(minimum: 220), spacing: 12)], spacing: 12) {
-                        ForEach(samples) { photo in
-                            LookPreviewTile(photo: photo, recipe: model.baseRecipe(for: photo))
-                                .aspectRatio(3 / 2, contentMode: .fit)
-                                .clipShape(RoundedRectangle(cornerRadius: 2, style: .continuous))
+                Spacer()
+                Button(showMore ? "Less" : "Import / options") {
+                    withAnimation(StudioChrome.ease) { showMore.toggle() }
+                }
+                .buttonStyle(StudioQuietButtonStyle())
+            }
+            .padding(.horizontal, 22)
+            .padding(.vertical, 14)
+
+            lookStrip
+                .padding(.bottom, 8)
+
+            if showMore {
+                moreOptions
+                    .padding(.horizontal, 22)
+                    .padding(.bottom, 12)
+                    .transition(.opacity)
+            }
+
+            StudioHairline()
+
+            Group {
+                if samples.isEmpty {
+                    StudioEmptyCopy(
+                        title: "No keepers yet",
+                        detail: "Check the close calls, then choose a style."
+                    )
+                } else {
+                    ScrollView {
+                        LazyVGrid(columns: [GridItem(.adaptive(minimum: 240), spacing: 2)], spacing: 2) {
+                            ForEach(samples) { photo in
+                                LookPreviewTile(photo: photo, recipe: model.baseRecipe(for: photo))
+                                    .aspectRatio(3 / 2, contentMode: .fit)
+                            }
                         }
+                        .padding(2)
                     }
                 }
             }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .background(StudioChrome.photo)
+
+            StudioHairline()
             footer
         }
-        .padding(22)
         .background(StudioChrome.canvas)
         .onAppear {
             for photo in samples { model.ensureHorizon(for: photo) }
@@ -59,7 +84,7 @@ struct LookWorkspace: View {
 
     private var lookStrip: some View {
         ScrollView(.horizontal, showsIndicators: false) {
-            HStack(spacing: 10) {
+            HStack(spacing: 14) {
                 ForEach(model.availableLooks) { look in
                     let selected = model.selectedLookID == look.id
                     Button {
@@ -69,79 +94,78 @@ struct LookWorkspace: View {
                         VStack(alignment: .leading, spacing: 6) {
                             if let first = samples.first {
                                 LookPreviewTile(photo: first, recipe: model.recipe(for: first, look: look), maxLongEdge: 220)
-                                    .frame(width: 104, height: 70)
-                                    .clipShape(RoundedRectangle(cornerRadius: 2, style: .continuous))
+                                    .frame(width: 108, height: 72)
+                                    .clipped()
+                                    .overlay {
+                                        Rectangle()
+                                            .strokeBorder(selected ? StudioChrome.focus : StudioChrome.hairline, lineWidth: selected ? 1 : 0.5)
+                                    }
+                            } else {
+                                Rectangle()
+                                    .fill(StudioChrome.elevated)
+                                    .frame(width: 108, height: 72)
                             }
                             Text(look.name)
-                                .font(.caption.weight(.medium))
+                                .font(selected ? StudioType.uiMedium : StudioType.caption)
+                                .foregroundStyle(selected ? StudioChrome.text : StudioChrome.secondary)
                                 .lineLimit(1)
-                            if look.kind != .builtin {
-                                Text("Imported")
-                                    .font(.caption2)
-                                    .foregroundStyle(StudioChrome.tertiary)
-                            }
                         }
-                        .frame(width: 104, alignment: .leading)
-                        .padding(6)
-                        .background(selected ? Color.white.opacity(0.04) : Color.clear, in: RoundedRectangle(cornerRadius: 2, style: .continuous))
-                        .overlay {
-                            RoundedRectangle(cornerRadius: 2, style: .continuous)
-                                .strokeBorder(selected ? StudioChrome.text.opacity(0.7) : StudioChrome.hairline, lineWidth: 1)
-                        }
+                        .frame(width: 108, alignment: .leading)
                     }
                     .buttonStyle(.plain)
                 }
             }
-            .padding(.vertical, 2)
+            .padding(.horizontal, 22)
+            .padding(.vertical, 4)
         }
     }
 
-    private var controls: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            HStack(spacing: 14) {
-                Toggle("Straighten tilted photos", isOn: $model.autoStraightenLook)
-                    .toggleStyle(.checkbox)
-                HStack(spacing: 6) {
-                    Text("Warmth")
-                        .font(.caption)
-                        .foregroundStyle(StudioChrome.secondary)
-                    Slider(value: $model.lookTemperature, in: -0.6...0.6, step: 0.05)
-                        .frame(width: 140)
-                    Text(String(format: "%+.0f", model.lookTemperature * 100))
-                        .font(.caption.monospacedDigit())
-                        .foregroundStyle(StudioChrome.tertiary)
-                        .frame(width: 32, alignment: .trailing)
-                }
-                Spacer()
-                Button(showMore ? "Hide options" : "More options") { showMore.toggle() }
+    private var moreOptions: some View {
+        HStack(spacing: 18) {
+            Toggle("Straighten tilted photos", isOn: $model.autoStraightenLook)
+                .toggleStyle(.checkbox)
+                .font(StudioType.caption)
+            HStack(spacing: 8) {
+                Text("Warmth")
+                    .font(StudioType.caption)
+                    .foregroundStyle(StudioChrome.secondary)
+                Slider(value: $model.lookTemperature, in: -0.6...0.6, step: 0.05)
+                    .frame(width: 120)
+                Text(String(format: "%+.0f", model.lookTemperature * 100))
+                    .font(StudioType.caption.monospacedDigit())
+                    .foregroundStyle(StudioChrome.tertiary)
+                    .frame(width: 28, alignment: .trailing)
             }
-            if showMore {
-                HStack(spacing: 14) {
-                    if model.lookSamplePhotos.contains(where: { $0.asset.metadata.format.isRawMaster && PhotoFormatSupport.companionJPEG(for: $0.asset.url) != nil }) {
-                        Picker("Start from", selection: $model.renderBase) {
-                            Text("Original file").tag(RenderBase.raw)
-                            Text("Camera photo").tag(RenderBase.cameraJPEG)
-                        }
-                        .pickerStyle(.segmented)
-                        .frame(width: 220)
-                    }
-                    Button("Import a color file…") { importingLUT = true }
-                    Button("Import a Lightroom preset…") { importingXMP = true }
-                    Spacer()
+            if model.lookSamplePhotos.contains(where: { $0.asset.metadata.format.isRawMaster && PhotoFormatSupport.companionJPEG(for: $0.asset.url) != nil }) {
+                Picker("Start from", selection: $model.renderBase) {
+                    Text("Original").tag(RenderBase.raw)
+                    Text("Camera JPEG").tag(RenderBase.cameraJPEG)
                 }
+                .pickerStyle(.segmented)
+                .labelsHidden()
+                .frame(width: 200)
             }
+            Spacer()
+            Button("Import LUT…") { importingLUT = true }
+            Button("Import XMP…") { importingXMP = true }
         }
         .buttonStyle(StudioQuietButtonStyle())
     }
 
     private var footer: some View {
-        HStack(spacing: 12) {
+        HStack(spacing: 14) {
+            if !showMore {
+                Toggle("Straighten", isOn: $model.autoStraightenLook)
+                    .toggleStyle(.checkbox)
+                    .font(StudioType.caption)
+            }
             if let progress = model.lookRenderProgress {
                 ProgressView(value: Double(progress.done), total: Double(max(progress.total, 1)))
-                    .frame(width: 160)
-                Text("Updating \(progress.done) of \(progress.total)")
-                    .font(.caption.monospacedDigit())
-                    .foregroundStyle(StudioChrome.secondary)
+                    .tint(StudioChrome.text)
+                    .frame(width: 140)
+                Text("\(progress.done) of \(progress.total)")
+                    .font(StudioType.caption.monospacedDigit())
+                    .foregroundStyle(StudioChrome.tertiary)
             }
             Spacer()
             Button(model.lookIsApplied ? "Continue to Save" : "Use this style") {
@@ -154,5 +178,8 @@ struct LookWorkspace: View {
             .buttonStyle(StudioButtonStyle(primary: true))
             .disabled(model.isReexportingLook || samples.isEmpty)
         }
+        .padding(.horizontal, 22)
+        .padding(.vertical, 14)
+        .background(StudioChrome.canvas)
     }
 }
