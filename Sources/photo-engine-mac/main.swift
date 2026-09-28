@@ -655,11 +655,18 @@ final class PhotoEngineViewModel: ObservableObject {
     }
 
     var deliverRows: [CuratedRow] {
-        rows.filter(isInAlbum).sorted { ($0.rank ?? .max, -$0.score) < ($1.rank ?? .max, -$1.score) }
+        rows.filter(isInAlbum).sorted { lhs, rhs in
+            let left = analyzedPhoto(id: lhs.id)?.asset.metadata.captureDate ?? .distantFuture
+            let right = analyzedPhoto(id: rhs.id)?.asset.metadata.captureDate ?? .distantFuture
+            return left == right ? (lhs.rank ?? .max) < (rhs.rank ?? .max) : left < right
+        }
     }
 
     var lookSamplePhotos: [AnalyzedPhoto] {
-        deliverRows.prefix(9).compactMap { analyzedPhoto(id: $0.id) }
+        rows.filter(isInAlbum)
+            .sorted { ($0.rank ?? .max, -$0.score) < ($1.rank ?? .max, -$1.score) }
+            .prefix(9)
+            .compactMap { analyzedPhoto(id: $0.id) }
     }
 
     func importLook(from url: URL, kind: AlbumLook.Kind) {

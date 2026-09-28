@@ -1407,10 +1407,16 @@ public final class PhotoPipelineRunner: @unchecked Sendable {
         let exportDirectory = runDirectory.appendingPathComponent("shortlist", isDirectory: true)
         var exports: [ExportedPhoto] = []
         let exportStartedAt = Date()
-        for (index, photoID) in shortlist.selectedIDs.enumerated() {
+        let analyzedByID = Dictionary(uniqueKeysWithValues: analyzed.map { ($0.id, $0) })
+        let exportOrder = shortlist.selectedIDs.sorted { lhs, rhs in
+            let left = analyzedByID[lhs]?.asset.metadata.captureDate ?? .distantFuture
+            let right = analyzedByID[rhs]?.asset.metadata.captureDate ?? .distantFuture
+            return left == right ? lhs.description < rhs.description : left < right
+        }
+        for (index, photoID) in exportOrder.enumerated() {
             try autoreleasepool {
                 try Self.checkCancellation(shouldCancel)
-                guard let analyzedPhoto = analyzed.first(where: { $0.id == photoID }) else { return }
+                guard let analyzedPhoto = analyzedByID[photoID] else { return }
                 let fileName = String(format: "%03d-%@.jpg", index + 1, safeFileStem(analyzedPhoto.asset.url.deletingPathExtension().lastPathComponent))
                 let outputURL = exportDirectory.appendingPathComponent(fileName)
                 var recipe = ApplePhotoRenderer.recipe(for: analyzedPhoto, style: profile.style, intensity: profile.styleIntensity)
@@ -1433,7 +1439,7 @@ public final class PhotoPipelineRunner: @unchecked Sendable {
                 if (index + 1) % 20 == 0 {
                     renderer.releaseCaches()
                 }
-                progress(PipelineProgress(stage: .exporting, completed: index + 1, total: shortlist.selectedIDs.count, message: fileName))
+                progress(PipelineProgress(stage: .exporting, completed: index + 1, total: exportOrder.count, message: fileName))
             }
         }
         exportSeconds = Date().timeIntervalSince(exportStartedAt)
