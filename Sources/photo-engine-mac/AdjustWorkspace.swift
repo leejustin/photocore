@@ -129,7 +129,7 @@ struct AdjustWorkspace: View {
                         .disabled(model.focusedRow == nil)
                 }
 
-                Text("Saves into the run’s edits folder. Source files stay untouched.")
+                Text("Saves into ~/Pictures/Photocore/<shoot> edits. Source files stay untouched.")
                     .font(.caption2)
                     .foregroundStyle(StudioChrome.tertiary)
                     .fixedSize(horizontal: false, vertical: true)

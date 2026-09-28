@@ -43,7 +43,7 @@ public final class PhotoCatalog: @unchecked Sendable {
         case statementFailed(String)
         case encodingFailed(String)
 
-        public var errorDescription: String {
+        public var errorDescription: String? {
             switch self {
             case .openFailed(let message): "Could not open Photo Engine catalog: \(message)"
             case .statementFailed(let message): "Photo Engine catalog error: \(message)"
@@ -76,6 +76,8 @@ public final class PhotoCatalog: @unchecked Sendable {
             throw CatalogError.openFailed(message)
         }
         database = handle
+        // The Mac app and the worker may share this catalog; wait instead of failing on a lock.
+        sqlite3_busy_timeout(handle, 5_000)
         encoder = JSONEncoder()
         encoder.dateEncodingStrategy = .iso8601
         try execute("PRAGMA foreign_keys = ON;")

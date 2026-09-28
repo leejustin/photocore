@@ -1115,11 +1115,12 @@ final class PhotoEngineViewModel: ObservableObject {
     }
 
     func renderFocusedEdit() {
-        guard let result, let row = focusedRow, let photo = analyzedPhoto(id: row.id) else { return }
+        guard result != nil, let row = focusedRow, let photo = analyzedPhoto(id: row.id) else { return }
         let recipe = developRecipe
         let base = row.sourceURL.deletingPathExtension().lastPathComponent
-        let output = result.runDirectory
-            .appendingPathComponent("edits", isDirectory: true)
+        let shoot = selectedFolder?.lastPathComponent ?? "Photocore"
+        let output = deliverParentFolder
+            .appendingPathComponent("\(shoot) edits", isDirectory: true)
             .appendingPathComponent(base + ".jpg")
         status = "Rendering \(base)…"
         Task.detached(priority: .userInitiated) { [weak self] in

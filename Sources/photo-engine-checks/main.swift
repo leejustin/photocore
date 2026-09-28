@@ -31,7 +31,10 @@ struct PhotoEngineChecks {
             ("compact export preset", compactExportScalesOutput),
             ("nested output is rejected", rejectsNestedOutput),
             ("excluded exports are discarded", discardsExcludedExports),
-            ("previous runs are pruned", prunesPreviousRuns)
+            ("previous runs are pruned", prunesPreviousRuns),
+            ("pruning ignores folders Photocore did not create", pruningIgnoresForeignFolders),
+            ("output inside source is rejected through symlinks", outputInsideSourceRejectedThroughSymlinks),
+            ("engine errors have readable descriptions", engineErrorsAreReadable),
         ]
 
         for (name, check) in checks {
@@ -574,6 +577,34 @@ struct PhotoEngineChecks {
     private static func jpegCount(in directory: URL) throws -> Int {
         try FileManager.default.contentsOfDirectory(at: directory, includingPropertiesForKeys: nil)
             .filter { $0.pathExtension.lowercased() == "jpg" }.count
+    }
+
+    private static func pruningIgnoresForeignFolders() throws {
+        let fixture = try FixtureDirectory()
+        defer { fixture.remove() }
+        try fixture.writeJPEG(name: "one.jpg", red: 0.2)
+        let foreign = fixture.output.appendingPathComponent("runs/important-project", isDirectory: true)
+        try FileManager.default.createDirectory(at: foreign, withIntermediateDirectories: true)
+        try Data("keep me".utf8).write(to: foreign.appendingPathComponent("notes.txt"))
+        var profile = ScoringProfile.default(for: .everyday)
+        profile.targetCount = 1
+        _ = try PhotoPipelineRunner().run(folder: fixture.source, outputDirectory: fixture.output, profile: profile)
+        _ = try PhotoPipelineRunner().run(folder: fixture.source, outputDirectory: fixture.output, profile: profile)
+        try expect(FileManager.default.fileExists(atPath: foreign.appendingPathComponent("notes.txt").path), "a folder Photocore did not create was deleted")
+    }
+
+    private static func outputInsideSourceRejectedThroughSymlinks() throws {
+        let fixture = try FixtureDirectory()
+        defer { fixture.remove() }
+        try fixture.writeJPEG(name: "one.jpg", red: 0.3)
+        let a = PhotoPipelineRunner.canonicalPath(fixture.source.appendingPathComponent("not-yet/exports"))
+        let b = PhotoPipelineRunner.canonicalPath(fixture.source)
+        try expect(a.hasPrefix(b + "/"), "canonical paths disagree for existing and missing paths")
+    }
+
+    private static func engineErrorsAreReadable() throws {
+        let error: Error = PhotoEngineError.invalidArgument("target must be positive")
+        try expect(error.localizedDescription.contains("target must be positive"), "error description is not surfaced")
     }
 
     fileprivate static func expect(_ condition: @autoclosure () -> Bool, _ message: String) throws {

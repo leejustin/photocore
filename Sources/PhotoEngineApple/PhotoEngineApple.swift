@@ -1003,6 +1003,10 @@ public enum GeneratedArtifactCleanup {
             let values = try runURL.resourceValues(forKeys: [.isDirectoryKey])
             guard values.isDirectory == true else { continue }
             if let keepingPath, runURL.standardizedFileURL.path == keepingPath { continue }
+            // Only folders Photocore created carry the marker. Anything else in
+            // `runs/` belongs to someone else and is never touched.
+            let marker = runURL.appendingPathComponent(PhotoPipelineRunner.runMarkerFileName)
+            guard fileManager.fileExists(atPath: marker.path) else { continue }
             try fileManager.removeItem(at: runURL)
             removed += 1
         }
@@ -1309,9 +1313,15 @@ public final class PhotoPipelineRunner: @unchecked Sendable {
         var completedRun = false
         defer {
             if !completedRun {
-                try? FileManager.default.removeItem(at: runDirectory)
+                let marker = runDirectory.appendingPathComponent(Self.runMarkerFileName)
+                if FileManager.default.fileExists(atPath: marker.path) {
+                    try? FileManager.default.removeItem(at: runDirectory)
+                }
             }
         }
+        try FileManager.default.createDirectory(at: runDirectory, withIntermediateDirectories: true)
+        try Data("photocore run \(sessionID)\n".utf8)
+            .write(to: runDirectory.appendingPathComponent(Self.runMarkerFileName), options: .atomic)
         let exportDirectory = runDirectory.appendingPathComponent("shortlist", isDirectory: true)
         var exports: [ExportedPhoto] = []
         let exportStartedAt = Date()
@@ -1416,14 +1426,40 @@ public final class PhotoPipelineRunner: @unchecked Sendable {
         return String(allowed).trimmingCharacters(in: CharacterSet(charactersIn: "-"))
     }
 
+    /// Absolute path with symlinks resolved, even when the tail does not exist yet.
+    /// Uses realpath(3) on the deepest existing ancestor so /tmp and /private/tmp compare equal.
+    public static func canonicalPath(_ url: URL) -> String {
+        var existing = url.standardizedFileURL
+        var missing: [String] = []
+        while !FileManager.default.fileExists(atPath: existing.path), existing.path != "/" {
+            missing.insert(existing.lastPathComponent, at: 0)
+            existing = existing.deletingLastPathComponent()
+        }
+        var resolved: String = existing.path
+        if let pointer = realpath(existing.path, nil) {
+            resolved = String(cString: pointer)
+            free(pointer)
+        }
+        // Join missing components as plain path text. URL.standardized rewrites
+        // an existing /private/var path back to /var and leaves a not-yet-created
+        // tail under /private/var, so the two forms would no longer compare equal.
+        for component in missing {
+            resolved = resolved == "/" ? "/" + component : resolved + "/" + component
+        }
+        return resolved
+    }
+
     private static func validateOutput(source: URL, output: URL) throws {
-        let sourcePath = source.resolvingSymlinksInPath().standardizedFileURL.path
-        let outputPath = output.resolvingSymlinksInPath().standardizedFileURL.path
+        let sourcePath = Self.canonicalPath(source)
+        let outputPath = Self.canonicalPath(output)
         let sourcePrefix = sourcePath.hasSuffix("/") ? sourcePath : sourcePath + "/"
         if outputPath == sourcePath || outputPath.hasPrefix(sourcePrefix) {
             throw PhotoEngineError.unsafeOutputDirectory(source: source, output: output)
         }
     }
+
+    /// Written into every run directory at creation. Pruning refuses folders without it.
+    public static let runMarkerFileName = ".photocore-run"
 
     private static func makeRunDirectory(root: URL) -> URL {
         let formatter = DateFormatter()

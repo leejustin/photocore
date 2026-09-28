@@ -185,12 +185,20 @@ struct PhotoEngineCommand {
         guard let port = UInt16(rawPort), port > 0 else {
             throw PhotoEngineError.invalidArgument("Port must be between 1 and 65535.")
         }
-        let token = ProcessInfo.processInfo.environment["PHOTO_ENGINE_TOKEN"]
+        var token = ProcessInfo.processInfo.environment["PHOTO_ENGINE_TOKEN"] ?? ""
+        if token.isEmpty {
+            token = UUID().uuidString + UUID().uuidString
+            emit("No PHOTO_ENGINE_TOKEN set. Generated one for this session:")
+            emit("  \(token)")
+        }
+        let security = WorkerSecurity.fromEnvironment(token: token)
         let server = LocalCurationServer()
-        try server.start(port: port, token: token)
-        let auth = (token?.isEmpty == false) ? "Bearer auth on" : "no auth token set"
-        emit("Photocore worker listening on http://127.0.0.1:\(port) (\(auth))")
+        try server.start(port: port, security: security)
+        emit("Photocore worker listening on http://127.0.0.1:\(port) (Bearer auth required)")
+        emit("Allowed source roots: \(security.allowedRoots.map(\.path).joined(separator: ", "))")
+        emit("Outputs: \(security.outputRoot.path)")
         emit("POST /v1/jobs  {\"sourcePath\":\"/path/to/shoot\"}")
+        emit("POST /v1/jobs/{id}/cancel")
         emit("This process reads folders that already exist on this Mac. It does not upload photos.")
         dispatchMain()
     }
@@ -212,7 +220,18 @@ struct PhotoEngineCommand {
           photo-engine smoke-test
           photo-engine version
 
-        serve binds to loopback only. Set PHOTO_ENGINE_TOKEN to require Authorization: Bearer.
+        serve binds to 127.0.0.1 only. Every route requires Authorization: Bearer.
+          PHOTO_ENGINE_TOKEN              shared secret; a session token is printed if this is unset
+          PHOTO_ENGINE_ALLOWED_ROOTS      colon-separated source folders clients may curate (default: ~/Pictures)
+          PHOTO_ENGINE_ALLOWED_ORIGINS    comma-separated Origin values allowed for browser clients (default: none)
+        Endpoints:
+          GET  /v1/health
+          GET  /v1/jobs
+          POST /v1/jobs
+          GET  /v1/jobs/{id}
+          GET  /v1/jobs/{id}/manifest
+          POST /v1/jobs/{id}/cancel
+        Clients cannot choose output paths. Each job writes under the worker output root.
         """)
     }
 }
