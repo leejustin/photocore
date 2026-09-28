@@ -42,6 +42,8 @@ struct PhotoEngineChecks {
             ("review queue stays small", reviewQueueStaysSmall),
             ("focus ranking spreads sharpness", focusRankingSpreadsSharpness),
             ("focus ranking needs enough samples", focusRankingNeedsSamples),
+            ("older recipes keep their rendering", olderRecipesKeepRendering),
+            ("auto recipe enables enhancement", autoRecipeEnablesEnhancement),
         ]
 
         for (name, check) in checks {
@@ -683,6 +685,21 @@ struct PhotoEngineChecks {
         let photos = (0..<3).map { analyzed(index: $0, hash: "g\($0)", perceptualHash: 0, date: nil, sharpness: 0.9) }
         let ranked = PhotoFocusRanking.apply(to: photos)
         try expect(ranked.map(\.signals.sharpness) == photos.map(\.signals.sharpness), "small sets must be left alone")
+    }
+
+    private static func olderRecipesKeepRendering() throws {
+        let json = """
+        {"style":"natural","styleIntensity":0.5,"exposure":0.1,"contrast":0,"saturation":0,"highlights":0,"shadows":0,"sharpening":0.2}
+        """
+        let recipe = try JSONDecoder().decode(EditRecipe.self, from: Data(json.utf8))
+        try expect(recipe.autoEnhance == false && recipe.base == .raw, "old recipes must not gain auto enhancement")
+    }
+
+    private static func autoRecipeEnablesEnhancement() throws {
+        let photo = analyzed(index: 0, hash: "e", perceptualHash: 0, date: nil)
+        let recipe = ApplePhotoRenderer.recipe(for: photo, style: .natural, intensity: 0.65)
+        try expect(recipe.autoEnhance, "new renders should start from auto enhancement")
+        try expect(recipe.exposure == 0, "exposure guess must be off when auto enhancement is on")
     }
 
     private static func pruningIgnoresForeignFolders() throws {

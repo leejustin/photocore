@@ -573,7 +573,7 @@ public final class ApplePhotoRenderer: @unchecked Sendable {
         recipe: EditRecipe,
         exportSpecification: ExportSpecification = ExportSpecification()
     ) throws -> ExportedPhoto {
-        let image = try Self.apply(recipe, to: Self.orientedImage(photo))
+        let image = Self.apply(recipe, to: try Self.sourceImage(photo, recipe: recipe, maxLongEdge: nil))
 
         try FileManager.default.createDirectory(at: outputURL.deletingLastPathComponent(), withIntermediateDirectories: true)
         let renderedImage: CIImage
@@ -609,7 +609,7 @@ public final class ApplePhotoRenderer: @unchecked Sendable {
 
     /// A downscaled JPEG for the develop loupe. The full export path uses the same recipe.
     public func previewJPEG(photo: AnalyzedPhoto, recipe: EditRecipe, maxLongEdge: Int = 1600, quality: Double = 0.82) throws -> Data {
-        var image = try Self.apply(recipe, to: Self.orientedImage(photo))
+        var image = Self.apply(recipe, to: try Self.sourceImage(photo, recipe: recipe, maxLongEdge: maxLongEdge))
         let longEdge = max(image.extent.width, image.extent.height)
         let limit = CGFloat(max(256, maxLongEdge))
         if longEdge > limit, longEdge.isFinite {
@@ -633,6 +633,42 @@ public final class ApplePhotoRenderer: @unchecked Sendable {
         return data as Data
     }
 
+    static func sourceImage(_ photo: AnalyzedPhoto, recipe: EditRecipe, maxLongEdge: Int?) throws -> CIImage {
+        let url = photo.asset.url
+        if photo.asset.metadata.format.isRawMaster {
+            if recipe.base == .cameraJPEG,
+               let jpeg = PhotoFormatSupport.companionJPEG(for: url),
+               let image = CIImage(contentsOf: jpeg, options: [.applyOrientationProperty: true]) {
+                return image
+            }
+            if let raw = CIRAWFilter(imageURL: url) {
+                if raw.isLensCorrectionSupported { raw.isLensCorrectionEnabled = true }
+                if let maxLongEdge {
+                    // Decode previews at reduced size: far faster and lighter than full-res.
+                    let longEdge = Double(max(photo.asset.metadata.pixelWidth, photo.asset.metadata.pixelHeight))
+                    if longEdge > 0 { raw.scaleFactor = Float(min(1, Double(maxLongEdge) / longEdge)) }
+                    raw.isDraftModeEnabled = true
+                }
+                if let image = raw.outputImage { return image }
+            }
+        }
+        return try orientedImage(photo)
+    }
+
+    /// Apple's automatic adjustments (tone curve, vibrance, highlight/shadow, face balance),
+    /// measured on a small copy and applied to the full image.
+    static func autoEnhanced(_ image: CIImage) -> CIImage {
+        let longEdge = max(image.extent.width, image.extent.height)
+        guard longEdge.isFinite, longEdge > 0 else { return image }
+        let probeScale = min(1, 1024 / longEdge)
+        let probe = image.transformed(by: CGAffineTransform(scaleX: probeScale, y: probeScale))
+        let filters = probe.autoAdjustmentFilters(options: [.redEye: false, .crop: false, .level: false])
+        return filters.reduce(image) { current, filter in
+            filter.setValue(current, forKey: kCIInputImageKey)
+            return filter.outputImage ?? current
+        }
+    }
+
     private static func orientedImage(_ photo: AnalyzedPhoto) throws -> CIImage {
         guard let input = CIImage(contentsOf: photo.asset.url, options: [.applyOrientationProperty: true]) else {
             throw PhotoEngineError.exportFailed(photo.asset.url, "Could not create Core Image input")
@@ -641,7 +677,7 @@ public final class ApplePhotoRenderer: @unchecked Sendable {
     }
 
     static func apply(_ recipe: EditRecipe, to input: CIImage) -> CIImage {
-        var image = input
+        var image = recipe.autoEnhance ? Self.autoEnhanced(input) : input
         if abs(recipe.exposure) > 0.01 {
             let filter = CIFilter(name: "CIExposureAdjust")!
             filter.setValue(image, forKey: kCIInputImageKey)
@@ -758,10 +794,6 @@ public final class ApplePhotoRenderer: @unchecked Sendable {
 
     public static func recipe(for photo: AnalyzedPhoto, style: StylePreset = .natural, intensity: Double = 0.65) -> EditRecipe {
         let intensity = min(max(intensity, 0), 1)
-        let brightnessDelta = 0.5 - photo.signals.brightness
-        let exposure = min(max(brightnessDelta * 1.2, -0.45), 0.45)
-        let highlights = photo.signals.exposureQuality < 0.45 ? -0.10 : 0
-        let shadows = photo.signals.brightness < 0.38 ? 0.14 : 0
         let baseSaturation = photo.signals.aestheticScore.map { $0 < 0.48 ? 0.04 : 0.015 } ?? 0.02
         let baseContrast = photo.signals.exposureQuality > 0.60 ? 0.025 : 0
         let styleSaturation: Double
@@ -786,15 +818,16 @@ public final class ApplePhotoRenderer: @unchecked Sendable {
         return EditRecipe(
             style: style,
             styleIntensity: intensity,
-            exposure: exposure,
+            exposure: 0,
             contrast: baseContrast + scaled(styleContrast),
             // Black & white is applied in a separate intensity-aware filter;
             // keeping this technical saturation neutral makes a 0…1 look
             // slider genuinely reversible.
             saturation: style == .blackAndWhite ? 0 : baseSaturation + scaled(styleSaturation),
-            highlights: highlights + scaled(styleHighlights),
-            shadows: shadows + scaled(styleShadows),
-            sharpening: sharpening
+            highlights: scaled(styleHighlights),
+            shadows: scaled(styleShadows),
+            sharpening: sharpening,
+            autoEnhance: true
         )
     }
 
@@ -1380,11 +1413,12 @@ public final class PhotoPipelineRunner: @unchecked Sendable {
                 guard let analyzedPhoto = analyzed.first(where: { $0.id == photoID }) else { return }
                 let fileName = String(format: "%03d-%@.jpg", index + 1, safeFileStem(analyzedPhoto.asset.url.deletingPathExtension().lastPathComponent))
                 let outputURL = exportDirectory.appendingPathComponent(fileName)
+                var recipe = ApplePhotoRenderer.recipe(for: analyzedPhoto, style: profile.style, intensity: profile.styleIntensity)
+                recipe.base = profile.renderBase
                 let exported = try renderer.render(
                     photo: analyzedPhoto,
                     outputURL: outputURL,
-                    style: profile.style,
-                    styleIntensity: profile.styleIntensity,
+                    recipe: recipe,
                     exportSpecification: exportSpecification
                 )
                 exports.append(exported)

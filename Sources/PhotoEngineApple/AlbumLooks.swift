@@ -77,7 +77,7 @@ public struct AlbumLook: Codable, Identifiable, Sendable, Equatable {
         if let style {
             base = ApplePhotoRenderer.recipe(for: photo, style: style, intensity: intensity)
         } else {
-            base = EditRecipe(style: .natural, styleIntensity: intensity)
+            base = EditRecipe(style: .natural, styleIntensity: intensity, autoEnhance: true)
         }
         var recipe = base
         recipe.temperature = min(max(base.temperature + temperature, -1), 1)
