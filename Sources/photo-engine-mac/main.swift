@@ -366,6 +366,9 @@ final class PhotoEngineViewModel: ObservableObject {
         if let stored = try? runner.reviewMarks(for: result.analyzed.map(\.id)) {
             reviewMarks = Dictionary(stored.map { ($0.photoID, $0) }, uniquingKeysWith: { _, latest in latest })
         }
+        if let stored = try? runner.customRecipes(sessionID: result.sessionID) {
+            customRecipes = stored
+        }
         filter = count(.album) > 0 ? .album : .all
         let built = ConfirmationBuilder.build(result: result, rows: rows, groups: groupsByPhoto)
         confirmationsBeyondCap = built.beyondCap
@@ -1009,14 +1012,26 @@ final class PhotoEngineViewModel: ObservableObject {
 
     func setDevelopRecipe(_ recipe: EditRecipe) {
         developRecipe = recipe
-        if let id = focusedRow?.id {
-            customRecipes[id] = recipe
+        guard let id = focusedRow?.id else { return }
+        customRecipes[id] = recipe
+        guard let sessionID = result?.sessionID else { return }
+        do {
+            try runner.saveCustomRecipe(recipe, photoID: id, sessionID: sessionID)
+        } catch {
+            errorMessage = error.localizedDescription
         }
     }
 
     func resetDevelopRecipe() {
         guard let id = focusedRow?.id else { return }
         customRecipes[id] = nil
+        if let sessionID = result?.sessionID {
+            do {
+                try runner.deleteCustomRecipe(photoID: id, sessionID: sessionID)
+            } catch {
+                errorMessage = error.localizedDescription
+            }
+        }
         syncDevelopRecipe()
     }
 

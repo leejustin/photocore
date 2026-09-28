@@ -2,6 +2,44 @@ import Foundation
 import PhotoEngineCore
 import SQLite3
 
+public struct JobRecord: Codable, Sendable, Equatable {
+    public static let columns = "id, kind, session_id, state, request, stage, completed, total, message, error_code, error_message, result, created_at, started_at, finished_at"
+
+    public var id: String
+    public var kind: String
+    public var sessionID: String?
+    public var state: String
+    public var request: Data
+    public var stage: String?
+    public var completed: Int?
+    public var total: Int?
+    public var message: String?
+    public var errorCode: String?
+    public var errorMessage: String?
+    public var result: Data?
+    public var createdAt: Date
+    public var startedAt: Date?
+    public var finishedAt: Date?
+
+    public init(id: String, kind: String, sessionID: String?, state: String, request: Data, stage: String? = nil, completed: Int? = nil, total: Int? = nil, message: String? = nil, errorCode: String? = nil, errorMessage: String? = nil, result: Data? = nil, createdAt: Date, startedAt: Date? = nil, finishedAt: Date? = nil) {
+        self.id = id
+        self.kind = kind
+        self.sessionID = sessionID
+        self.state = state
+        self.request = request
+        self.stage = stage
+        self.completed = completed
+        self.total = total
+        self.message = message
+        self.errorCode = errorCode
+        self.errorMessage = errorMessage
+        self.result = result
+        self.createdAt = createdAt
+        self.startedAt = startedAt
+        self.finishedAt = finishedAt
+    }
+}
+
 /// A small SQLite catalog for durable sessions, decisions, and owned
 /// artifacts. The fast analysis cache remains separate because it is
 /// recreatable and can be evicted without affecting a user's session history.
@@ -13,14 +51,18 @@ public final class PhotoCatalog: @unchecked Sendable {
         public let status: String
         public let createdAt: Date
         public let completedAt: Date?
+        public let manifestPath: String?
+        public let runDirectory: String?
 
-        public init(id: SessionID, sourceFolder: URL, mode: CurationMode, status: String, createdAt: Date, completedAt: Date?) {
+        public init(id: SessionID, sourceFolder: URL, mode: CurationMode, status: String, createdAt: Date, completedAt: Date?, manifestPath: String? = nil, runDirectory: String? = nil) {
             self.id = id
             self.sourceFolder = sourceFolder
             self.mode = mode
             self.status = status
             self.createdAt = createdAt
             self.completedAt = completedAt
+            self.manifestPath = manifestPath
+            self.runDirectory = runDirectory
         }
     }
 
@@ -54,6 +96,7 @@ public final class PhotoCatalog: @unchecked Sendable {
 
     private let database: OpaquePointer
     private let encoder: JSONEncoder
+    private let decoder: JSONDecoder
 
     public static func defaultURL(fileManager: FileManager = .default) -> URL {
         let root = fileManager.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
@@ -80,6 +123,8 @@ public final class PhotoCatalog: @unchecked Sendable {
         sqlite3_busy_timeout(handle, 5_000)
         encoder = JSONEncoder()
         encoder.dateEncodingStrategy = .iso8601
+        decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
         try execute("PRAGMA foreign_keys = ON;")
         // journal_mode returns a row describing the selected mode, so use the
         // script API instead of the write-only statement helper.
@@ -277,7 +322,10 @@ public final class PhotoCatalog: @unchecked Sendable {
         var statement: OpaquePointer?
         guard sqlite3_prepare_v2(
             database,
-            "SELECT source_folder, mode, status, created_at, completed_at FROM sessions WHERE id = ?",
+            """
+            SELECT id, source_folder, mode, status, created_at, completed_at, manifest_path, run_directory
+            FROM sessions WHERE id = ?
+            """,
             -1,
             &statement,
             nil
@@ -291,24 +339,163 @@ public final class PhotoCatalog: @unchecked Sendable {
         guard step == SQLITE_ROW else {
             throw CatalogError.statementFailed(String(cString: sqlite3_errmsg(database)))
         }
-        guard let sourceCString = sqlite3_column_text(statement, 0),
-              let modeCString = sqlite3_column_text(statement, 1),
-              let statusCString = sqlite3_column_text(statement, 2),
-              let mode = CurationMode(rawValue: String(cString: modeCString)) else {
-            throw CatalogError.statementFailed("Stored session has invalid fields")
-        }
-        let createdAt = Date(timeIntervalSince1970: sqlite3_column_double(statement, 3))
-        let completedAt = sqlite3_column_type(statement, 4) == SQLITE_NULL
-            ? nil
-            : Date(timeIntervalSince1970: sqlite3_column_double(statement, 4))
-        return SessionSnapshot(
-            id: id,
-            sourceFolder: URL(fileURLWithPath: String(cString: sourceCString), isDirectory: true),
-            mode: mode,
-            status: String(cString: statusCString),
-            createdAt: createdAt,
-            completedAt: completedAt
+        return try snapshot(from: statement)
+    }
+
+    public func recordRunLocation(sessionID: SessionID, manifestURL: URL, runDirectory: URL) throws {
+        try execute(
+            "UPDATE sessions SET manifest_path = ?, run_directory = ? WHERE id = ?",
+            bind: { statement in
+                bindText(statement, 1, manifestURL.path)
+                bindText(statement, 2, runDirectory.path)
+                bindText(statement, 3, sessionID.description)
+            }
         )
+    }
+
+    public func listSessions(limit: Int, before: Date? = nil) throws -> [SessionSnapshot] {
+        var statement: OpaquePointer?
+        let sql = """
+        SELECT id, source_folder, mode, status, created_at, completed_at, manifest_path, run_directory
+        FROM sessions
+        WHERE (? IS NULL OR created_at < ?)
+        ORDER BY created_at DESC
+        LIMIT ?
+        """
+        guard sqlite3_prepare_v2(database, sql, -1, &statement, nil) == SQLITE_OK, let statement else {
+            throw CatalogError.statementFailed(String(cString: sqlite3_errmsg(database)))
+        }
+        defer { sqlite3_finalize(statement) }
+        if let before {
+            bindDouble(statement, 1, before.timeIntervalSince1970)
+            bindDouble(statement, 2, before.timeIntervalSince1970)
+        } else {
+            sqlite3_bind_null(statement, 1)
+            sqlite3_bind_null(statement, 2)
+        }
+        sqlite3_bind_int(statement, 3, Int32(max(0, limit)))
+        var values: [SessionSnapshot] = []
+        while sqlite3_step(statement) == SQLITE_ROW {
+            values.append(try snapshot(from: statement))
+        }
+        return values
+    }
+
+    public func saveCustomRecipe(_ recipe: EditRecipe, photoID: PhotoID, sessionID: SessionID) throws {
+        let data = try encode(recipe)
+        try execute(
+            """
+            INSERT INTO custom_recipes (session_id, photo_id, recipe, updated_at)
+            VALUES (?, ?, ?, ?)
+            ON CONFLICT(session_id, photo_id) DO UPDATE SET recipe=excluded.recipe, updated_at=excluded.updated_at
+            """,
+            bind: { statement in
+                bindText(statement, 1, sessionID.description)
+                bindText(statement, 2, photoID.description)
+                bindBlob(statement, 3, data)
+                bindDouble(statement, 4, Date().timeIntervalSince1970)
+            }
+        )
+    }
+
+    public func deleteCustomRecipe(photoID: PhotoID, sessionID: SessionID) throws {
+        try execute(
+            "DELETE FROM custom_recipes WHERE session_id = ? AND photo_id = ?",
+            bind: { statement in
+                bindText(statement, 1, sessionID.description)
+                bindText(statement, 2, photoID.description)
+            }
+        )
+    }
+
+    public func customRecipes(sessionID: SessionID) throws -> [PhotoID: EditRecipe] {
+        var statement: OpaquePointer?
+        guard sqlite3_prepare_v2(
+            database,
+            "SELECT photo_id, recipe FROM custom_recipes WHERE session_id = ?",
+            -1,
+            &statement,
+            nil
+        ) == SQLITE_OK, let statement else {
+            throw CatalogError.statementFailed(String(cString: sqlite3_errmsg(database)))
+        }
+        defer { sqlite3_finalize(statement) }
+        bindText(statement, 1, sessionID.description)
+        var values: [PhotoID: EditRecipe] = [:]
+        while sqlite3_step(statement) == SQLITE_ROW {
+            guard let photoCString = sqlite3_column_text(statement, 0),
+                  let photoUUID = UUID(uuidString: String(cString: photoCString)) else {
+                throw CatalogError.statementFailed("Stored custom recipe has invalid identity")
+            }
+            let data = blobData(statement, column: 1)
+            let recipe = try decoder.decode(EditRecipe.self, from: data)
+            values[PhotoID(photoUUID)] = recipe
+        }
+        return values
+    }
+
+    public func insertJob(_ record: JobRecord) throws {
+        try writeJob(record)
+    }
+
+    public func updateJob(id: String, mutate: (inout JobRecord) -> Void) throws {
+        guard var record = try job(id: id) else {
+            throw CatalogError.statementFailed("No job \(id)")
+        }
+        mutate(&record)
+        try writeJob(record)
+    }
+
+    public func job(id: String) throws -> JobRecord? {
+        var statement: OpaquePointer?
+        guard sqlite3_prepare_v2(database, "SELECT \(JobRecord.columns) FROM jobs WHERE id = ?", -1, &statement, nil) == SQLITE_OK, let statement else {
+            throw CatalogError.statementFailed(String(cString: sqlite3_errmsg(database)))
+        }
+        defer { sqlite3_finalize(statement) }
+        bindText(statement, 1, id)
+        let step = sqlite3_step(statement)
+        if step == SQLITE_DONE { return nil }
+        guard step == SQLITE_ROW else {
+            throw CatalogError.statementFailed(String(cString: sqlite3_errmsg(database)))
+        }
+        return try jobRecord(from: statement)
+    }
+
+    public func jobs(limit: Int, state: String? = nil) throws -> [JobRecord] {
+        var statement: OpaquePointer?
+        let sql = """
+        SELECT \(JobRecord.columns) FROM jobs
+        WHERE (? IS NULL OR state = ?)
+        ORDER BY created_at DESC
+        LIMIT ?
+        """
+        guard sqlite3_prepare_v2(database, sql, -1, &statement, nil) == SQLITE_OK, let statement else {
+            throw CatalogError.statementFailed(String(cString: sqlite3_errmsg(database)))
+        }
+        defer { sqlite3_finalize(statement) }
+        bindOptionalText(statement, 1, state)
+        bindOptionalText(statement, 2, state)
+        sqlite3_bind_int(statement, 3, Int32(max(0, limit)))
+        var values: [JobRecord] = []
+        while sqlite3_step(statement) == SQLITE_ROW {
+            values.append(try jobRecord(from: statement))
+        }
+        return values
+    }
+
+    /// Marks every job left `running` by a previous process as failed.
+    public func markInterruptedJobs() throws -> Int {
+        try execute(
+            """
+            UPDATE jobs
+            SET state = 'failed', error_code = 'interrupted',
+                error_message = 'The server stopped while this job was running.',
+                finished_at = ?
+            WHERE state = 'running'
+            """,
+            bind: { bindDouble($0, 1, Date().timeIntervalSince1970) }
+        )
+        return Int(sqlite3_changes(database))
     }
 
     public func decisions(sessionID: SessionID) throws -> [SelectionDecision] {
@@ -567,6 +754,141 @@ public final class PhotoCatalog: @unchecked Sendable {
             )
             try executeScript("PRAGMA user_version = 3;")
         }
+        if schemaVersion < 4 {
+            try executeScript(
+                """
+                ALTER TABLE sessions ADD COLUMN manifest_path TEXT;
+                ALTER TABLE sessions ADD COLUMN run_directory TEXT;
+                CREATE TABLE IF NOT EXISTS custom_recipes (
+                    session_id TEXT NOT NULL,
+                    photo_id TEXT NOT NULL,
+                    recipe BLOB NOT NULL,
+                    updated_at REAL NOT NULL,
+                    PRIMARY KEY (session_id, photo_id)
+                );
+                CREATE TABLE IF NOT EXISTS jobs (
+                    id TEXT PRIMARY KEY,
+                    kind TEXT NOT NULL,
+                    session_id TEXT,
+                    state TEXT NOT NULL,
+                    request BLOB NOT NULL,
+                    stage TEXT,
+                    completed INTEGER,
+                    total INTEGER,
+                    message TEXT,
+                    error_code TEXT,
+                    error_message TEXT,
+                    result BLOB,
+                    created_at REAL NOT NULL,
+                    started_at REAL,
+                    finished_at REAL
+                );
+                CREATE INDEX IF NOT EXISTS jobs_state ON jobs(state, created_at);
+                """
+            )
+            try executeScript("PRAGMA user_version = 4;")
+        }
+    }
+
+    private func snapshot(from statement: OpaquePointer) throws -> SessionSnapshot {
+        guard let idCString = sqlite3_column_text(statement, 0),
+              let sourceCString = sqlite3_column_text(statement, 1),
+              let modeCString = sqlite3_column_text(statement, 2),
+              let statusCString = sqlite3_column_text(statement, 3),
+              let id = UUID(uuidString: String(cString: idCString)),
+              let mode = CurationMode(rawValue: String(cString: modeCString)) else {
+            throw CatalogError.statementFailed("Stored session has invalid fields")
+        }
+        let createdAt = Date(timeIntervalSince1970: sqlite3_column_double(statement, 4))
+        let completedAt = sqlite3_column_type(statement, 5) == SQLITE_NULL
+            ? nil
+            : Date(timeIntervalSince1970: sqlite3_column_double(statement, 5))
+        return SessionSnapshot(
+            id: SessionID(id),
+            sourceFolder: URL(fileURLWithPath: String(cString: sourceCString), isDirectory: true),
+            mode: mode,
+            status: String(cString: statusCString),
+            createdAt: createdAt,
+            completedAt: completedAt,
+            manifestPath: optionalText(statement, 6),
+            runDirectory: optionalText(statement, 7)
+        )
+    }
+
+    private func writeJob(_ record: JobRecord) throws {
+        try execute(
+            """
+            INSERT INTO jobs (\(JobRecord.columns))
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(id) DO UPDATE SET
+                kind=excluded.kind,
+                session_id=excluded.session_id,
+                state=excluded.state,
+                request=excluded.request,
+                stage=excluded.stage,
+                completed=excluded.completed,
+                total=excluded.total,
+                message=excluded.message,
+                error_code=excluded.error_code,
+                error_message=excluded.error_message,
+                result=excluded.result,
+                created_at=excluded.created_at,
+                started_at=excluded.started_at,
+                finished_at=excluded.finished_at
+            """,
+            bind: { statement in
+                bindText(statement, 1, record.id)
+                bindText(statement, 2, record.kind)
+                bindOptionalText(statement, 3, record.sessionID)
+                bindText(statement, 4, record.state)
+                bindBlob(statement, 5, record.request)
+                bindOptionalText(statement, 6, record.stage)
+                bindOptionalInt(statement, 7, record.completed)
+                bindOptionalInt(statement, 8, record.total)
+                bindOptionalText(statement, 9, record.message)
+                bindOptionalText(statement, 10, record.errorCode)
+                bindOptionalText(statement, 11, record.errorMessage)
+                bindOptionalBlob(statement, 12, record.result)
+                bindDouble(statement, 13, record.createdAt.timeIntervalSince1970)
+                bindOptionalDouble(statement, 14, record.startedAt?.timeIntervalSince1970)
+                bindOptionalDouble(statement, 15, record.finishedAt?.timeIntervalSince1970)
+            }
+        )
+    }
+
+    private func jobRecord(from statement: OpaquePointer) throws -> JobRecord {
+        guard let id = optionalText(statement, 0),
+              let kind = optionalText(statement, 1),
+              let state = optionalText(statement, 3) else {
+            throw CatalogError.statementFailed("Stored job has invalid fields")
+        }
+        return JobRecord(
+            id: id,
+            kind: kind,
+            sessionID: optionalText(statement, 2),
+            state: state,
+            request: blobData(statement, column: 4),
+            stage: optionalText(statement, 5),
+            completed: optionalInt(statement, 6),
+            total: optionalInt(statement, 7),
+            message: optionalText(statement, 8),
+            errorCode: optionalText(statement, 9),
+            errorMessage: optionalText(statement, 10),
+            result: sqlite3_column_type(statement, 11) == SQLITE_NULL ? nil : blobData(statement, column: 11),
+            createdAt: Date(timeIntervalSince1970: sqlite3_column_double(statement, 12)),
+            startedAt: sqlite3_column_type(statement, 13) == SQLITE_NULL ? nil : Date(timeIntervalSince1970: sqlite3_column_double(statement, 13)),
+            finishedAt: sqlite3_column_type(statement, 14) == SQLITE_NULL ? nil : Date(timeIntervalSince1970: sqlite3_column_double(statement, 14))
+        )
+    }
+
+    private func optionalText(_ statement: OpaquePointer, _ column: Int32) -> String? {
+        guard sqlite3_column_type(statement, column) != SQLITE_NULL, let value = sqlite3_column_text(statement, column) else { return nil }
+        return String(cString: value)
+    }
+
+    private func optionalInt(_ statement: OpaquePointer, _ column: Int32) -> Int? {
+        guard sqlite3_column_type(statement, column) != SQLITE_NULL else { return nil }
+        return Int(sqlite3_column_int(statement, column))
     }
 
     private func executeScript(_ sql: String) throws {
