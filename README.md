@@ -36,8 +36,12 @@ swift build
 swift run photo-engine smoke-test
 swift run photo-engine-checks
 swift run photo-engine catalog /path/to/photos
-swift run photo-engine run /path/to/photos --profile trip --cull balanced --target 60 --style natural --size compact --output ./exports/trip
+swift run photo-engine run /path/to/photos --profile trip --cull balanced --target 60 --style natural --size compact --base raw --output ./exports/trip
+swift run photo-engine calibrate /path/to/photos --sheet /tmp/photocore-calibrate.jpg
+swift run photo-engine compare-render /path/to/manifest.json --count 6 --sheet /tmp/photocore-compare.jpg
 ```
+
+`--base raw` decodes a RAW master with Core Image. `--base camera` starts from the camera JPEG beside that RAW, when one exists. `calibrate` prints Vision feature-print distances and can write a contact sheet. `compare-render` writes the current recipe beside the camera JPEG so a shoot can be judged on real frames.
 
 Launch the Mac studio:
 
@@ -47,12 +51,13 @@ swift run photo-engine-mac
 
 After a run, Photocore opens **Confirm**: a short queue of moments where two frames are close or a keeper looks soft or blinky. Return keeps the suggestion. **Look** previews built-in looks, imported `.cube` LUTs or Lightroom `.xmp` presets live on your keepers. **Deliver** exports finished JPEGs into a new folder under `~/Pictures/Photocore`, with stars and color labels embedded for Lightroom. It can optionally write `.xmp` sidecars beside RAW/HEIC originals, and never replaces an existing sidecar. **Album** (⌘4) browses every photo; double-click or Space opens a large view with burst survey and eye zoom. **Adjust** (⌘D) offers basic sliders for one photo, and that edit is used on delivery. Technical misses (extreme blur, blank frames, unusable exposures, single-subject blinks) are hidden as *Unusable*. ⌘/ lists every shortcut.
 
-Run the same pipeline as a loopback worker. It reads a folder that already exists on this Mac; it does not upload photographs. Set `PHOTO_ENGINE_TOKEN` to require `Authorization: Bearer`.
+Run the same pipeline as a loopback worker. It reads a folder that already exists on this Mac; it does not upload photographs. `photo-engine serve` binds to `127.0.0.1` only. Every route requires `Authorization: Bearer`. `PHOTO_ENGINE_TOKEN` is the shared secret (a session token is printed when it is unset). `PHOTO_ENGINE_ALLOWED_ROOTS` is a colon-separated list of directories a source folder may live under, defaulting to `~/Pictures`. `PHOTO_ENGINE_ALLOWED_ORIGINS` is a comma-separated list of browser `Origin` values; the default is none, and the server does not send a wildcard CORS header. Clients cannot choose an output path. Jobs write under `~/Library/Application Support/Photocore/worker-runs`.
 
 ```bash
 swift run photo-engine serve --port 8787
-curl http://127.0.0.1:8787/v1/health
+curl -H "Authorization: Bearer $PHOTO_ENGINE_TOKEN" http://127.0.0.1:8787/v1/health
 curl -X POST http://127.0.0.1:8787/v1/jobs \
+  -H "Authorization: Bearer $PHOTO_ENGINE_TOKEN" \
   -H 'Content-Type: application/json' \
   -d '{"sourcePath":"/path/to/photos","profile":"groupEvent","cull":"balanced","target":40}'
 ```
@@ -81,10 +86,17 @@ Each run is written beneath `<output>/runs/<timestamp>-<id>/`, so rerunning with
 
 `photo-engine-checks` is a fixture-driven regression executable that exercises grouping, bounded burst duration, deterministic selection, culling/style controls, Vision descriptor round-trips, durable catalog records, stable IDs, corrupt-file reporting, isolated outputs, metadata sanitization, warm-cache metrics, and unsafe output paths. It is deliberately runnable with the standalone Swift Command Line Tools installed on this machine; it can be migrated to XCTest/Swift Testing without changing the fixture coverage when the app moves into an Xcode project.
 
-Quality calibration against real labeled shoots, RAW/ARW support, person identity grouping, lens-profile chromatic-aberration correction, and side-by-side correction tools remain intentionally separate follow-up work. Automatic culling never modifies source photographs; cleanup is limited to an explicit, verified exact-duplicate Trash action. Occasion profiles change which technical rejects are hard-hidden (creative keeps unusual frames; group events protect faces).
+Vision feature-print revision 2, measured on 512–1024 px thumbnails:
+
+| Shoot | Same moment, ≤ 3 s apart | Unrelated, > 5 min apart |
+|---|---|---|
+| Night event (Pycon) | p50 **0.45** (p10 0.34, p90 0.60) | p1 **0.58**, p50 1.05 |
+| Daytime travel (Italy, RAW) | p50 **0.29** (p10 0.18, p90 0.56) | p1 **0.58**, p50 1.06 |
+
+Pairs at 0.30–0.47 were the same shot repeated. 0.52–0.57 were the same scene with a different composition. A same-shot threshold of about **0.50**, and a same-moment threshold of about **0.62** only when frames are within 3 seconds, is what the profiles use. Older Hamming-scale cutoffs of 7–10 were 15–20× too large for this distance.
+
+Person identity, a learned ranker, and lens-profile chromatic aberration beyond `CIRAWFilter` stay out of scope. Automatic culling never modifies source photographs; cleanup is limited to an explicit, verified exact-duplicate Trash action. Occasion profiles change which technical rejects are hard-hidden (creative keeps unusual frames; group events protect faces). Record a release-build owner run in `outputs/evaluation-log.md` when the Pycon and Italy slices are measured again.
 
 ## Repository policy
-
-This repository is local-only. No Git remote is configured and nothing should be pushed without an explicit future decision by the owner.
 
 Source photographs, generated exports, private test fixtures, downloaded models, credentials, and application databases must not be committed.
