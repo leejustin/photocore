@@ -38,6 +38,8 @@ struct PhotoEngineChecks {
             ("vision distance drives grouping", visionDistanceDrivesGrouping),
             ("moment window uses the looser threshold", momentWindowUsesLooserThreshold),
             ("legacy visual thresholds migrate", legacyVisualThresholdsMigrate),
+            ("same-moment candidates become alternates", sameMomentCandidatesBecomeAlternates),
+            ("review queue stays small", reviewQueueStaysSmall),
         ]
 
         for (name, check) in checks {
@@ -491,6 +493,9 @@ struct PhotoEngineChecks {
         try fixture.writeJPEG(name: "three.jpg", red: 0.8)
         var profile = ScoringProfile.default(for: .everyday)
         profile.targetCount = 2
+        // These fixtures share a layout, so Vision treats them as one moment.
+        // This check is about discarding an export, not about deduplication.
+        profile.nearDuplicateVisualDistance = 0.05
         let runner = PhotoPipelineRunner()
         let result = try runner.run(folder: fixture.source, outputDirectory: fixture.output, profile: profile)
         let excludedID = try require(result.shortlist.selectedIDs.first, "expected a selected photo")
@@ -633,6 +638,30 @@ struct PhotoEngineChecks {
         let decoded = try JSONDecoder().decode(ScoringProfile.self, from: JSONSerialization.data(withJSONObject: json))
         try expect(decoded.nearDuplicateVisualDistance < 1, "legacy 9 was not migrated to the Vision scale")
         try expect(decoded.momentVisualDistance > decoded.nearDuplicateVisualDistance, "moment threshold missing after migration")
+    }
+
+    private static func sameMomentCandidatesBecomeAlternates() throws {
+        let photos = (0..<3).map { withFakePrint(analyzed(index: $0, hash: "m\($0)", perceptualHash: UInt64($0) << 20, date: nil), UInt8($0)) }
+        let scored = photos.map { ScoredPhoto(photo: $0, score: PhotoScoring.score($0, profile: .default(for: .everyday))) }
+        var profile = ScoringProfile.default(for: .everyday)
+        profile.targetCount = 3
+        // 0 and 1 are the same moment; 2 is different.
+        let shortlist = PhotoSelectionEngine.select(scored, grouping: PhotoGrouping(groups: []), profile: profile) { lhs, rhs in
+            Set([lhs.featurePrint!.first!, rhs.featurePrint!.first!]) == Set([0, 1]) ? 0.3 : 1.0
+        }
+        try expect(shortlist.selectedIDs.count == 2, "a same-moment duplicate was kept alongside its twin")
+        let alternates = shortlist.decisions.filter { $0.bucket == .alternate }
+        try expect(alternates.count == 1 && alternates[0].reasons.first == SelectionReason.sameMomentAsKept, "twin was not marked as an alternate")
+    }
+
+    private static func reviewQueueStaysSmall() throws {
+        let photos = (0..<60).map { analyzed(index: $0, hash: "r\($0)", perceptualHash: UInt64($0) * 0x0101_0101_0101, date: nil) }
+        let scored = photos.map { ScoredPhoto(photo: $0, score: PhotoScoring.score($0, profile: .default(for: .everyday))) }
+        var profile = ScoringProfile.default(for: .everyday)
+        profile.targetCount = 20
+        let shortlist = PhotoSelectionEngine.select(scored, grouping: PhotoGrouping(groups: []), profile: profile, visualDistance: { _, _ in 1.0 })
+        let review = shortlist.decisions.filter { $0.bucket == .review }.count
+        try expect(review <= 3, "review queue grew to \(review) for 20 selections")
     }
 
     private static func pruningIgnoresForeignFolders() throws {
