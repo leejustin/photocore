@@ -1,16 +1,6 @@
 import PhotoEngineCore
+import PhotoEngineWorkflow
 import SwiftUI
-
-struct ConfirmationMoment: Identifiable, Equatable {
-    let id: String
-    let suggestedID: PhotoID
-    let candidateIDs: [PhotoID]
-    let reason: String
-    let margin: Double
-    var hiddenRunnerUpIDs: [PhotoID] = []
-
-    var isChoice: Bool { candidateIDs.count > 1 }
-}
 
 struct ConfirmWorkspace: View {
     @ObservedObject var model: PhotoEngineViewModel
