@@ -387,7 +387,7 @@ final class PhotoEngineViewModel: ObservableObject {
     }
 
     var albumSummary: AlbumSummary {
-        let close = rows.filter { $0.bucket == .review || $0.reasons.contains("close to a photo we kept") }.count
+        let close = rows.filter { $0.bucket == .review }.count
         return AlbumSummary(
             total: rows.count,
             kept: count(.album),
@@ -938,7 +938,7 @@ final class PhotoEngineViewModel: ObservableObject {
                 id: row.id.description,
                 suggestedID: row.id,
                 candidateIDs: [row.id],
-                reason: row.reasons.first ?? "Close to a photo we kept.",
+                reason: row.reasons.first ?? "Just missed the cut.",
                 margin: 0.05
             ))
         }

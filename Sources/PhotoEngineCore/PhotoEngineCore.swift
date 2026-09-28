@@ -1286,6 +1286,14 @@ public enum PhotoGroupingEngine {
     }
 }
 
+public enum SelectionReason {
+    public static let justBelowCut = "just below the cut"
+    public static let belowCut = "weaker than the shortlist"
+    public static let sameMomentAsKept = "same moment as a photo we kept"
+    public static let nearDuplicate = "near-duplicate of a stronger candidate"
+    public static let exactDuplicate = "exact duplicate of a stronger candidate"
+}
+
 public enum PhotoSelectionEngine {
     public static func applying(_ overrides: [SelectionOverride], to shortlist: Shortlist) -> Shortlist {
         guard !overrides.isEmpty else { return shortlist }
@@ -1354,7 +1362,7 @@ public enum PhotoSelectionEngine {
                         photoID: representative.id,
                         bucket: .alternate,
                         rank: nil,
-                        reasons: ["near-duplicate of a stronger candidate"],
+                        reasons: [SelectionReason.nearDuplicate],
                         score: representative.score.total
                     ))
                 }
@@ -1363,7 +1371,7 @@ public enum PhotoSelectionEngine {
                         photoID: duplicate.id,
                         bucket: .hidden,
                         rank: nil,
-                        reasons: ["exact duplicate of a stronger candidate"],
+                        reasons: [SelectionReason.exactDuplicate],
                         score: duplicate.score.total
                     ))
                 }
@@ -1374,6 +1382,7 @@ public enum PhotoSelectionEngine {
         candidates.sort { Self.isPreferred($0, over: $1) }
 
         var selected: [ScoredPhoto] = []
+        var redundantDecisions: [SelectionDecision] = []
         var remaining = candidates
         var maximumSimilarity: [PhotoID: Double] = [:]
         while selected.count < profile.targetCount, !remaining.isEmpty {
@@ -1389,36 +1398,57 @@ public enum PhotoSelectionEngine {
             }
             let chosen = remaining.remove(at: bestIndex)
             selected.append(chosen)
+            var sameMomentIDs = Set<PhotoID>()
             for candidate in remaining {
                 let similarity: Double
                 if let distance = visualDistance(candidate.photo.signals, chosen.photo.signals) {
-                    // Vision distances are unbounded; convert them into a
-                    // smooth 0...1 similarity for maximal-marginal relevance.
+                    // Distances are on Vision's calibrated scale (~0.3 same shot, ~1.0 unrelated).
                     similarity = exp(-distance / max(profile.nearDuplicateVisualDistance, 0.001))
+                    if distance <= profile.nearDuplicateVisualDistance { sameMomentIDs.insert(candidate.id) }
                 } else {
-                    let normalized = PhotoSimilarity.normalizedHammingDistance(
+                    let hamming = PhotoSimilarity.hammingDistance(
                         candidate.photo.signals.fingerprint.perceptualHash,
                         chosen.photo.signals.fingerprint.perceptualHash
                     )
-                    similarity = 1 - normalized
+                    similarity = 1 - PhotoSimilarity.normalizedHammingDistance(
+                        candidate.photo.signals.fingerprint.perceptualHash,
+                        chosen.photo.signals.fingerprint.perceptualHash
+                    )
+                    if hamming <= profile.nearDuplicateHammingDistance { sameMomentIDs.insert(candidate.id) }
                 }
                 maximumSimilarity[candidate.id] = max(maximumSimilarity[candidate.id] ?? 0, similarity)
             }
+            if !sameMomentIDs.isEmpty {
+                for candidate in remaining where sameMomentIDs.contains(candidate.id) {
+                    redundantDecisions.append(SelectionDecision(
+                        photoID: candidate.id,
+                        bucket: .alternate,
+                        rank: nil,
+                        reasons: [SelectionReason.sameMomentAsKept],
+                        score: candidate.score.total
+                    ))
+                }
+                remaining.removeAll { sameMomentIDs.contains($0.id) }
+            }
         }
+        decisions.append(contentsOf: redundantDecisions)
 
         for (rank, photo) in selected.enumerated() {
             decisions.append(SelectionDecision(photoID: photo.id, bucket: .selected, rank: rank, reasons: photo.score.reasons, score: photo.score.total))
         }
 
         let cutoff = selected.last?.score.total ?? 0
-        for photo in remaining {
-            let margin = cutoff - photo.score.total
-            let close = margin < 0.08
+        // Only a handful of genuinely borderline photos go to review; the rest are hidden.
+        let reviewLimit = max(3, selected.count / 10)
+        var reviewCount = 0
+        for photo in remaining.sorted(by: { Self.isPreferred($0, over: $1) }) {
+            let borderline = cutoff - photo.score.total < 0.03 && reviewCount < reviewLimit
+            if borderline { reviewCount += 1 }
             decisions.append(SelectionDecision(
                 photoID: photo.id,
-                bucket: close ? .review : .hidden,
+                bucket: borderline ? .review : .hidden,
                 rank: nil,
-                reasons: [close ? "close to a photo we kept" : "weaker than the shortlist"],
+                reasons: [borderline ? SelectionReason.justBelowCut : SelectionReason.belowCut],
                 score: photo.score.total
             ))
         }
