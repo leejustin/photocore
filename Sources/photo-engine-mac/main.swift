@@ -2,6 +2,7 @@ import AppKit
 import Foundation
 import PhotoEngineApple
 import PhotoEngineCore
+import PhotoEngineWorkflow
 import SwiftUI
 import UniformTypeIdentifiers
 
@@ -360,13 +361,15 @@ final class PhotoEngineViewModel: ObservableObject {
 
     func finish(result: PipelineResult, outputURL: URL) {
         self.result = result
-        rows = Self.makeRows(result: result)
-        groupsByPhoto = Self.indexGroups(result.grouping)
+        rows = CuratedRow.rows(for: result)
+        groupsByPhoto = PhotoGroupIndex.build(result.grouping)
         if let stored = try? runner.reviewMarks(for: result.analyzed.map(\.id)) {
             reviewMarks = Dictionary(stored.map { ($0.photoID, $0) }, uniquingKeysWith: { _, latest in latest })
         }
         filter = count(.album) > 0 ? .album : .all
-        confirmations = makeConfirmations()
+        let built = ConfirmationBuilder.build(result: result, rows: rows, groups: groupsByPhoto)
+        confirmationsBeyondCap = built.beyondCap
+        confirmations = built.moments
         skippedConfirmationIDs = []
         seedInCameraRatings()
         focusedID = confirmations.first?.suggestedID ?? visibleRows.first?.id
@@ -385,27 +388,8 @@ final class PhotoEngineViewModel: ObservableObject {
         if let selectedFolder { rememberRecentFolder(selectedFolder) }
     }
 
-    struct AlbumSummary {
-        var total: Int
-        var kept: Int
-        var unusable: Int
-        var close: Int
-        var pending: Int
-
-        var sentence: String {
-            "\(total) in · \(kept) in album · \(unusable) unusable · \(close) close"
-        }
-    }
-
     var albumSummary: AlbumSummary {
-        let close = rows.filter { $0.bucket == .review }.count
-        return AlbumSummary(
-            total: rows.count,
-            kept: count(.album),
-            unusable: count(.unusable),
-            close: close,
-            pending: pendingConfirmations.count
-        )
+        AlbumSummary.make(rows: rows, marks: reviewMarks, pendingConfirmations: pendingConfirmations.count)
     }
 
     private func seedInCameraRatings() {
@@ -480,7 +464,7 @@ final class PhotoEngineViewModel: ObservableObject {
                 storageSummary = discard.storageSummary
                 removedExport = discard.removedPath != nil
             }
-            try Self.updateManifest(result.manifestURL, shortlist: updatedShortlist, exports: exports)
+            try ManifestStore.update(result.manifestURL, shortlist: updatedShortlist, exports: exports)
             self.result = PipelineResult(
                 sessionID: result.sessionID,
                 imported: result.imported,
@@ -496,7 +480,7 @@ final class PhotoEngineViewModel: ObservableObject {
                 metrics: result.metrics,
                 exportSpecification: result.exportSpecification
             )
-            rows = Self.makeRows(result: self.result!)
+            rows = CuratedRow.rows(for: self.result!)
             cleanupPlan = nil
             cleanupReport = nil
             if removedExport {
@@ -626,20 +610,17 @@ final class PhotoEngineViewModel: ObservableObject {
     /// `look` with the user's warmth and auto-straighten choices applied, rendered for `photo`.
     /// Look previews, Adjust, Apply look and Deliver all go through here.
     func recipe(for photo: AnalyzedPhoto, look: AlbumLook) -> EditRecipe {
-        var look = look
-        look.temperature += lookTemperature
-        look.autoStraighten = autoStraightenLook
         let horizon: Double? = autoStraightenLook ? (horizonCache[photo.id] ?? nil) : nil
-        var recipe = look.recipe(for: photo, horizonDegrees: horizon)
-        recipe.base = renderBase
-        return recipe
+        return LookComposer.recipe(for: photo, look: look, settings: currentLookSettings(lookID: look.id), horizon: horizon)
     }
 
     var effectiveLook: AlbumLook {
-        var look = selectedLook ?? AlbumLook.builtins[0]
-        look.temperature += lookTemperature
-        look.autoStraighten = autoStraightenLook
-        return look
+        let look = selectedLook ?? AlbumLook.builtins[0]
+        return LookComposer.effective(look: look, settings: currentLookSettings(lookID: look.id))
+    }
+
+    private func currentLookSettings(lookID: String) -> LookSettings {
+        LookSettings(lookID: lookID, temperature: lookTemperature, autoStraighten: autoStraightenLook, renderBase: renderBase)
     }
 
     /// The album-look recipe for a photo before any per-photo Adjust edits.
@@ -649,9 +630,7 @@ final class PhotoEngineViewModel: ObservableObject {
 
     /// In the album unless the user rejected it: AI keepers, protected photos, and the user's own picks.
     func isInAlbum(_ row: CuratedRow) -> Bool {
-        let flag = mark(for: row.id).flag
-        if flag == .reject { return false }
-        return row.bucket == .selected || row.bucket == .protected || flag == .pick
+        AlbumMembership.contains(row, mark: mark(for: row.id))
     }
 
     var deliverRows: [CuratedRow] {
@@ -751,7 +730,7 @@ final class PhotoEngineViewModel: ObservableObject {
             metrics: result.metrics,
             exportSpecification: result.exportSpecification
         )
-        rows = Self.makeRows(result: self.result!)
+        rows = CuratedRow.rows(for: self.result!)
         isReexportingLook = false
         lookRenderProgress = nil
         lookIsApplied = true
@@ -850,42 +829,28 @@ final class PhotoEngineViewModel: ObservableObject {
 
     func acceptSuggestion() {
         guard let moment = currentConfirmation else { return }
-        performAsOneUndo {
-            updateMark(moment.suggestedID) { $0.flag = .pick }
-            for id in moment.candidateIDs where id != moment.suggestedID {
-                updateMark(id) { $0.flag = .reject }
-            }
-        }
-        status = confirmationStatus
+        applyConfirmation(ConfirmationBuilder.resolution(for: moment, action: .accept, rows: rows))
     }
 
     func useConfirmationCandidate(_ id: PhotoID) {
-        guard let moment = currentConfirmation,
-              moment.candidateIDs.contains(id) || moment.hiddenRunnerUpIDs.contains(id) else { return }
-        if id == moment.suggestedID {
-            acceptSuggestion()
-            return
-        }
-        performAsOneUndo {
-            updateMark(id) { $0.flag = .pick }
-            if let row = row(for: id), row.bucket != .selected, row.bucket != .protected {
-                override(photoID: id, bucket: .selected)
-            }
-            for other in moment.candidateIDs where other != id {
-                updateMark(other) { $0.flag = .reject }
-                if row(for: other)?.bucket == .selected {
-                    override(photoID: other, bucket: .alternate)
-                }
-            }
-        }
-        status = confirmationStatus
+        guard let moment = currentConfirmation else { return }
+        applyConfirmation(ConfirmationBuilder.resolution(for: moment, action: .use(id), rows: rows))
     }
 
     func dropSuggestion() {
         guard let moment = currentConfirmation else { return }
+        applyConfirmation(ConfirmationBuilder.resolution(for: moment, action: .drop, rows: rows))
+    }
+
+    private func applyConfirmation(_ resolution: (marks: [MarkChange], overrides: [BucketOverride])) {
+        guard !resolution.marks.isEmpty || !resolution.overrides.isEmpty else { return }
         performAsOneUndo {
-            updateMark(moment.suggestedID) { $0.flag = .reject }
-            override(photoID: moment.suggestedID, bucket: .hidden)
+            for change in resolution.marks {
+                updateMark(change.photoID) { $0.flag = change.flag }
+            }
+            for change in resolution.overrides {
+                override(photoID: change.photoID, bucket: change.bucket)
+            }
         }
         status = confirmationStatus
     }
@@ -910,80 +875,8 @@ final class PhotoEngineViewModel: ObservableObject {
         return "\(left) close moment\(left == 1 ? "" : "s") left."
     }
 
-    private func makeConfirmations() -> [ConfirmationMoment] {
-        var moments: [ConfirmationMoment] = []
-        var covered = Set<PhotoID>()
-        let groups = result?.grouping.groups ?? []
-        for group in groups where group.kind != .exactDuplicate && group.memberIDs.count > 1 {
-            let visible = group.memberIDs.compactMap { id in row(for: id) }.filter { $0.bucket != .hidden }
-            guard visible.count >= 2 else { continue }
-            let ranked = visible.sorted { $0.score > $1.score }
-            guard let best = ranked.first, let second = ranked.dropFirst().first else { continue }
-            let margin = best.score - second.score
-            guard margin < 0.08 else { continue }
-            covered.formUnion(ranked.map(\.id))
-            let candidates = Array(ranked.prefix(4).map(\.id))
-            let candidateSet = Set(candidates)
-            let runnersUp = group.memberIDs.filter { id in
-                guard !candidateSet.contains(id), let row = row(for: id) else { return false }
-                return !row.reasons.contains(where: PhotoTechnicalReject.isTechnicalRejectReason)
-            }
-            moments.append(ConfirmationMoment(
-                id: group.id.uuidString,
-                suggestedID: best.id,
-                candidateIDs: candidates,
-                reason: best.reasons.first ?? "These frames are close.",
-                margin: margin,
-                hiddenRunnerUpIDs: runnersUp
-            ))
-        }
-        for row in rows where row.bucket == .selected || row.bucket == .protected {
-            guard !covered.contains(row.id), groupsByPhoto[row.id] == nil else { continue }
-            let flags = analyzedPhoto(id: row.id)?.signals.qualityFlags.filter {
-                $0 == "subject appears soft" || $0 == "face quality low" || $0 == PhotoTechnicalReject.eyesClosed
-            } ?? []
-            guard !flags.isEmpty else { continue }
-            covered.insert(row.id)
-            moments.append(ConfirmationMoment(
-                id: row.id.description,
-                suggestedID: row.id,
-                candidateIDs: [row.id],
-                reason: flags.joined(separator: " · "),
-                margin: 0
-            ))
-        }
-        for row in rows where row.bucket == .review && !covered.contains(row.id) {
-            guard !row.reasons.contains(where: PhotoTechnicalReject.isTechnicalRejectReason) else { continue }
-            moments.append(ConfirmationMoment(
-                id: row.id.description,
-                suggestedID: row.id,
-                candidateIDs: [row.id],
-                reason: row.reasons.first ?? "Just missed the cut.",
-                margin: 0.05
-            ))
-        }
-        let sorted = moments.sorted { $0.margin < $1.margin }
-        confirmationsBeyondCap = max(0, sorted.count - 16)
-        return Array(sorted.prefix(16))
-    }
-
     func suggestionExplanation(for moment: ConfirmationMoment) -> String {
-        guard moment.isChoice, let best = analyzedPhoto(id: moment.suggestedID) else { return moment.reason }
-        let others = moment.candidateIDs.filter { $0 != moment.suggestedID }.compactMap { analyzedPhoto(id: $0) }
-        guard !others.isEmpty else { return moment.reason }
-        func focus(_ photo: AnalyzedPhoto) -> Double { photo.signals.subjectSharpness ?? photo.signals.sharpness }
-        func eyesClosed(_ photo: AnalyzedPhoto) -> Bool { photo.signals.qualityFlags.contains(PhotoTechnicalReject.eyesClosed) }
-        var edges: [String] = []
-        if others.allSatisfy({ focus(best) - focus($0) > 0.05 }) { edges.append("is sharper") }
-        if best.signals.faceCount > 0, others.allSatisfy({ best.signals.faceQuality - $0.signals.faceQuality > 0.05 }) {
-            edges.append("has better faces")
-        }
-        if !eyesClosed(best), others.contains(where: eyesClosed) { edges.append("has open eyes") }
-        if others.allSatisfy({ best.signals.exposureQuality - $0.signals.exposureQuality > 0.05 }) {
-            edges.append("is better exposed")
-        }
-        guard !edges.isEmpty else { return "These frames are nearly identical. Either is a fine keep." }
-        return "Suggested because it " + ListFormatter.localizedString(byJoining: edges) + "."
+        ConfirmationBuilder.explanation(for: moment, analyzed: result?.analyzed ?? [])
     }
 
     func cycleLoupeZoom() {
@@ -1237,39 +1130,17 @@ final class PhotoEngineViewModel: ObservableObject {
             let accessed = sourceFolder?.startAccessingSecurityScopedResource() ?? false
             defer { if accessed { sourceFolder?.stopAccessingSecurityScopedResource() } }
             do {
-                let fileManager = FileManager.default
-                try fileManager.createDirectory(at: destination, withIntermediateDirectories: true)
-                let renderer = ApplePhotoRenderer()
-                for (index, job) in jobs.enumerated() {
-                    let output = destination.appendingPathComponent(job.fileName)
-                    if let reusable = job.reusableExport, fileManager.fileExists(atPath: reusable.path) {
-                        try fileManager.copyItem(at: reusable, to: output)
-                    } else {
-                        let recipe: EditRecipe
-                        if let custom = job.customRecipe {
-                            recipe = custom
-                        } else {
-                            let horizon = look.autoStraighten
-                                ? ApplePhotoRenderer.detectHorizonDegrees(url: job.photo.asset.url, orientation: job.photo.asset.metadata.orientation)
-                                : nil
-                            recipe = look.recipe(for: job.photo, horizonDegrees: horizon)
-                        }
-                        _ = try renderer.render(photo: job.photo, outputURL: output, recipe: recipe, exportSpecification: spec)
-                    }
-                    try JPEGRatingStamp.stamp(job.mark, into: output)
-                    await self?.noteDeliverProgress(done: index + 1, total: jobs.count)
+                let report = try DeliveryExecutor.run(
+                    jobs: jobs,
+                    sidecars: sidecarJobs,
+                    entries: entries,
+                    destination: destination,
+                    look: look,
+                    specification: spec
+                ) { done, total in
+                    Task { @MainActor in self?.noteDeliverProgress(done: done, total: total) }
                 }
-                var written = 0
-                var skipped = 0
-                for sidecar in sidecarJobs {
-                    switch try LightroomSidecar.writePreservingExisting(sidecar.mark, named: sidecar.baseName, to: sidecar.folder) {
-                    case .written: written += 1
-                    case .skippedExistingSidecar: skipped += 1
-                    }
-                }
-                try LightroomSidecar.decisionsData(entries)
-                    .write(to: destination.appendingPathComponent("photocore-cull.json"), options: .atomic)
-                await self?.didDeliver(DeliveryReport(folder: destination, photoCount: jobs.count, sidecarsWritten: written, sidecarsSkipped: skipped))
+                await self?.didDeliver(report)
             } catch {
                 await self?.noteDeliverFailure(error)
             }
@@ -1278,16 +1149,7 @@ final class PhotoEngineViewModel: ObservableObject {
 
     /// Always a brand-new folder, so delivery never overwrites or deletes anything.
     private func newDeliveryFolder() -> URL {
-        let shoot = selectedFolder?.lastPathComponent ?? "Album"
-        let day = Date().formatted(.iso8601.year().month().day())
-        let base = "\(shoot) \(day)"
-        var candidate = deliverParentFolder.appendingPathComponent(base, isDirectory: true)
-        var suffix = 2
-        while FileManager.default.fileExists(atPath: candidate.path) {
-            candidate = deliverParentFolder.appendingPathComponent("\(base) \(suffix)", isDirectory: true)
-            suffix += 1
-        }
-        return candidate
+        DeliveryExecutor.newFolder(parent: deliverParentFolder, shootName: selectedFolder?.lastPathComponent ?? "Album")
     }
 
     private func noteDeliverProgress(done: Int, total: Int) {
@@ -1326,109 +1188,8 @@ final class PhotoEngineViewModel: ObservableObject {
         syncDevelopRecipe()
     }
 
-    private static func indexGroups(_ grouping: PhotoGrouping) -> [PhotoID: PhotoGroup] {
-        var map: [PhotoID: PhotoGroup] = [:]
-        let ordered = grouping.groups.sorted { groupRank($0.kind) < groupRank($1.kind) }
-        for group in ordered where group.memberIDs.count > 1 {
-            for id in group.memberIDs {
-                map[id] = group
-            }
-        }
-        return map
-    }
-
-    private static func groupRank(_ kind: PhotoGroup.Kind) -> Int {
-        switch kind {
-        case .scene: 0
-        case .burst: 1
-        case .exactDuplicate: 2
-        }
-    }
-
-    private static func makeRows(result: PipelineResult) -> [CuratedRow] {
-        let analyzedByID = Dictionary(uniqueKeysWithValues: result.analyzed.map { ($0.id, $0) })
-        let scoreByID = Dictionary(uniqueKeysWithValues: result.scored.map { ($0.id, $0.score) })
-        let exportByID = Dictionary(uniqueKeysWithValues: result.exports.map { ($0.photoID, URL(fileURLWithPath: $0.outputPath)) })
-        return result.shortlist.decisions.compactMap { decision in
-            guard let analyzed = analyzedByID[decision.photoID] else { return nil }
-            return CuratedRow(
-                id: decision.photoID,
-                bucket: decision.bucket,
-                rank: decision.rank,
-                relativePath: analyzed.asset.relativePath,
-                reasons: scoreByID[decision.photoID]?.reasons ?? decision.reasons,
-                score: decision.score,
-                sourceURL: analyzed.asset.url,
-                previewURL: exportByID[decision.photoID]
-            )
-        }
-    }
-
-    private static func updateManifest(_ url: URL, shortlist: Shortlist, exports: [ExportedPhoto]? = nil) throws {
-        let data = try Data(contentsOf: url)
-        let decoder = JSONDecoder()
-        decoder.dateDecodingStrategy = .iso8601
-        let manifest = try decoder.decode(PipelineManifest.self, from: data)
-        let updated = PipelineManifest(
-            sessionID: manifest.sessionID,
-            schemaVersion: manifest.schemaVersion,
-            pipelineVersion: manifest.pipelineVersion,
-            createdAt: manifest.createdAt,
-            sourceFolder: manifest.sourceFolder,
-            mode: manifest.mode,
-            profile: manifest.profile,
-            aggressiveness: manifest.aggressiveness,
-            style: manifest.style,
-            styleIntensity: manifest.styleIntensity,
-            targetCount: manifest.targetCount,
-            exportSpecification: manifest.exportSpecification,
-            assets: manifest.assets,
-            analyzed: manifest.analyzed,
-            grouping: manifest.grouping,
-            shortlist: shortlist,
-            exports: exports ?? manifest.exports,
-            warnings: manifest.warnings,
-            metrics: manifest.metrics
-        )
-        let encoder = JSONEncoder()
-        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
-        encoder.dateEncodingStrategy = .iso8601
-        try encoder.encode(updated).write(to: url, options: .atomic)
-    }
-
     private static func formatBytes(_ bytes: Int64) -> String {
         ByteCountFormatter.string(fromByteCount: bytes, countStyle: .file)
     }
 }
 
-struct CuratedRow: Identifiable, Sendable {
-    let id: PhotoID
-    let bucket: SelectionBucket
-    let rank: Int?
-    let relativePath: String
-    let reasons: [String]
-    let score: Double
-    let sourceURL: URL
-    let previewURL: URL?
-}
-
-struct DeliveryJob: Sendable {
-    let photo: AnalyzedPhoto
-    let fileName: String
-    let mark: PhotoReviewMark
-    let customRecipe: EditRecipe?
-    let reusableExport: URL?
-}
-
-struct SidecarJob: Sendable {
-    let mark: PhotoReviewMark
-    let baseName: String
-    let folder: URL
-}
-
-struct DeliveryReport: Equatable {
-    let folder: URL
-    let photoCount: Int
-    let sidecarsWritten: Int
-    let sidecarsSkipped: Int
-}

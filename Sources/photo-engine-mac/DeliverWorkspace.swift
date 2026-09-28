@@ -1,5 +1,6 @@
 import AppKit
 import PhotoEngineCore
+import PhotoEngineWorkflow
 import SwiftUI
 import UniformTypeIdentifiers
 

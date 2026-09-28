@@ -1,4 +1,5 @@
 import PhotoEngineCore
+import PhotoEngineWorkflow
 import SwiftUI
 
 struct LibraryWorkspace: View {

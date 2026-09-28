@@ -3,8 +3,8 @@ import ImageIO
 import PhotoEngineCore
 
 /// Embeds Lightroom-readable stars and color labels in a JPEG without re-encoding it.
-enum JPEGRatingStamp {
-    static func stamp(_ mark: PhotoReviewMark, into url: URL) throws {
+public enum JPEGRatingStamp {
+    public static func stamp(_ mark: PhotoReviewMark, into url: URL) throws {
         let label = mark.color.lightroomLabel
         guard mark.stars > 0 || label != nil else { return }
         guard let source = CGImageSourceCreateWithURL(url as CFURL, nil),

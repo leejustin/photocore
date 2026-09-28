@@ -6,6 +6,7 @@ import UniformTypeIdentifiers
 import PhotoEngineApple
 import PhotoEngineCore
 import PhotoEnginePersistence
+import PhotoEngineWorkflow
 
 @main
 struct PhotoEngineChecks {
@@ -45,6 +46,10 @@ struct PhotoEngineChecks {
             ("older recipes keep their rendering", olderRecipesKeepRendering),
             ("auto recipe enables enhancement", autoRecipeEnablesEnhancement),
             ("exports are chronological", exportsAreChronological),
+            ("manifest round-trips", manifestRoundTrips),
+            ("confirmation builder finds groups", confirmationBuilderFindsGroups),
+            ("album membership respects rejects", albumMembershipRespectsRejects),
+            ("delivery never overwrites", deliveryNeverOverwrites),
         ]
 
         for (name, check) in checks {
@@ -720,6 +725,66 @@ struct PhotoEngineChecks {
             includingPropertiesForKeys: nil
         ).map(\.lastPathComponent).sorted()
         try expect(names == ["001-a.jpg", "002-b.jpg", "003-c.jpg"], "exports were \(names), not capture order")
+    }
+
+    private static func manifestRoundTrips() throws {
+        let fixture = try FixtureDirectory()
+        defer { fixture.remove() }
+        try fixture.writeJPEG(name: "a.jpg", red: 0.2, date: Date(timeIntervalSince1970: 1_000))
+        try fixture.writeJPEG(name: "b.jpg", red: 0.8, date: Date(timeIntervalSince1970: 2_000))
+        var profile = ScoringProfile.default(for: .everyday)
+        profile.targetCount = 2
+        profile.nearDuplicateVisualDistance = 0.05
+        let result = try PhotoPipelineRunner().run(folder: fixture.source, outputDirectory: fixture.output, profile: profile)
+        let loaded = try ManifestStore.loadResult(manifestURL: result.manifestURL)
+        try expect(loaded.sessionID == result.sessionID, "session id changed")
+        try expect(loaded.shortlist.decisions.count == result.shortlist.decisions.count, "shortlist count changed")
+        try expect(loaded.grouping.groups.count == result.grouping.groups.count, "grouping count changed")
+        try expect(loaded.exports.count == result.exports.count, "export count changed")
+    }
+
+    private static func confirmationBuilderFindsGroups() throws {
+        let first = analyzed(index: 0, hash: "a", perceptualHash: 0, date: nil)
+        let second = analyzed(index: 1, hash: "b", perceptualHash: 1, date: nil)
+        let group = PhotoGroup(memberIDs: [first.id, second.id], kind: .burst)
+        let rows = [
+            CuratedRow(id: first.id, bucket: .selected, rank: 0, relativePath: "a.jpg", reasons: ["sharp"], score: 0.80, sourceURL: first.asset.url, previewURL: nil),
+            CuratedRow(id: second.id, bucket: .alternate, rank: nil, relativePath: "b.jpg", reasons: ["close"], score: 0.76, sourceURL: second.asset.url, previewURL: nil)
+        ]
+        let result = PipelineResult(
+            sessionID: SessionID(),
+            imported: [first.asset, second.asset],
+            analyzed: [first, second],
+            grouping: PhotoGrouping(groups: [group]),
+            scored: [],
+            shortlist: Shortlist(decisions: []),
+            exports: [],
+            manifestURL: URL(fileURLWithPath: "/tmp/manifest.json"),
+            warnings: [],
+            runDirectory: URL(fileURLWithPath: "/tmp"),
+            storageSummary: nil
+        )
+        let built = ConfirmationBuilder.build(result: result, rows: rows, groups: PhotoGroupIndex.build(result.grouping))
+        try expect(built.moments.count == 1, "close group did not become one confirmation")
+        try expect(built.moments[0].isChoice, "grouped frames were not a choice")
+        try expect(built.moments[0].suggestedID == first.id, "higher score was not suggested")
+    }
+
+    private static func albumMembershipRespectsRejects() throws {
+        let id = PhotoID()
+        let row = CuratedRow(id: id, bucket: .selected, rank: 0, relativePath: "a.jpg", reasons: [], score: 0.9, sourceURL: URL(fileURLWithPath: "/tmp/a.jpg"), previewURL: nil)
+        try expect(AlbumMembership.contains(row, mark: PhotoReviewMark(photoID: id, flag: .pick)), "a pick should stay in the album")
+        try expect(!AlbumMembership.contains(row, mark: PhotoReviewMark(photoID: id, flag: .reject)), "a reject must leave the album")
+    }
+
+    private static func deliveryNeverOverwrites() throws {
+        let parent = FileManager.default.temporaryDirectory.appendingPathComponent("photocore-delivery-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: parent, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: parent) }
+        let first = DeliveryExecutor.newFolder(parent: parent, shootName: "Pycon")
+        try FileManager.default.createDirectory(at: first, withIntermediateDirectories: true)
+        let second = DeliveryExecutor.newFolder(parent: parent, shootName: "Pycon")
+        try expect(second.lastPathComponent == first.lastPathComponent + " 2", "second folder was \(second.lastPathComponent)")
     }
 
     private static func pruningIgnoresForeignFolders() throws {
