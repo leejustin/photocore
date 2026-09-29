@@ -873,6 +873,36 @@ public enum RenderBase: String, Codable, Sendable, CaseIterable {
     case cameraJPEG
 }
 
+/// Quiet portrait finishing. Strengths are 0…1.
+public struct RetouchSettings: Codable, Sendable, Equatable {
+    public var skinSmooth: Double
+    public var eyesBrighten: Double
+    public var teethWhiten: Double
+    public var flyawayReduce: Double
+    public var clarityLift: Double
+
+    public static let off = RetouchSettings(skinSmooth: 0, eyesBrighten: 0, teethWhiten: 0, flyawayReduce: 0, clarityLift: 0)
+    public static let wedding = RetouchSettings(skinSmooth: 0.35, eyesBrighten: 0.2, teethWhiten: 0.15, flyawayReduce: 0.2, clarityLift: 0.08)
+
+    public init(
+        skinSmooth: Double = 0,
+        eyesBrighten: Double = 0,
+        teethWhiten: Double = 0,
+        flyawayReduce: Double = 0,
+        clarityLift: Double = 0
+    ) {
+        self.skinSmooth = skinSmooth
+        self.eyesBrighten = eyesBrighten
+        self.teethWhiten = teethWhiten
+        self.flyawayReduce = flyawayReduce
+        self.clarityLift = clarityLift
+    }
+
+    public var isActive: Bool {
+        skinSmooth > 0.01 || eyesBrighten > 0.01 || teethWhiten > 0.01 || flyawayReduce > 0.01 || clarityLift > 0.01
+    }
+}
+
 public struct EditRecipe: Codable, Sendable, Equatable {
     public var style: StylePreset
     public var styleIntensity: Double
@@ -896,6 +926,7 @@ public struct EditRecipe: Codable, Sendable, Equatable {
     public var autoEnhance: Bool
     /// RAW decode versus the camera JPEG shot alongside the RAW.
     public var base: RenderBase
+    public var retouch: RetouchSettings
 
     public init(
         style: StylePreset = .natural,
@@ -912,7 +943,8 @@ public struct EditRecipe: Codable, Sendable, Equatable {
         straighten: Double = 0,
         albumLookID: String? = nil,
         autoEnhance: Bool = false,
-        base: RenderBase = .raw
+        base: RenderBase = .raw,
+        retouch: RetouchSettings = .off
     ) {
         self.style = style
         self.styleIntensity = styleIntensity
@@ -929,11 +961,12 @@ public struct EditRecipe: Codable, Sendable, Equatable {
         self.albumLookID = albumLookID
         self.autoEnhance = autoEnhance
         self.base = base
+        self.retouch = retouch
     }
 
     private enum CodingKeys: String, CodingKey {
         case style, styleIntensity, exposure, contrast, saturation, highlights, shadows, sharpening
-        case temperature, tint, clarity, straighten, albumLookID, autoEnhance, base
+        case temperature, tint, clarity, straighten, albumLookID, autoEnhance, base, retouch
     }
 
     public init(from decoder: Decoder) throws {
@@ -953,6 +986,7 @@ public struct EditRecipe: Codable, Sendable, Equatable {
         albumLookID = try container.decodeIfPresent(String.self, forKey: .albumLookID)
         autoEnhance = try container.decodeIfPresent(Bool.self, forKey: .autoEnhance) ?? false
         base = try container.decodeIfPresent(RenderBase.self, forKey: .base) ?? .raw
+        retouch = try container.decodeIfPresent(RetouchSettings.self, forKey: .retouch) ?? .off
     }
 
     public func encode(to encoder: Encoder) throws {
@@ -972,6 +1006,7 @@ public struct EditRecipe: Codable, Sendable, Equatable {
         try container.encodeIfPresent(albumLookID, forKey: .albumLookID)
         try container.encode(autoEnhance, forKey: .autoEnhance)
         try container.encode(base, forKey: .base)
+        try container.encode(retouch, forKey: .retouch)
     }
 }
 

@@ -13,12 +13,12 @@ struct AdjustWorkspace: View {
         HStack(spacing: 0) {
             previewPane
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
-            Rectangle().fill(StudioChrome.hairline).frame(width: 1)
+            StudioHairline(axis: .vertical)
             controls
-                .frame(width: 280)
-                .background(StudioChrome.panel)
+                .frame(width: 260)
+                .background(StudioChrome.canvas)
         }
-        .background(StudioChrome.canvas)
+        .background(StudioChrome.photo)
         .onAppear {
             model.syncDevelopRecipe()
             refreshPreview()
@@ -37,74 +37,75 @@ struct AdjustWorkspace: View {
 
     private var previewPane: some View {
         VStack(spacing: 0) {
-            HStack {
-                VStack(alignment: .leading, spacing: 2) {
-                    Text("Adjust")
-                        .font(.caption.weight(.semibold))
-                        .foregroundStyle(StudioChrome.tertiary)
-                    Text(model.focusedRow?.sourceURL.lastPathComponent ?? "Select a photo")
-                        .font(.headline)
-                }
+            HStack(spacing: 14) {
+                Text(model.focusedRow?.sourceURL.lastPathComponent ?? "Select a photo")
+                    .font(StudioType.ui)
+                    .foregroundStyle(StudioChrome.secondary)
+                    .lineLimit(1)
                 Spacer()
-                Text("Your edit replaces the album look for this photo when you deliver.")
-                    .font(.caption)
-                    .foregroundStyle(StudioChrome.tertiary)
-                Button(model.showingOriginal ? "Show edit" : "Show original") {
+                Button(model.showingOriginal ? "Show edit" : "Original") {
                     model.showingOriginal.toggle()
                 }
                 .keyboardShortcut("\\", modifiers: [])
                 Button("Done") { model.workspace = model.workspaceBeforeAdjust }
                     .keyboardShortcut(.cancelAction)
             }
+            .buttonStyle(StudioQuietButtonStyle())
             .padding(.horizontal, 18)
             .padding(.vertical, 12)
+            .background(StudioChrome.canvas)
+
+            StudioHairline()
 
             ZStack {
-                Color.black
+                StudioChrome.photo
                 if let preview {
                     Image(nsImage: preview)
                         .resizable()
                         .aspectRatio(contentMode: .fit)
-                        .padding(12)
-                } else if model.focusedRow != nil {
-                    ProgressView().controlSize(.small)
-                } else {
-                    ContentUnavailableView("Nothing focused", systemImage: "slider.horizontal.3", description: Text("Pick a keeper in the album, then open Adjust."))
+                        .padding(16)
+                        .transition(.opacity)
+                } else if model.focusedRow == nil {
+                    Text("Pick a keeper in the album, then open Adjust.")
+                        .font(StudioType.ui)
+                        .foregroundStyle(StudioChrome.secondary)
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .animation(StudioChrome.ease, value: preview != nil)
 
+            StudioHairline()
             filmstrip
         }
     }
 
     private var filmstrip: some View {
         ScrollView(.horizontal, showsIndicators: false) {
-            HStack(spacing: 8) {
+            HStack(spacing: 2) {
                 ForEach(model.rows.filter { $0.bucket == .selected || $0.bucket == .protected || model.mark(for: $0.id).flag == .pick }.prefix(40)) { row in
                     Button {
                         model.focusedID = row.id
                     } label: {
-                        CachedThumbnail(url: row.previewURL ?? row.sourceURL, maxPixelSize: 160)
-                            .frame(width: 64, height: 64)
-                            .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
-                            .overlay {
-                                RoundedRectangle(cornerRadius: 6, style: .continuous)
-                                    .strokeBorder(model.focusedID == row.id ? StudioChrome.focus : Color.clear, lineWidth: 2)
-                            }
+                        StudioThumb(
+                            url: row.previewURL ?? row.sourceURL,
+                            width: 56,
+                            height: 56,
+                            maxPixelSize: 160,
+                            isFocused: model.focusedID == row.id
+                        )
                     }
                     .buttonStyle(.plain)
                 }
             }
-            .padding(.horizontal, 18)
-            .padding(.vertical, 10)
+            .padding(.horizontal, 12)
+            .padding(.vertical, 8)
         }
-        .background(StudioChrome.panel)
+        .background(StudioChrome.photo)
     }
 
     private var controls: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 16) {
+            VStack(alignment: .leading, spacing: 14) {
                 StudioSectionHeader(title: "Basic")
 
                 slider("Exposure", \.exposure, range: -1.2...1.2)
@@ -118,24 +119,26 @@ struct AdjustWorkspace: View {
                 slider("Sharpen", \.sharpening, range: 0...0.8)
                 slider("Straighten", \.straighten, range: -15...15, degrees: true)
 
-                Divider().overlay(StudioChrome.hairline)
+                StudioHairline()
+                    .padding(.vertical, 4)
 
-                HStack(spacing: 8) {
+                HStack(spacing: 16) {
                     Button("Reset") { model.resetDevelopRecipe() }
+                        .buttonStyle(StudioQuietButtonStyle())
                     Spacer()
-                    Button("Save JPEG") { model.renderFocusedEdit() }
-                        .buttonStyle(.borderedProminent)
-                        .tint(StudioChrome.pick)
+                    Button("Save a copy") { model.renderFocusedEdit() }
+                        .buttonStyle(StudioButtonStyle(primary: true))
                         .disabled(model.focusedRow == nil)
                 }
 
-                Text("Saves into ~/Pictures/Photocore/<shoot> edits. Source files stay untouched.")
-                    .font(.caption2)
+                Text("Saves a copy. The original stays untouched.")
+                    .font(StudioType.caption)
                     .foregroundStyle(StudioChrome.tertiary)
                     .fixedSize(horizontal: false, vertical: true)
             }
             .padding(16)
         }
+        .scrollIndicators(.hidden)
     }
 
     private func binding(_ keyPath: WritableKeyPath<EditRecipe, Double>) -> Binding<Double> {
@@ -158,11 +161,11 @@ struct AdjustWorkspace: View {
         return VStack(alignment: .leading, spacing: 4) {
             HStack {
                 Text(title)
-                    .font(.caption)
+                    .font(StudioType.caption)
                     .foregroundStyle(StudioChrome.secondary)
                 Spacer()
                 Text(label)
-                    .font(.caption.monospacedDigit())
+                    .font(StudioType.caption.monospacedDigit())
                     .foregroundStyle(StudioChrome.tertiary)
             }
             .contentShape(Rectangle())

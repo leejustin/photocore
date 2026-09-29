@@ -4,38 +4,81 @@ struct ShortcutsSheet: View {
     @Environment(\.dismiss) private var dismiss
 
     private let sections: [(String, [(String, String)])] = [
-        ("Everywhere", [("⌘O", "Choose a folder"), ("⌘1 ⌘2 ⌘3", "Confirm, Look, Deliver"), ("⌘4", "Album"), ("⌘D", "Adjust the selected photo"), ("⌘Z", "Undo the last mark"), ("⌃⌘S", "Show or hide the sidebar")]),
-        ("Album", [("Space", "Open or close the large view"), ("Esc / G", "Back to the grid"), ("← →", "Previous or next photo"), ("↑ ↓", "Previous or next frame in a burst"), ("P / X / U", "Pick, reject, clear"), ("1–5 / 0", "Stars / clear stars"), ("6 7 8 9", "Red, yellow, green, blue label"), ("S", "Survey the burst side by side"), ("F", "Fit or 100%"), ("E", "Zoom to eyes"), ("\\", "Show original")]),
-        ("Confirm", [("Return", "Keep the suggestion"), ("← →", "Move between frames"), ("P", "Keep the selected frame"), ("X", "Drop a single photo"), ("Esc", "Skip this moment"), ("E", "Check eyes")])
+        ("Flow", [
+            ("⌘O", "Open a folder"),
+            ("⌘1", "Check"),
+            ("⌘2", "Style"),
+            ("⌘3", "Save"),
+            ("⌘4", "Album"),
+            ("⌘D", "Adjust one photo"),
+            ("?", "This overlay"),
+            ("⌃⌘S", "Sidebar")
+        ]),
+        ("Album", [
+            ("Space", "Loupe"),
+            ("G / Esc", "Grid"),
+            ("← →", "Previous / next"),
+            ("↑ ↓", "Similar frames"),
+            ("P / X / U", "Favorite / hide / clear"),
+            ("1–5", "Stars"),
+            ("6–9", "Color"),
+            ("S", "Survey similar"),
+            ("E", "Eyes"),
+            ("\\", "Original")
+        ]),
+        ("Check", [
+            ("Return", "Keep suggestion"),
+            ("← →", "Choose a frame"),
+            ("P", "Keep focused"),
+            ("X", "Drop / skip"),
+            ("E", "Eyes")
+        ])
     ]
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 18) {
-            Text("Keyboard shortcuts")
-                .font(.title2.weight(.semibold))
-            ForEach(sections, id: \.0) { title, items in
-                VStack(alignment: .leading, spacing: 6) {
-                    StudioSectionHeader(title: title)
-                    ForEach(items, id: \.1) { key, action in
-                        HStack {
-                            Text(key)
-                                .font(.callout.monospaced())
-                                .frame(width: 110, alignment: .leading)
-                            Text(action)
-                                .foregroundStyle(StudioChrome.secondary)
-                        }
-                        .font(.callout)
-                    }
-                }
-            }
-            HStack {
+        VStack(alignment: .leading, spacing: 0) {
+            HStack(alignment: .firstTextBaseline) {
+                Text("Keys")
+                    .font(StudioType.display)
                 Spacer()
                 Button("Done") { dismiss() }
+                    .buttonStyle(StudioQuietButtonStyle())
                     .keyboardShortcut(.defaultAction)
             }
+            .padding(.horizontal, 28)
+            .padding(.top, 24)
+            .padding(.bottom, 18)
+
+            Rectangle().fill(StudioChrome.hairline).frame(height: 1)
+
+            ScrollView {
+                HStack(alignment: .top, spacing: 28) {
+                    ForEach(sections, id: \.0) { title, items in
+                        VStack(alignment: .leading, spacing: 10) {
+                            Text(title.uppercased())
+                                .font(StudioType.caption)
+                                .tracking(1.1)
+                                .foregroundStyle(StudioChrome.tertiary)
+                            ForEach(items, id: \.1) { key, action in
+                                HStack(alignment: .firstTextBaseline, spacing: 12) {
+                                    Text(key)
+                                        .font(.system(size: 12, design: .monospaced))
+                                        .foregroundStyle(StudioChrome.text)
+                                        .frame(width: 72, alignment: .leading)
+                                    Text(action)
+                                        .font(StudioType.ui)
+                                        .foregroundStyle(StudioChrome.secondary)
+                                }
+                            }
+                        }
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                }
+                .padding(28)
+            }
         }
-        .padding(24)
-        .frame(width: 440)
+        .frame(width: 640, height: 420)
         .background(StudioChrome.panel)
+        .preferredColorScheme(.dark)
     }
 }

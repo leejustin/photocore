@@ -22,147 +22,127 @@ struct CullWorkspace: View {
                 } else {
                     stage
                     if let row = model.focusedRow, let group = model.groupsByPhoto[row.id], group.memberIDs.count > 1 {
+                        StudioHairline()
                         similarStrip(group)
                     }
                 }
+                StudioHairline()
                 filmstrip
             }
+            StudioHairline(axis: .vertical)
             inspector
-                .frame(width: 300)
-                .background(StudioChrome.panel)
+                .frame(width: 260)
+                .background(StudioChrome.canvas)
         }
-        .background(Color.black)
+        .background(StudioChrome.photo)
         .task(id: "\(loupeURL?.path ?? "")|\(model.loupeZoom == .fit ? 1600 : 4096)|\(showEdited)") {
             guard let loupeURL else {
                 loupeImage = nil
                 return
             }
             let limit = model.loupeZoom == .fit ? 1600 : 4096
+            if let warm = ThumbnailCache.shared.cachedImage(url: loupeURL, maxPixelSize: limit) {
+                loupeImage = warm
+            }
             loupeImage = await ThumbnailCache.shared.image(url: loupeURL, maxPixelSize: limit)
         }
     }
 
     private var stage: some View {
         ZStack {
-            Color.black
+            StudioChrome.photo
             if let loupeImage {
                 ZoomableLoupe(
                     image: loupeImage,
                     zoom: model.loupeZoom,
                     face: model.focusedRow.flatMap { model.primaryFaceBox(for: $0.id) }
                 )
-                .padding(model.loupeZoom == .fit ? 28 : 0)
+                .padding(model.loupeZoom == .fit ? 24 : 0)
+                .transition(.opacity)
                 .onTapGesture(count: 2) { model.cycleLoupeZoom() }
             } else if model.focusedRow == nil {
                 Text("No photo in this set")
+                    .font(StudioType.ui)
                     .foregroundStyle(StudioChrome.secondary)
-            } else {
-                ProgressView()
             }
+
             VStack {
-                HStack(spacing: 8) {
-                    Button {
+                HStack(spacing: 12) {
+                    Button("Grid") {
                         model.albumMode = .grid
                         model.surveying = false
-                    } label: {
-                        Label("Grid", systemImage: "square.grid.2x2")
                     }
-                    .buttonStyle(.bordered)
-                    .controlSize(.small)
                     .keyboardShortcut(.cancelAction)
                     if let row = model.focusedRow, let index = model.visibleRows.firstIndex(where: { $0.id == row.id }) {
-                        Text("\(index + 1) of \(model.visibleRows.count)")
-                            .font(.caption.monospacedDigit().weight(.medium))
-                            .padding(.horizontal, 8)
-                            .padding(.vertical, 4)
-                            .background(.black.opacity(0.55), in: Capsule())
+                        Text("\(index + 1) / \(model.visibleRows.count)")
+                            .font(StudioType.caption.monospacedDigit())
+                            .foregroundStyle(StudioChrome.tertiary)
                     }
                     Spacer()
                     if model.focusedRow.flatMap({ model.groupsByPhoto[$0.id] }) != nil {
                         Button("Survey") { model.toggleSurvey() }
-                            .buttonStyle(.bordered)
-                            .controlSize(.small)
                     }
                     if model.focusedRow.flatMap({ model.primaryFaceBox(for: $0.id) }) != nil {
                         Button("Eyes") { model.zoomToEyes() }
-                            .buttonStyle(.bordered)
-                            .controlSize(.small)
                     }
                     Button(model.loupeZoom == .fit ? "100%" : "Fit") { model.cycleLoupeZoom() }
-                        .buttonStyle(.bordered)
-                        .controlSize(.small)
                     if model.focusedRow?.previewURL != nil {
                         Button(showEdited ? "Edited" : "Original") { showEdited.toggle() }
-                            .buttonStyle(.bordered)
-                            .controlSize(.small)
                     }
                 }
+                .buttonStyle(StudioQuietButtonStyle())
                 Spacer()
-                Text("Space grid    ← → move    ↑ ↓ burst    P pick    X reject    S survey    F zoom    E eyes    1–5 stars    Z undo")
-                    .font(.caption2)
-                    .foregroundStyle(.white.opacity(0.72))
-                    .padding(.horizontal, 10)
-                    .padding(.vertical, 6)
-                    .background(.black.opacity(0.55), in: Capsule())
             }
-            .padding(16)
+            .padding(14)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .animation(StudioChrome.ease, value: loupeImage != nil)
     }
 
     private func survey(_ group: PhotoGroup) -> some View {
-        VStack(alignment: .leading, spacing: 10) {
+        VStack(spacing: 0) {
             HStack {
                 Text(groupTitle(group))
-                    .font(.headline)
+                    .font(StudioType.uiMedium)
                 Spacer()
-                Button("Close survey") { model.surveying = false }
-                    .buttonStyle(.bordered)
-                    .controlSize(.small)
+                Button("Close") { model.surveying = false }
+                    .buttonStyle(StudioQuietButtonStyle())
             }
             .padding(.horizontal, 18)
-            .padding(.top, 14)
+            .padding(.vertical, 12)
+            StudioHairline()
             ScrollView {
-                LazyVGrid(columns: [GridItem(.adaptive(minimum: 280), spacing: 12)], spacing: 12) {
+                LazyVGrid(columns: [GridItem(.adaptive(minimum: 280), spacing: 2)], spacing: 2) {
                     ForEach(group.memberIDs, id: \.self) { id in
                         if let row = model.row(for: id) {
                             SurveyCell(model: model, row: row)
                         }
                     }
                 }
-                .padding(.horizontal, 18)
-                .padding(.bottom, 12)
+                .padding(2)
             }
-            Text("Click a frame, then P to keep it. S closes the survey.")
-                .font(.caption)
-                .foregroundStyle(StudioChrome.secondary)
-                .padding(.horizontal, 18)
-                .padding(.bottom, 8)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .background(Color.black)
+        .background(StudioChrome.photo)
     }
 
     private func similarStrip(_ group: PhotoGroup) -> some View {
-        VStack(alignment: .leading, spacing: 6) {
+        HStack(spacing: 12) {
             Text(groupTitle(group))
-                .font(.caption.weight(.semibold))
-                .foregroundStyle(StudioChrome.secondary)
+                .font(StudioType.caption)
+                .foregroundStyle(StudioChrome.tertiary)
             ScrollView(.horizontal, showsIndicators: false) {
-                HStack(spacing: 8) {
+                HStack(spacing: 2) {
                     ForEach(group.memberIDs, id: \.self) { id in
                         if let row = model.row(for: id) {
-                            Button {
-                                model.focusedID = id
-                            } label: {
-                                CachedThumbnail(url: row.sourceURL, maxPixelSize: 240)
-                                    .frame(width: 86, height: 64)
-                                    .background(Color.white.opacity(0.04))
-                                    .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
-                                    .overlay {
-                                        RoundedRectangle(cornerRadius: 6, style: .continuous)
-                                            .strokeBorder(model.focusedID == id ? StudioChrome.focus : Color.clear, lineWidth: 2)
-                                    }
+                            Button { model.focusedID = id } label: {
+                                StudioThumb(
+                                    url: row.previewURL ?? row.sourceURL,
+                                    width: 72,
+                                    height: 54,
+                                    maxPixelSize: 240,
+                                    isFocused: model.focusedID == id
+                                )
                             }
                             .buttonStyle(.plain)
                         }
@@ -172,80 +152,79 @@ struct CullWorkspace: View {
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 8)
-        .background(StudioChrome.panel)
+        .background(StudioChrome.canvas)
     }
 
     private var filmstrip: some View {
         ScrollViewReader { proxy in
             ScrollView(.horizontal, showsIndicators: false) {
-                LazyHStack(spacing: 6) {
+                LazyHStack(spacing: 2) {
                     ForEach(model.visibleRows) { row in
-                        Button {
-                            model.focusedID = row.id
-                        } label: {
-                            CachedThumbnail(url: row.sourceURL, maxPixelSize: 200)
-                                .frame(width: 72, height: 54)
-                                .background(Color.white.opacity(0.04))
-                                .clipShape(RoundedRectangle(cornerRadius: 5, style: .continuous))
-                                .overlay {
-                                    RoundedRectangle(cornerRadius: 5, style: .continuous)
-                                        .strokeBorder(model.focusedID == row.id ? StudioChrome.focus : Color.white.opacity(0.08), lineWidth: model.focusedID == row.id ? 2 : 1)
-                                }
-                                .opacity(model.mark(for: row.id).flag == .reject || row.bucket == .hidden ? 0.4 : 1)
+                        Button { model.focusedID = row.id } label: {
+                            StudioThumb(
+                                url: row.previewURL ?? row.sourceURL,
+                                width: 68,
+                                height: 50,
+                                maxPixelSize: 200,
+                                isFocused: model.focusedID == row.id,
+                                isDimmed: model.mark(for: row.id).flag == .reject || row.bucket == .hidden
+                            )
                         }
                         .buttonStyle(.plain)
                         .id(row.id)
                     }
                 }
-                .padding(.horizontal, 12)
+                .padding(.horizontal, 10)
                 .padding(.vertical, 8)
             }
-            .background(Color.black)
+            .background(StudioChrome.photo)
             .onChange(of: model.focusedID) { _, id in
                 guard let id else { return }
-                withAnimation(.easeOut(duration: 0.18)) {
+                withAnimation(StudioChrome.ease) {
                     proxy.scrollTo(id, anchor: .center)
                 }
             }
         }
-        .frame(height: 74)
+        .frame(height: 68)
     }
 
     private var inspector: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 18) {
+            VStack(alignment: .leading, spacing: 20) {
                 if let row = model.focusedRow {
                     VStack(alignment: .leading, spacing: 4) {
                         Text(row.sourceURL.lastPathComponent)
-                            .font(.headline)
+                            .font(StudioType.uiMedium)
                             .textSelection(.enabled)
+                            .lineLimit(2)
                         Text(row.bucket.displayName)
-                            .font(.subheadline)
-                            .foregroundStyle(StudioChrome.pick)
+                            .font(StudioType.caption)
+                            .foregroundStyle(StudioChrome.secondary)
                     }
 
-                    HStack(spacing: 8) {
-                        flagButton("Pick", system: "flag.fill", active: model.mark(for: row.id).flag == .pick, tint: StudioChrome.pick) {
+                    HStack(spacing: 14) {
+                        flagButton("Pick", active: model.mark(for: row.id).flag == .pick, tint: StudioChrome.pick) {
                             model.flagFocused(.pick, advance: true)
                         }
-                        flagButton("Reject", system: "xmark", active: model.mark(for: row.id).flag == .reject, tint: StudioChrome.reject) {
+                        flagButton("Reject", active: model.mark(for: row.id).flag == .reject, tint: StudioChrome.reject) {
                             model.flagFocused(.reject, advance: true)
                         }
                     }
 
-                    HStack(spacing: 4) {
+                    HStack(spacing: 6) {
                         ForEach(1...5, id: \.self) { stars in
                             Button {
                                 model.setStars(model.mark(for: row.id).stars == stars ? 0 : stars)
                             } label: {
                                 Image(systemName: model.mark(for: row.id).stars >= stars ? "star.fill" : "star")
-                                    .foregroundStyle(StudioChrome.pick)
+                                    .font(.system(size: 12))
+                                    .foregroundStyle(StudioChrome.pick.opacity(model.mark(for: row.id).stars >= stars ? 1 : 0.35))
                             }
                             .buttonStyle(.plain)
                         }
                     }
 
-                    HStack(spacing: 6) {
+                    HStack(spacing: 8) {
                         ForEach(ReviewColor.allCases.filter { $0 != .none }, id: \.self) { color in
                             Button {
                                 let current = model.mark(for: row.id).color
@@ -253,9 +232,12 @@ struct CullWorkspace: View {
                             } label: {
                                 Circle()
                                     .fill(color.swatch)
-                                    .frame(width: 16, height: 16)
+                                    .frame(width: 12, height: 12)
                                     .overlay {
-                                        Circle().strokeBorder(model.mark(for: row.id).color == color ? Color.white : Color.clear, lineWidth: 2)
+                                        Circle().strokeBorder(
+                                            model.mark(for: row.id).color == color ? Color.white : Color.clear,
+                                            lineWidth: 1.5
+                                        )
                                     }
                             }
                             .buttonStyle(.plain)
@@ -268,52 +250,44 @@ struct CullWorkspace: View {
                             StudioSectionHeader(title: "Why")
                             ForEach(row.reasons, id: \.self) { reason in
                                 Text(reason)
-                                    .font(.callout)
-                                    .foregroundStyle(StudioChrome.text)
+                                    .font(StudioType.ui)
+                                    .foregroundStyle(StudioChrome.secondary)
                                     .fixedSize(horizontal: false, vertical: true)
                             }
                         }
                     }
 
                     if let photo = model.analyzedPhoto(id: row.id) {
-                        VStack(alignment: .leading, spacing: 8) {
+                        VStack(alignment: .leading, spacing: 10) {
                             StudioSectionHeader(title: "Signals")
-                            meter("Sharpness", photo.signals.sharpness)
+                            StudioMeter(title: "Sharpness", value: photo.signals.sharpness)
                             if let subject = photo.signals.subjectSharpness {
-                                meter("Subject", subject)
+                                StudioMeter(title: "Subject", value: subject)
                             }
-                            meter("Exposure", photo.signals.exposureQuality)
+                            StudioMeter(title: "Exposure", value: photo.signals.exposureQuality)
                             if photo.signals.faceCount > 0 {
-                                meter("Faces", photo.signals.faceQuality)
-                                Text("\(photo.signals.faceCount) face\(photo.signals.faceCount == 1 ? "" : "s")")
-                                    .font(.caption)
-                                    .foregroundStyle(StudioChrome.secondary)
+                                StudioMeter(title: "Faces", value: photo.signals.faceQuality)
                             }
                             if let aesthetic = photo.signals.aestheticScore {
-                                meter("Aesthetics", aesthetic)
-                            }
-                            if !photo.signals.qualityFlags.isEmpty {
-                                Text(photo.signals.qualityFlags.joined(separator: " · "))
-                                    .font(.caption)
-                                    .foregroundStyle(StudioChrome.secondary)
+                                StudioMeter(title: "Aesthetics", value: aesthetic)
                             }
                         }
 
                         VStack(alignment: .leading, spacing: 4) {
                             StudioSectionHeader(title: "Capture")
                             if let camera = photo.asset.metadata.cameraModel {
-                                Text(camera).font(.callout)
+                                Text(camera).font(StudioType.caption).foregroundStyle(StudioChrome.secondary)
                             }
                             if let lens = photo.asset.metadata.lensModel {
-                                Text(lens).font(.caption).foregroundStyle(StudioChrome.secondary)
+                                Text(lens).font(StudioType.caption).foregroundStyle(StudioChrome.tertiary)
                             }
                             Text("\(photo.asset.metadata.pixelWidth) × \(photo.asset.metadata.pixelHeight)")
-                                .font(.caption.monospacedDigit())
-                                .foregroundStyle(StudioChrome.secondary)
+                                .font(StudioType.caption.monospacedDigit())
+                                .foregroundStyle(StudioChrome.tertiary)
                             if let date = photo.asset.metadata.captureDate {
                                 Text(date.formatted(date: .abbreviated, time: .shortened))
-                                    .font(.caption)
-                                    .foregroundStyle(StudioChrome.secondary)
+                                    .font(StudioType.caption)
+                                    .foregroundStyle(StudioChrome.tertiary)
                             }
                         }
                     }
@@ -325,55 +299,32 @@ struct CullWorkspace: View {
                             Button("Reveal export") { NSWorkspace.shared.activateFileViewerSelecting([previewURL]) }
                         }
                         Button("Protect") { model.override(photoID: row.id, bucket: .protected) }
+                        Button("Adjust…") { model.openAdjust() }
                     }
-                    .buttonStyle(.borderless)
+                    .buttonStyle(StudioQuietButtonStyle())
                 }
             }
             .padding(16)
             .frame(maxWidth: .infinity, alignment: .leading)
         }
+        .scrollIndicators(.hidden)
     }
 
-    private func flagButton(_ title: String, system: String, active: Bool, tint: Color, action: @escaping () -> Void) -> some View {
+    private func flagButton(_ title: String, active: Bool, tint: Color, action: @escaping () -> Void) -> some View {
         Button(action: action) {
-            Label(title, systemImage: system)
-                .font(.callout.weight(.semibold))
-                .frame(maxWidth: .infinity)
-                .padding(.vertical, 7)
-                .background(active ? tint : Color.white.opacity(0.06), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
-                .foregroundStyle(active && title == "Pick" ? Color.black : StudioChrome.text)
+            Text(title)
+                .font(StudioType.ui)
+                .foregroundStyle(active ? tint : StudioChrome.secondary)
         }
         .buttonStyle(.plain)
-    }
-
-    private func meter(_ title: String, _ value: Double) -> some View {
-        VStack(alignment: .leading, spacing: 4) {
-            HStack {
-                Text(title)
-                Spacer()
-                Text("\(Int((min(max(value, 0), 1) * 100).rounded()))")
-                    .monospacedDigit()
-            }
-            .font(.caption)
-            .foregroundStyle(StudioChrome.secondary)
-            GeometryReader { geo in
-                ZStack(alignment: .leading) {
-                    Capsule().fill(Color.white.opacity(0.08))
-                    Capsule()
-                        .fill(StudioChrome.pick)
-                        .frame(width: max(0, geo.size.width * CGFloat(min(max(value, 0), 1))))
-                }
-            }
-            .frame(height: 4)
-        }
     }
 
     private func groupTitle(_ group: PhotoGroup) -> String {
         let count = group.memberIDs.count
         switch group.kind {
         case .exactDuplicate: return "\(count) exact copies"
-        case .burst: return "\(count) frames in this burst"
-        case .scene: return "\(count) frames in this scene"
+        case .burst: return "\(count) in this burst"
+        case .scene: return "\(count) in this scene"
         }
     }
 }
@@ -388,47 +339,37 @@ private struct SurveyCell: View {
         Button {
             model.focusedID = row.id
         } label: {
-            ZStack(alignment: .bottomLeading) {
-                Color.white.opacity(0.04)
-                CachedThumbnail(url: row.sourceURL, maxPixelSize: 900)
-                LinearGradient(colors: [.clear, .black.opacity(0.72)], startPoint: .center, endPoint: .bottom)
-                VStack(alignment: .leading, spacing: 3) {
-                    HStack {
-                        if row.bucket == .selected || row.bucket == .protected {
-                            Text("AI")
-                                .font(.caption2.weight(.bold))
-                                .padding(.horizontal, 5)
-                                .padding(.vertical, 2)
-                                .background(StudioChrome.pick, in: Capsule())
-                                .foregroundStyle(.black)
-                        }
-                        Spacer()
-                        if mark.flag == .pick {
-                            Image(systemName: "flag.fill").foregroundStyle(StudioChrome.pick)
-                        } else if mark.flag == .reject {
-                            Image(systemName: "xmark").foregroundStyle(StudioChrome.reject)
-                        }
-                    }
-                    Spacer()
-                    Text(row.sourceURL.lastPathComponent)
-                        .font(.caption.weight(.semibold))
-                        .lineLimit(1)
-                    if let reason = row.reasons.first {
-                        Text(reason)
-                            .font(.caption2)
-                            .foregroundStyle(.white.opacity(0.78))
-                            .lineLimit(2)
-                    }
+            ZStack(alignment: .topTrailing) {
+                CachedThumbnail(url: row.previewURL ?? row.sourceURL, maxPixelSize: 900, contentMode: .fill)
+                if mark.flag == .pick {
+                    Image(systemName: "flag.fill")
+                        .font(.system(size: 10))
+                        .foregroundStyle(StudioChrome.pick)
+                        .shadow(color: .black.opacity(0.85), radius: 2, y: 1)
+                        .padding(8)
+                } else if mark.flag == .reject {
+                    Image(systemName: "xmark")
+                        .font(.system(size: 10))
+                        .foregroundStyle(StudioChrome.reject)
+                        .shadow(color: .black.opacity(0.85), radius: 2, y: 1)
+                        .padding(8)
+                } else if row.bucket == .selected || row.bucket == .protected {
+                    Text("Kept")
+                        .font(StudioType.caption)
+                        .foregroundStyle(StudioChrome.text)
+                        .shadow(color: .black.opacity(0.85), radius: 2, y: 1)
+                        .padding(8)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
                 }
-                .padding(10)
             }
             .aspectRatio(3 / 2, contentMode: .fit)
-            .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+            .clipped()
             .overlay {
-                RoundedRectangle(cornerRadius: 10, style: .continuous)
-                    .strokeBorder(model.focusedID == row.id ? StudioChrome.focus : Color.white.opacity(0.08), lineWidth: model.focusedID == row.id ? 2 : 1)
+                Rectangle()
+                    .strokeBorder(model.focusedID == row.id ? StudioChrome.focus : Color.clear, lineWidth: 1)
             }
         }
         .buttonStyle(.plain)
+        .help(row.sourceURL.lastPathComponent)
     }
 }

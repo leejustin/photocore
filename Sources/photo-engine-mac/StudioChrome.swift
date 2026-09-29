@@ -28,10 +28,10 @@ enum StudioWorkspace: String, CaseIterable, Identifiable {
     var title: String {
         switch self {
         case .album: "Album"
-        case .confirm: "Confirm"
-        case .look: "Look"
+        case .confirm: "Check"
+        case .look: "Style"
         case .adjust: "Adjust"
-        case .deliver: "Deliver"
+        case .deliver: "Save"
         }
     }
 }
@@ -54,12 +54,12 @@ enum LibraryFilter: String, CaseIterable, Identifiable {
     var title: String {
         switch self {
         case .album: "Album"
-        case .alternates: "Alternates"
-        case .needsLook: "Needs a look"
+        case .alternates: "Similar shots"
+        case .needsLook: "Not sure"
         case .hidden: "Hidden"
-        case .unusable: "Unusable"
+        case .unusable: "Blurry or blank"
         case .all: "All photos"
-        case .picked: "Picked"
+        case .picked: "Favorites"
         case .starred: "Starred"
         }
     }
@@ -81,23 +81,33 @@ enum LibraryFilter: String, CaseIterable, Identifiable {
 }
 
 enum StudioChrome {
-    static let canvas = Color(red: 0.09, green: 0.09, blue: 0.10)
-    static let panel = Color(red: 0.12, green: 0.12, blue: 0.13)
-    static let elevated = Color.white.opacity(0.06)
+    /// True black behind photographs. Chrome sits slightly above.
+    static let photo = Color.black
+    static let canvas = Color(red: 0.06, green: 0.06, blue: 0.058)
+    static let panel = Color(red: 0.10, green: 0.10, blue: 0.095)
+    static let elevated = Color.white.opacity(0.04)
     static let hairline = Color.white.opacity(0.08)
-    static let text = Color.white.opacity(0.92)
-    static let secondary = Color.white.opacity(0.58)
-    static let tertiary = Color.white.opacity(0.38)
-    static let pick = Color(red: 0.95, green: 0.76, blue: 0.34)
-    static let reject = Color(red: 0.89, green: 0.34, blue: 0.31)
-    /// Keyboard/selection focus. Amber (`pick`) is reserved for picks and primary actions.
-    static let focus = Color.white.opacity(0.9)
+    static let text = Color(red: 0.94, green: 0.94, blue: 0.93)
+    static let secondary = Color.white.opacity(0.55)
+    static let tertiary = Color.white.opacity(0.32)
+    /// Reserved for pick stars/flags. Primary CTAs use `text` on black.
+    static let pick = Color(red: 0.82, green: 0.70, blue: 0.42)
+    static let reject = Color(red: 0.78, green: 0.36, blue: 0.32)
+    static let focus = Color.white.opacity(0.92)
+    static let ease = Animation.easeOut(duration: 0.15)
+    static let easeSlow = Animation.easeOut(duration: 0.22)
 }
 
 enum StudioType {
-    static let hero = Font.system(size: 40, weight: .semibold, design: .serif)
-    static let display = Font.system(size: 28, weight: .semibold, design: .serif)
-    static let title = Font.system(size: 20, weight: .semibold, design: .serif)
+    /// Brand / welcome moments only.
+    static let brand = Font.system(size: 54, weight: .semibold, design: .serif)
+    static let hero = Font.system(size: 36, weight: .semibold, design: .serif)
+    static let display = Font.system(size: 26, weight: .semibold, design: .serif)
+    static let title = Font.system(size: 18, weight: .semibold, design: .serif)
+    /// Quiet UI chrome.
+    static let ui = Font.system(size: 13)
+    static let uiMedium = Font.system(size: 13, weight: .medium)
+    static let caption = Font.system(size: 11)
 }
 
 extension ReviewColor {
@@ -130,9 +140,127 @@ struct StudioSectionHeader: View {
 
     var body: some View {
         Text(title.uppercased())
-            .font(.caption2.weight(.semibold))
-            .tracking(0.8)
+            .font(StudioType.caption)
+            .tracking(1.0)
             .foregroundStyle(StudioChrome.tertiary)
+    }
+}
+
+struct StudioHairline: View {
+    var axis: Axis = .horizontal
+
+    var body: some View {
+        Rectangle()
+            .fill(StudioChrome.hairline)
+            .frame(width: axis == .vertical ? 1 : nil, height: axis == .horizontal ? 1 : nil)
+    }
+}
+
+struct StudioEmptyCopy: View {
+    let title: String
+    var detail: String?
+
+    var body: some View {
+        VStack(spacing: 8) {
+            Text(title)
+                .font(StudioType.title)
+            if let detail {
+                Text(detail)
+                    .font(StudioType.ui)
+                    .foregroundStyle(StudioChrome.secondary)
+                    .multilineTextAlignment(.center)
+                    .frame(maxWidth: 360)
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+}
+
+/// Sharp filmstrip / candidate thumb. No rounded cards.
+struct StudioThumb: View {
+    let url: URL
+    var width: CGFloat
+    var height: CGFloat
+    var maxPixelSize: Int = 240
+    var isFocused = false
+    var isDimmed = false
+
+    var body: some View {
+        CachedThumbnail(url: url, maxPixelSize: maxPixelSize, contentMode: .fill)
+            .frame(width: width, height: height)
+            .clipped()
+            .opacity(isDimmed ? 0.4 : 1)
+            .overlay {
+                Rectangle()
+                    .strokeBorder(isFocused ? StudioChrome.focus : StudioChrome.hairline, lineWidth: isFocused ? 1 : 0.5)
+            }
+    }
+}
+
+struct StudioMeter: View {
+    let title: String
+    let value: Double
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            HStack {
+                Text(title)
+                Spacer()
+                Text("\(Int((min(max(value, 0), 1) * 100).rounded()))")
+                    .monospacedDigit()
+            }
+            .font(StudioType.caption)
+            .foregroundStyle(StudioChrome.secondary)
+            GeometryReader { geo in
+                ZStack(alignment: .leading) {
+                    Rectangle().fill(Color.white.opacity(0.06))
+                    Rectangle()
+                        .fill(StudioChrome.text.opacity(0.55))
+                        .frame(width: max(0, geo.size.width * CGFloat(min(max(value, 0), 1))))
+                }
+            }
+            .frame(height: 1)
+        }
+    }
+}
+
+/// Flat paper button. System bordered styles read as a settings panel.
+struct StudioButtonStyle: ButtonStyle {
+    var primary = false
+
+    func makeBody(configuration: Configuration) -> some View {
+        StudioButtonLabel(configuration: configuration, primary: primary)
+    }
+}
+
+private struct StudioButtonLabel: View {
+    let configuration: ButtonStyleConfiguration
+    var primary: Bool
+    @Environment(\.isEnabled) private var isEnabled
+
+    var body: some View {
+        configuration.label
+            .font(primary ? StudioType.uiMedium : StudioType.ui)
+            .foregroundStyle(primary ? StudioChrome.photo : StudioChrome.text.opacity(configuration.isPressed ? 1 : 0.78))
+            .padding(.horizontal, primary ? 16 : 2)
+            .padding(.vertical, primary ? 8 : 2)
+            .background {
+                if primary {
+                    Rectangle().fill(StudioChrome.text.opacity(configuration.isPressed ? 0.82 : 1))
+                }
+            }
+            .opacity(isEnabled ? 1 : 0.35)
+    }
+}
+
+/// Text control that sits on a photograph, with no chrome.
+struct StudioQuietButtonStyle: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .font(StudioType.caption)
+            .foregroundStyle(StudioChrome.text.opacity(configuration.isPressed ? 1 : 0.62))
+            .padding(.horizontal, 4)
+            .padding(.vertical, 2)
     }
 }
 
@@ -141,7 +269,12 @@ final class ThumbnailCache: @unchecked Sendable {
     private let cache = NSCache<NSString, NSImage>()
 
     private init() {
-        cache.countLimit = 500
+        cache.countLimit = 1200
+    }
+
+    func cachedImage(url: URL, maxPixelSize: Int) -> NSImage? {
+        let key = "\(maxPixelSize)|\(url.path)" as NSString
+        return cache.object(forKey: key)
     }
 
     func image(url: URL, maxPixelSize: Int) async -> NSImage? {
@@ -155,6 +288,20 @@ final class ThumbnailCache: @unchecked Sendable {
         cache.setObject(image, forKey: key)
         return image
     }
+
+    /// Warm the next screenful so scrolling and loupe never flash empty cells.
+    func prewarm(urls: [URL], maxPixelSize: Int) {
+        let unique = Array(Set(urls.map(\.path))).prefix(48).compactMap { path -> URL? in
+            URL(fileURLWithPath: path)
+        }
+        for url in unique {
+            let key = "\(maxPixelSize)|\(url.path)" as NSString
+            if cache.object(forKey: key) != nil { continue }
+            Task.detached(priority: .utility) {
+                _ = await ThumbnailCache.shared.image(url: url, maxPixelSize: maxPixelSize)
+            }
+        }
+    }
 }
 
 struct CachedThumbnail: View {
@@ -165,18 +312,21 @@ struct CachedThumbnail: View {
     @State private var image: NSImage?
 
     var body: some View {
-        Group {
+        ZStack {
+            StudioChrome.photo
             if let image {
                 Image(nsImage: image)
                     .resizable()
                     .aspectRatio(contentMode: contentMode)
-            } else {
-                ProgressView()
-                    .controlSize(.small)
+                    .transition(.opacity)
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .animation(StudioChrome.ease, value: image != nil)
         .task(id: "\(maxPixelSize)|\(url.path)") {
+            if let warm = ThumbnailCache.shared.cachedImage(url: url, maxPixelSize: maxPixelSize) {
+                image = warm
+            }
             image = await ThumbnailCache.shared.image(url: url, maxPixelSize: maxPixelSize)
         }
     }

@@ -15,7 +15,7 @@ struct ConfirmWorkspace: View {
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .background(StudioChrome.canvas)
+        .background(StudioChrome.photo)
         .onChange(of: model.currentConfirmation?.id) { _, _ in
             showingRunnersUp = false
             if let id = model.currentConfirmation?.suggestedID {
@@ -26,112 +26,106 @@ struct ConfirmWorkspace: View {
     }
 
     private func momentView(_ moment: ConfirmationMoment) -> some View {
-        VStack(alignment: .leading, spacing: 14) {
-            summaryStrip
-            HStack(alignment: .firstTextBaseline) {
-                VStack(alignment: .leading, spacing: 4) {
-                    Text(progressTitle)
-                        .font(.caption.weight(.semibold))
-                        .foregroundStyle(StudioChrome.pick)
-                    Text(moment.isChoice ? "Which frame should we keep?" : "Keep this one?")
-                        .font(StudioType.display)
-                    Text(model.suggestionExplanation(for: moment))
-                        .font(.body)
-                        .foregroundStyle(StudioChrome.secondary)
-                }
+        VStack(spacing: 0) {
+            HStack(alignment: .firstTextBaseline, spacing: 14) {
+                Text(progressTitle)
+                    .font(StudioType.caption)
+                    .foregroundStyle(StudioChrome.tertiary)
+                    .monospacedDigit()
+                Text(model.suggestionExplanation(for: moment))
+                    .font(StudioType.ui)
+                    .foregroundStyle(StudioChrome.secondary)
+                    .lineLimit(1)
                 Spacer()
-                HStack(spacing: 8) {
-                    Button(model.loupeZoom == .face ? "Full frame" : "Check eyes") {
-                        model.loupeZoom = model.loupeZoom == .face ? .fit : .face
+                HStack(spacing: 14) {
+                    if model.primaryFaceBox(for: moment.suggestedID) != nil || moment.candidateIDs.contains(where: { model.primaryFaceBox(for: $0) != nil }) {
+                        Button(model.loupeZoom == .face ? "Full frame" : "Eyes") {
+                            model.loupeZoom = model.loupeZoom == .face ? .fit : .face
+                        }
                     }
                     Button("Skip") { model.skipConfirmation() }
                         .keyboardShortcut(.cancelAction)
                 }
+                .buttonStyle(StudioQuietButtonStyle())
             }
+            .padding(.horizontal, 22)
+            .padding(.vertical, 14)
 
-            if moment.isChoice {
-                HStack(alignment: .top, spacing: 12) {
-                    ForEach(moment.candidateIDs, id: \.self) { id in
-                        if let row = model.row(for: id) {
-                            candidate(row, moment: moment)
+            StudioHairline()
+
+            Group {
+                if moment.isChoice {
+                    HStack(spacing: 2) {
+                        ForEach(moment.candidateIDs, id: \.self) { id in
+                            if let row = model.row(for: id) {
+                                candidate(row, moment: moment)
+                            }
                         }
                     }
+                } else if let row = model.row(for: moment.suggestedID) {
+                    confirmPreview(for: row)
                 }
-                .frame(maxHeight: .infinity)
-            } else if let row = model.row(for: moment.suggestedID) {
-                confirmPreview(for: row)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    .background(Color.black, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
             }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .background(StudioChrome.photo)
 
             if showingRunnersUp {
+                StudioHairline()
                 ScrollView(.horizontal, showsIndicators: false) {
-                    HStack(spacing: 8) {
+                    HStack(spacing: 2) {
                         ForEach(moment.hiddenRunnerUpIDs, id: \.self) { id in
                             if let row = model.row(for: id) {
                                 Button { model.focusedID = id } label: {
-                                    CachedThumbnail(url: row.sourceURL, maxPixelSize: 320)
-                                        .frame(width: 132, height: 88)
-                                        .background(Color.black)
-                                        .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
-                                        .overlay {
-                                            RoundedRectangle(cornerRadius: 6, style: .continuous)
-                                                .strokeBorder(model.focusedID == id ? Color.white : Color.clear, lineWidth: 2)
-                                        }
+                                    StudioThumb(
+                                        url: row.previewURL ?? row.sourceURL,
+                                        width: 120,
+                                        height: 80,
+                                        maxPixelSize: 320,
+                                        isFocused: model.focusedID == id
+                                    )
                                 }
                                 .buttonStyle(.plain)
                             }
                         }
                     }
+                    .padding(.horizontal, 22)
+                    .padding(.vertical, 10)
                 }
-                .frame(height: 92)
             }
 
-            HStack(spacing: 10) {
-                Button(moment.isChoice ? "Keep the suggestion" : "Keep it") {
+            StudioHairline()
+            HStack(spacing: 16) {
+                Button(moment.isChoice ? "Keep this one" : "Keep it") {
                     model.acceptSuggestion()
                 }
-                .buttonStyle(.borderedProminent)
-                .tint(StudioChrome.pick)
+                .buttonStyle(StudioButtonStyle(primary: true))
                 .keyboardShortcut(.return, modifiers: [])
-                if let focused = model.focusedID, focused != moment.suggestedID, moment.candidateIDs.contains(focused) || moment.hiddenRunnerUpIDs.contains(focused) {
-                    Button("Use this frame") { model.useConfirmationCandidate(focused) }
+
+                if let focused = model.focusedID,
+                   focused != moment.suggestedID,
+                   moment.candidateIDs.contains(focused) || moment.hiddenRunnerUpIDs.contains(focused) {
+                    Button("Use this photo") { model.useConfirmationCandidate(focused) }
+                        .buttonStyle(StudioQuietButtonStyle())
                 }
                 if !moment.isChoice {
                     Button("Drop it") { model.dropSuggestion() }
+                        .buttonStyle(StudioQuietButtonStyle())
                 }
                 if !moment.hiddenRunnerUpIDs.isEmpty {
-                    Button(showingRunnersUp ? "Hide other frames" : "Show \(moment.hiddenRunnerUpIDs.count) other frames") {
-                        showingRunnersUp.toggle()
+                    Button(showingRunnersUp ? "Hide others" : "\(moment.hiddenRunnerUpIDs.count) others") {
+                        withAnimation(StudioChrome.ease) { showingRunnersUp.toggle() }
                     }
+                    .buttonStyle(StudioQuietButtonStyle())
                 }
                 Spacer()
-                Text("Return keeps the suggestion · P keeps the selected frame · X drops · Esc skips · E checks eyes")
-                    .font(.caption)
-                    .foregroundStyle(StudioChrome.tertiary)
+                if model.pendingConfirmations.contains(where: \.isChoice) {
+                    Button("Decide the rest for me") { model.acceptRemainingChoices() }
+                        .buttonStyle(StudioQuietButtonStyle())
+                }
             }
-        }
-        .padding(22)
-    }
-
-    private var summaryStrip: some View {
-        let summary = model.albumSummary
-        return HStack(spacing: 16) {
-            summaryChip("\(summary.total)", "in")
-            summaryChip("\(summary.kept)", "kept")
-            summaryChip("\(summary.unusable)", "unusable")
-            summaryChip("\(summary.pending)", "for you")
-            Spacer()
-        }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 8)
-        .background(StudioChrome.elevated, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
-    }
-
-    private func summaryChip(_ value: String, _ label: String) -> some View {
-        HStack(spacing: 4) {
-            Text(value).font(.caption.weight(.semibold).monospacedDigit())
-            Text(label).font(.caption).foregroundStyle(StudioChrome.tertiary)
+            .padding(.horizontal, 22)
+            .padding(.vertical, 14)
+            .background(StudioChrome.canvas)
         }
     }
 
@@ -141,76 +135,63 @@ struct ConfirmWorkspace: View {
         return Button {
             model.focusedID = row.id
         } label: {
-            VStack(alignment: .leading, spacing: 8) {
-                ZStack(alignment: .topLeading) {
-                    Color.black
-                    confirmPreview(for: row)
-                    if suggested {
-                        Text("Suggestion")
-                            .font(.caption2.weight(.bold))
-                            .padding(.horizontal, 6)
-                            .padding(.vertical, 3)
-                            .background(StudioChrome.pick, in: Capsule())
-                            .foregroundStyle(.black)
-                            .padding(10)
-                    }
+            ZStack(alignment: .topLeading) {
+                StudioChrome.photo
+                confirmPreview(for: row)
+                if suggested {
+                    Text("Suggestion")
+                        .font(StudioType.caption)
+                        .foregroundStyle(StudioChrome.text)
+                        .shadow(color: .black.opacity(0.85), radius: 3, y: 1)
+                        .padding(12)
                 }
-                .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
-                .overlay {
-                    RoundedRectangle(cornerRadius: 10, style: .continuous)
-                        .strokeBorder(focused ? StudioChrome.focus : Color.clear, lineWidth: 2)
-                }
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(row.sourceURL.lastPathComponent)
-                        .font(.caption)
-                        .foregroundStyle(StudioChrome.secondary)
-                        .lineLimit(1)
-                    if let reason = row.reasons.first {
-                        Text(reason)
-                            .font(.caption2)
-                            .foregroundStyle(StudioChrome.tertiary)
-                            .lineLimit(1)
-                    }
-                }
+            }
+            .overlay {
+                Rectangle()
+                    .strokeBorder(focused ? StudioChrome.focus : Color.clear, lineWidth: 1)
             }
         }
         .buttonStyle(.plain)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .help(row.sourceURL.lastPathComponent)
     }
 
     private func confirmPreview(for row: CuratedRow) -> some View {
-        ConfirmLoupe(url: row.sourceURL, zoom: model.loupeZoom, face: model.primaryFaceBox(for: row.id))
+        ConfirmLoupe(url: row.previewURL ?? row.sourceURL, zoom: model.loupeZoom, face: model.primaryFaceBox(for: row.id))
     }
 
     private var finished: some View {
-        VStack(spacing: 14) {
-            Text("Nothing else needs you.")
+        VStack(spacing: 18) {
+            Text("That's every close call.")
                 .font(StudioType.display)
             Text(model.albumSummary.sentence)
+                .font(StudioType.ui)
                 .foregroundStyle(StudioChrome.secondary)
                 .multilineTextAlignment(.center)
-                .frame(maxWidth: 440)
+                .frame(maxWidth: 400)
             if model.confirmationsBeyondCap > 0 {
-                Text("We showed you the 16 closest calls. \(model.confirmationsBeyondCap) more were clear enough to decide automatically.")
-                    .font(.caption)
+                Text("The other \(model.confirmationsBeyondCap) were clear enough to decide automatically.")
+                    .font(StudioType.caption)
                     .foregroundStyle(StudioChrome.tertiary)
             }
-            HStack(spacing: 10) {
-                Button("Choose the look") { model.workspace = .look }
-                    .buttonStyle(.borderedProminent)
-                    .tint(StudioChrome.pick)
-                Button("Browse the album") {
+            HStack(spacing: 18) {
+                Button("Choose a style") { model.workspace = .look }
+                    .buttonStyle(StudioButtonStyle(primary: true))
+                Button("See the album") {
                     model.workspace = .album
                     model.albumMode = .grid
                 }
+                .buttonStyle(StudioQuietButtonStyle())
             }
+            .padding(.top, 4)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(StudioChrome.canvas)
     }
 
     private var progressTitle: String {
         let done = model.confirmations.count - model.pendingConfirmations.count + 1
-        return "Moment \(min(done, model.confirmations.count)) of \(model.confirmations.count)"
+        return "\(min(done, model.confirmations.count)) / \(model.confirmations.count)"
     }
 }
 
@@ -222,14 +203,18 @@ private struct ConfirmLoupe: View {
     @State private var image: NSImage?
 
     var body: some View {
-        Group {
+        ZStack {
+            StudioChrome.photo
             if let image {
                 ZoomableLoupe(image: image, zoom: zoom, face: face)
-            } else {
-                ProgressView().controlSize(.small)
+                    .transition(.opacity)
             }
         }
+        .animation(StudioChrome.ease, value: image != nil)
         .task(id: url.path) {
+            if let warm = ThumbnailCache.shared.cachedImage(url: url, maxPixelSize: 1600) {
+                image = warm
+            }
             image = await ThumbnailCache.shared.image(url: url, maxPixelSize: 1600)
         }
     }

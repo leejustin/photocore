@@ -8,60 +8,55 @@ struct ContentView: View {
     @ObservedObject var model: PhotoEngineViewModel
     @AppStorage("PhotoEngine.sidebarVisible") private var sidebarVisible = true
     @State private var isDropTargeted = false
+    @State private var showSettings = false
 
     var body: some View {
         VStack(spacing: 0) {
             if let error = model.errorMessage {
                 ErrorBanner(message: error) { model.errorMessage = nil }
+                    .transition(.move(edge: .top).combined(with: .opacity))
+            }
+            if showsStudioBar {
+                StudioTopBar(model: model)
+                Rectangle().fill(StudioChrome.hairline).frame(height: 1)
             }
             HStack(spacing: 0) {
-                if sidebarVisible && model.result != nil {
+                if sidebarVisible && showsStudioBar {
                     sidebar
-                        .frame(width: 248)
+                        .frame(width: 196)
+                        .transition(.move(edge: .leading).combined(with: .opacity))
                     Rectangle().fill(StudioChrome.hairline).frame(width: 1)
                 }
                 workspace
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .id(workspaceIdentity)
+                    .transition(.opacity)
             }
         }
-        .toolbar {
-            ToolbarItem(placement: .navigation) {
-                if model.result != nil {
-                    Button {
-                        withAnimation(.easeOut(duration: 0.15)) { sidebarVisible.toggle() }
-                    } label: {
-                        Image(systemName: "sidebar.left")
-                    }
-                    .help("Show or hide the sidebar (⌃⌘S)")
-                    .keyboardShortcut("s", modifiers: [.command, .control])
-                }
-            }
-            ToolbarItem(placement: .principal) {
-                if model.result != nil {
-                    StepNavigator(model: model)
-                } else {
-                    Text("Photocore").font(.headline)
-                }
-            }
-            ToolbarItem(placement: .primaryAction) {
-                if model.isRunning {
-                    Button("Cancel", role: .cancel) { model.cancel() }
-                } else if model.result != nil {
-                    Button {
-                        model.workspace = .album
-                        model.albumMode = .grid
-                    } label: {
-                        Label("Album", systemImage: "square.grid.2x2")
-                    }
-                    .help("Browse every photo (⌘4)")
-                }
-            }
-        }
-        .toolbarBackground(StudioChrome.panel, for: .windowToolbar)
+        .animation(StudioChrome.ease, value: sidebarVisible)
+        .animation(StudioChrome.ease, value: workspaceIdentity)
+        .animation(StudioChrome.ease, value: model.errorMessage)
         .background(StudioChrome.canvas)
         .foregroundStyle(StudioChrome.text)
+        .tint(StudioChrome.text)
         .preferredColorScheme(.dark)
-        .background { CullKeyCommands(model: model) }
+        .background {
+            CullKeyCommands(model: model)
+            Button("") {
+                withAnimation(StudioChrome.ease) { sidebarVisible.toggle() }
+            }
+            .keyboardShortcut("s", modifiers: [.command, .control])
+            .opacity(0.01)
+            .frame(width: 1, height: 1)
+            .allowsHitTesting(false)
+            .accessibilityHidden(true)
+            Button("") { model.showingShortcuts = true }
+                .keyboardShortcut("?", modifiers: [])
+                .opacity(0.01)
+                .frame(width: 1, height: 1)
+                .allowsHitTesting(false)
+                .accessibilityHidden(true)
+        }
         .fileImporter(isPresented: $model.showingChooser, allowedContentTypes: [.folder], allowsMultipleSelection: false) { result in
             switch result {
             case .success(let urls):
@@ -85,16 +80,20 @@ struct ContentView: View {
         .overlay {
             if isDropTargeted {
                 ZStack {
-                    StudioChrome.canvas.opacity(0.6)
-                    RoundedRectangle(cornerRadius: 16, style: .continuous)
-                        .strokeBorder(StudioChrome.pick, style: StrokeStyle(lineWidth: 3, dash: [10, 6]))
-                        .padding(12)
-                    Label("Drop to open this folder", systemImage: "folder.badge.plus")
-                        .font(.title3.weight(.semibold))
+                    StudioChrome.photo.opacity(0.72)
+                    VStack(spacing: 8) {
+                        Text("Open this folder")
+                            .font(StudioType.display)
+                        Text("Drop to begin")
+                            .font(StudioType.ui)
+                            .foregroundStyle(StudioChrome.secondary)
+                    }
                 }
+                .transition(.opacity)
                 .allowsHitTesting(false)
             }
         }
+        .animation(StudioChrome.ease, value: isDropTargeted)
         .overlay(alignment: .bottom) {
             if model.result != nil && !model.isRunning {
                 StatusToast(message: model.status)
@@ -129,66 +128,76 @@ struct ContentView: View {
         }
     }
 
+    private var showsStudioBar: Bool { model.result != nil && !model.isRunning }
+
+    private var workspaceIdentity: String {
+        if model.isRunning { return "processing" }
+        if model.result == nil { return "welcome" }
+        return "\(model.workspace.rawValue)-\(model.albumMode.rawValue)"
+    }
+
     private var sidebar: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 18) {
-                Button { model.showingChooser = true } label: {
-                    Label(model.selectedFolder?.lastPathComponent ?? "Choose a folder", systemImage: "folder")
-                        .lineLimit(1)
-                }
-                .buttonStyle(.plain)
-                .font(.callout.weight(.medium))
+            VStack(alignment: .leading, spacing: 24) {
                 if model.result != nil {
                     filterSection
                 }
-                DisclosureGroup("Run again with new settings") {
-                    CurationSettingsForm(model: model)
-                        .padding(.top, 8)
-                    Button("Run again") { model.process() }
-                        .disabled(model.isRunning || model.selectedFolder == nil)
+                Button(showSettings ? "Hide settings" : "Settings") {
+                    withAnimation(StudioChrome.ease) { showSettings.toggle() }
                 }
-                .font(.callout)
+                .buttonStyle(.plain)
+                .font(StudioType.caption)
+                .foregroundStyle(StudioChrome.tertiary)
+                if showSettings {
+                    CurationSettingsForm(model: model)
+                    Button("Run again") { model.process() }
+                        .buttonStyle(StudioButtonStyle(primary: true))
+                        .disabled(model.isRunning || model.selectedFolder == nil)
+                        .padding(.top, 4)
+                }
             }
-            .padding(14)
+            .padding(.horizontal, 14)
+            .padding(.vertical, 18)
             .frame(maxWidth: .infinity, alignment: .leading)
         }
-        .background(StudioChrome.panel)
+        .background(StudioChrome.canvas)
         .scrollIndicators(.hidden)
     }
 
     private var filterSection: some View {
-        VStack(alignment: .leading, spacing: 14) {
+        VStack(alignment: .leading, spacing: 16) {
             VStack(alignment: .leading, spacing: 2) {
                 StudioSectionHeader(title: "Library")
+                    .padding(.bottom, 4)
                 ForEach(LibraryFilter.library) { filterButton($0) }
             }
             VStack(alignment: .leading, spacing: 2) {
-                StudioSectionHeader(title: "Your marks")
+                StudioSectionHeader(title: "Yours")
+                    .padding(.bottom, 4)
                 ForEach(LibraryFilter.marks) { filterButton($0) }
             }
         }
     }
 
     private func filterButton(_ filter: LibraryFilter) -> some View {
-        Button {
+        let selected = model.filter == filter
+        return Button {
             model.filter = filter
             model.focusedID = model.visibleRows.first?.id
         } label: {
             HStack(spacing: 8) {
-                Image(systemName: filter.symbol)
-                    .frame(width: 16)
-                    .foregroundStyle(model.filter == filter ? StudioChrome.pick : StudioChrome.secondary)
                 Text(filter.title)
+                    .foregroundStyle(selected ? StudioChrome.text : StudioChrome.secondary)
                 Spacer()
                 Text("\(model.count(filter))")
-                    .font(.caption.monospacedDigit())
+                    .font(StudioType.caption.monospacedDigit())
                     .foregroundStyle(StudioChrome.tertiary)
             }
-            .font(.callout)
-            .padding(.leading, filter.isIndented ? 18 : 0)
+            .font(selected ? StudioType.uiMedium : StudioType.ui)
+            .padding(.leading, filter.isIndented ? 12 : 0)
+            .padding(.vertical, 5)
             .padding(.horizontal, 8)
-            .padding(.vertical, 6)
-            .background(model.filter == filter ? Color.white.opacity(0.08) : Color.clear, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+            .background(selected ? StudioChrome.elevated : Color.clear)
         }
         .buttonStyle(.plain)
     }
@@ -205,18 +214,19 @@ struct CurationSettingsForm: View {
                     ForEach(CurationMode.allCases, id: \.self) { Text($0.displayName).tag($0) }
                 }
             }
-            labeledMenu("Cull") {
-                Picker("Cull", selection: $model.aggressiveness) {
+            labeledMenu("How picky") {
+                Picker("How picky", selection: $model.aggressiveness) {
                     ForEach(CullingAggressiveness.allCases, id: \.self) { Text($0.displayName).tag($0) }
                 }
             }
-            Text("\(cullDescription) \(model.mode.cullHint)")
-                .font(.caption2)
+            Text(cullDescription)
+                .font(StudioType.caption)
                 .foregroundStyle(StudioChrome.tertiary)
                 .fixedSize(horizontal: false, vertical: true)
-            labeledMenu("Size") {
-                Picker("Size", selection: $model.sizingMode) {
-                    ForEach(ShortlistSizingMode.allCases, id: \.self) { Text($0.displayName).tag($0) }
+            labeledMenu("How many") {
+                Picker("How many", selection: $model.sizingMode) {
+                    Text("A set number").tag(ShortlistSizingMode.count)
+                    Text("A percentage").tag(ShortlistSizingMode.percentage)
                 }
             }
             switch model.sizingMode {
@@ -230,16 +240,16 @@ struct CurationSettingsForm: View {
 
     private var cullDescription: String {
         switch model.aggressiveness {
-        case .gentle: "Keeps more variations and uncertain moments."
-        case .balanced: "One strong frame per moment, with coverage."
-        case .highlights: "A short album. Repetitive frames drop out."
+        case .gentle: "Keeps more of the similar shots."
+        case .balanced: "One good photo from each moment."
+        case .highlights: "A short set. Repeated shots drop out."
         }
     }
 
     private func labeledMenu<Content: View>(_ title: String, @ViewBuilder content: () -> Content) -> some View {
         VStack(alignment: .leading, spacing: 4) {
             Text(title)
-                .font(.caption)
+                .font(StudioType.caption)
                 .foregroundStyle(StudioChrome.secondary)
             content()
                 .labelsHidden()
@@ -250,66 +260,87 @@ struct CurationSettingsForm: View {
     private func captionSlider(_ title: String, value: Binding<Double>, range: ClosedRange<Double>, step: Double) -> some View {
         VStack(alignment: .leading, spacing: 4) {
             Text(title)
-                .font(.caption.monospacedDigit())
+                .font(StudioType.caption.monospacedDigit())
                 .foregroundStyle(StudioChrome.secondary)
             Slider(value: value, in: range, step: step)
         }
     }
 }
 
-private struct StepNavigator: View {
+private struct StudioTopBar: View {
     @ObservedObject var model: PhotoEngineViewModel
 
+    private var steps: [StudioWorkspace] { [.album] + StudioWorkspace.steps }
+
     var body: some View {
-        HStack(spacing: 8) {
-            ForEach(Array(StudioWorkspace.steps.enumerated()), id: \.element) { index, step in
-                if index > 0 {
-                    Rectangle()
-                        .fill(StudioChrome.hairline)
-                        .frame(width: 20, height: 1)
-                }
-                Button {
-                    model.workspace = step
-                } label: {
-                    HStack(spacing: 6) {
-                        ZStack {
-                            Circle()
-                                .fill(fill(for: step))
-                                .frame(width: 18, height: 18)
-                            if model.isStepDone(step) && model.workspace != step {
-                                Image(systemName: "checkmark")
-                                    .font(.system(size: 9, weight: .heavy))
-                                    .foregroundStyle(.black)
-                            } else {
-                                Text("\(index + 1)")
-                                    .font(.system(size: 10, weight: .bold))
-                                    .foregroundStyle(model.workspace == step ? .black : StudioChrome.secondary)
+        ZStack {
+            HStack(spacing: 0) {
+                ForEach(steps) { step in
+                    let selected = model.workspace == step
+                    Button {
+                        withAnimation(StudioChrome.ease) {
+                            if step == .album { model.albumMode = .grid }
+                            model.workspace = step
+                        }
+                    } label: {
+                        HStack(spacing: 6) {
+                            Text(step.title)
+                            if step == .confirm, !model.pendingConfirmations.isEmpty {
+                                Text("\(model.pendingConfirmations.count)")
+                                    .font(StudioType.caption.monospacedDigit())
+                                    .foregroundStyle(StudioChrome.tertiary)
                             }
                         }
-                        Text(step.title)
-                            .font(.subheadline.weight(.medium))
-                            .foregroundStyle(model.workspace == step ? StudioChrome.text : StudioChrome.secondary)
-                        if step == .confirm, !model.pendingConfirmations.isEmpty {
-                            Text("\(model.pendingConfirmations.count)")
-                                .font(.caption2.weight(.bold).monospacedDigit())
-                                .padding(.horizontal, 5)
-                                .padding(.vertical, 1)
-                                .background(StudioChrome.pick.opacity(0.25), in: Capsule())
+                        .font(selected ? StudioType.uiMedium : StudioType.ui)
+                        .foregroundStyle(selected ? StudioChrome.text : StudioChrome.tertiary)
+                        .padding(.horizontal, 14)
+                        .padding(.vertical, 8)
+                        .overlay(alignment: .bottom) {
+                            Rectangle()
+                                .fill(selected ? StudioChrome.text : Color.clear)
+                                .frame(height: 1)
                         }
                     }
-                    .padding(.horizontal, 8)
-                    .padding(.vertical, 4)
-                    .contentShape(Rectangle())
+                    .buttonStyle(.plain)
+                }
+            }
+            HStack {
+                Button { model.showingChooser = true } label: {
+                    Text(model.selectedFolder?.lastPathComponent ?? "Photocore")
+                        .lineLimit(1)
+                        .truncationMode(.middle)
                 }
                 .buttonStyle(.plain)
+                .font(StudioType.ui)
+                .foregroundStyle(StudioChrome.secondary)
+                .frame(maxWidth: 180, alignment: .leading)
+                Spacer()
+                trailing
+                    .frame(minWidth: 100, alignment: .trailing)
             }
         }
+        .padding(.leading, 78)
+        .padding(.trailing, 18)
+        .padding(.top, 10)
+        .padding(.bottom, 0)
+        .background(StudioChrome.canvas)
     }
 
-    private func fill(for step: StudioWorkspace) -> Color {
-        if model.workspace == step { return StudioChrome.pick }
-        if model.isStepDone(step) { return Color.white.opacity(0.75) }
-        return Color.white.opacity(0.10)
+    @ViewBuilder
+    private var trailing: some View {
+        if model.workspace == .adjust {
+            Button("Done") { model.workspace = model.workspaceBeforeAdjust }
+                .buttonStyle(StudioQuietButtonStyle())
+        } else if model.workspace == .album, model.albumMode == .grid {
+            HStack(spacing: 10) {
+                Button("−") { model.cellSize = max(120, model.cellSize - 16) }
+                Button("+") { model.cellSize = min(260, model.cellSize + 16) }
+            }
+            .buttonStyle(StudioQuietButtonStyle())
+        } else {
+            Button("?") { model.showingShortcuts = true }
+                .buttonStyle(StudioQuietButtonStyle())
+        }
     }
 }
 
@@ -317,64 +348,99 @@ private struct WelcomeView: View {
     @ObservedObject var model: PhotoEngineViewModel
 
     var body: some View {
-        ScrollView {
-            VStack(spacing: 28) {
-                if let folder = model.selectedFolder {
-                    ready(folder)
-                } else {
-                    intro
+        GeometryReader { geo in
+            ZStack(alignment: .topLeading) {
+                welcomePhoto
+                    .frame(width: geo.size.width, height: geo.size.height, alignment: .trailing)
+                    .clipped()
+                LinearGradient(
+                    colors: [
+                        Color.black.opacity(0.82),
+                        Color.black.opacity(0.55),
+                        Color.black.opacity(0.08)
+                    ],
+                    startPoint: .leading,
+                    endPoint: .trailing
+                )
+                .frame(width: min(760, geo.size.width * 0.68))
+                LinearGradient(
+                    colors: [.clear, Color.black.opacity(0.45)],
+                    startPoint: .top,
+                    endPoint: .bottom
+                )
+                .frame(height: 180)
+                .frame(maxHeight: .infinity, alignment: .bottom)
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 28) {
+                        if let folder = model.selectedFolder {
+                            ready(folder)
+                        } else {
+                            intro
+                        }
+                        if !model.recentFolders.isEmpty {
+                            recent
+                        }
+                    }
+                    .padding(44)
+                    .frame(maxWidth: 680, alignment: .leading)
                 }
-                if !model.recentFolders.isEmpty {
-                    recent
-                }
+                .scrollIndicators(.hidden)
             }
-            .padding(40)
-            .frame(maxWidth: .infinity)
         }
-        .background(StudioChrome.canvas)
+        .background(Color.black)
+    }
+
+    private var welcomePhoto: some View {
+        Group {
+            if let url = Bundle.module.url(forResource: "welcome-macro", withExtension: "jpg"),
+               let image = NSImage(contentsOf: url) {
+                Image(nsImage: image)
+                    .resizable()
+                    .aspectRatio(contentMode: .fill)
+            } else {
+                StudioChrome.canvas
+            }
+        }
     }
 
     private var intro: some View {
-        VStack(spacing: 24) {
-            VStack(spacing: 10) {
+        VStack(alignment: .leading, spacing: 28) {
+            Text("Photocore")
+                .font(StudioType.brand)
+                .foregroundStyle(StudioChrome.text)
+            VStack(alignment: .leading, spacing: 12) {
                 Text("We cull it.\nYou confirm the close calls.")
                     .font(StudioType.hero)
-                    .multilineTextAlignment(.center)
-                Text("Drop a folder. Photocore keeps the strong frames, hides the rest, and only asks when two photos are actually close.")
+                    .fixedSize(horizontal: false, vertical: true)
+                Text("Drop a folder. Blurry and repeated frames leave. You only decide when two shots are actually close.")
+                    .font(StudioType.ui)
                     .foregroundStyle(StudioChrome.secondary)
-                    .multilineTextAlignment(.center)
-                    .frame(maxWidth: 480)
+                    .frame(maxWidth: 420)
             }
-            HStack(spacing: 18) {
-                welcomeStep("1", "Run", "Bursts collapse. Blurry and blank frames drop out.")
-                welcomeStep("2", "Confirm", "A short queue of close calls. Return keeps the suggestion.")
-                welcomeStep("3", "Deliver", "Finished JPEGs with stars and labels Lightroom reads.")
-            }
-            VStack(spacing: 8) {
+            VStack(alignment: .leading, spacing: 10) {
                 Button("Choose Folder…") { model.showingChooser = true }
-                    .buttonStyle(.borderedProminent)
-                    .tint(StudioChrome.pick)
+                    .buttonStyle(StudioButtonStyle(primary: true))
                     .controlSize(.large)
-                Text("or drop a folder anywhere in this window")
-                    .font(.caption)
+                Text("or drop a folder anywhere")
+                    .font(StudioType.caption)
                     .foregroundStyle(StudioChrome.tertiary)
             }
         }
-        .padding(.top, 40)
+        .padding(.top, 48)
     }
 
     private func ready(_ folder: URL) -> some View {
-        VStack(alignment: .leading, spacing: 18) {
-            HStack(spacing: 10) {
-                Image(systemName: "folder.fill")
-                    .font(.title2)
-                    .foregroundStyle(StudioChrome.pick)
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(folder.lastPathComponent)
-                        .font(StudioType.display)
-                    Text(countLine)
-                        .foregroundStyle(model.folderHasNoPhotos ? StudioChrome.reject : StudioChrome.secondary)
-                }
+        VStack(alignment: .leading, spacing: 22) {
+            Text("Photocore")
+                .font(StudioType.caption)
+                .tracking(1.2)
+                .foregroundStyle(StudioChrome.tertiary)
+            VStack(alignment: .leading, spacing: 6) {
+                Text(folder.lastPathComponent)
+                    .font(StudioType.display)
+                Text(countLine)
+                    .font(StudioType.ui)
+                    .foregroundStyle(model.folderHasNoPhotos ? StudioChrome.reject : StudioChrome.secondary)
             }
             if !model.folderHasNoPhotos {
                 CurationSettingsForm(model: model)
@@ -382,26 +448,22 @@ private struct WelcomeView: View {
                     model.process()
                 } label: {
                     Text(curateTitle)
-                        .frame(maxWidth: .infinity)
+                        .frame(maxWidth: 280)
                 }
-                .buttonStyle(.borderedProminent)
-                .tint(StudioChrome.pick)
-                .controlSize(.large)
+                .buttonStyle(StudioButtonStyle(primary: true))
                 .keyboardShortcut(.return, modifiers: .command)
                 .disabled(model.isCountingPhotos)
             }
             Button("Choose a different folder…") { model.showingChooser = true }
-                .buttonStyle(.link)
+                .buttonStyle(StudioQuietButtonStyle())
         }
-        .padding(24)
-        .frame(maxWidth: 520)
-        .background(StudioChrome.panel, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
-        .padding(.top, 40)
+        .padding(.top, 48)
+        .frame(maxWidth: 480, alignment: .leading)
     }
 
     private var countLine: String {
         if model.isCountingPhotos { return "Counting photos…" }
-        if model.folderHasNoPhotos { return "No JPEG, HEIC, or RAW photos in this folder." }
+        if model.folderHasNoPhotos { return "No photos in this folder." }
         return model.shortlistEstimateText ?? ""
     }
 
@@ -411,48 +473,29 @@ private struct WelcomeView: View {
     }
 
     private var recent: some View {
-        VStack(alignment: .leading, spacing: 6) {
+        VStack(alignment: .leading, spacing: 8) {
             StudioSectionHeader(title: "Recent")
             ForEach(model.recentFolders, id: \.self) { url in
                 Button {
                     model.selectFolder(url)
                 } label: {
-                    HStack {
-                        Image(systemName: "folder")
-                            .foregroundStyle(StudioChrome.secondary)
+                    HStack(spacing: 10) {
                         Text(url.lastPathComponent)
-                        Spacer()
+                            .font(StudioType.ui)
                         Text(url.deletingLastPathComponent().path.replacingOccurrences(of: NSHomeDirectory(), with: "~"))
-                            .font(.caption)
+                            .font(StudioType.caption)
                             .foregroundStyle(StudioChrome.tertiary)
                             .lineLimit(1)
                             .truncationMode(.middle)
                     }
-                    .padding(.horizontal, 10)
-                    .padding(.vertical, 7)
-                    .background(StudioChrome.elevated, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+                    .foregroundStyle(StudioChrome.secondary)
+                    .padding(.vertical, 4)
                 }
                 .buttonStyle(.plain)
             }
         }
-        .frame(maxWidth: 520)
-    }
-
-    private func welcomeStep(_ number: String, _ title: String, _ detail: String) -> some View {
-        VStack(alignment: .leading, spacing: 6) {
-            Text(number)
-                .font(.caption.weight(.bold))
-                .foregroundStyle(StudioChrome.pick)
-            Text(title)
-                .font(.headline)
-            Text(detail)
-                .font(.caption)
-                .foregroundStyle(StudioChrome.secondary)
-                .fixedSize(horizontal: false, vertical: true)
-        }
-        .frame(width: 180, alignment: .leading)
-        .padding(14)
-        .background(StudioChrome.panel, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .frame(maxWidth: 480)
+        .padding(.top, 12)
     }
 }
 
@@ -461,55 +504,53 @@ private struct ProcessingView: View {
 
     private let stages: [(PipelineProgress.Stage, String)] = [
         (.discovering, "Finding photos"),
-        (.analyzing, "Reading focus, faces, and light"),
-        (.grouping, "Grouping bursts and duplicates"),
+        (.analyzing, "Checking sharpness and faces"),
+        (.grouping, "Grouping similar photos"),
         (.selecting, "Choosing the keepers"),
-        (.exporting, "Rendering the album")
+        (.exporting, "Preparing the album")
     ]
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 22) {
-            Text("Working through the shoot")
+        VStack(alignment: .leading, spacing: 18) {
+            Text("Working")
                 .font(StudioType.display)
-            Text(model.status)
+            Text(currentStageTitle)
+                .font(StudioType.ui)
                 .foregroundStyle(StudioChrome.secondary)
             if let progress = model.progress, progress.total > 0 {
                 ProgressView(value: Double(progress.completed), total: Double(max(progress.total, 1)))
-                    .tint(StudioChrome.pick)
-            } else {
-                ProgressView()
-                    .controlSize(.small)
-            }
-            if let progress = model.progress, progress.total > 0 {
+                    .tint(StudioChrome.text)
                 HStack {
                     Text("\(progress.completed.formatted()) of \(progress.total.formatted())")
-                        .monospacedDigit()
+                        .font(StudioType.caption.monospacedDigit())
                     Spacer()
                     if let eta = etaText {
                         Text(eta)
+                            .font(StudioType.caption)
                     }
                 }
-                .font(.caption)
-                .foregroundStyle(StudioChrome.secondary)
-            }
-            VStack(alignment: .leading, spacing: 10) {
-                ForEach(Array(stages.enumerated()), id: \.offset) { index, stage in
-                    HStack(spacing: 10) {
-                        Image(systemName: symbol(for: index))
-                            .foregroundStyle(isCurrent(index) ? StudioChrome.pick : StudioChrome.tertiary)
-                            .frame(width: 16)
-                        Text(stage.1)
-                            .foregroundStyle(isCurrent(index) || isPast(index) ? StudioChrome.text : StudioChrome.tertiary)
-                    }
-                    .font(.callout)
-                }
+                .foregroundStyle(StudioChrome.tertiary)
+            } else {
+                ProgressView()
+                    .controlSize(.small)
+                    .tint(StudioChrome.text)
             }
             Button("Cancel") { model.cancel() }
+                .buttonStyle(StudioQuietButtonStyle())
+                .padding(.top, 8)
         }
-        .padding(36)
-        .frame(maxWidth: 560, alignment: .leading)
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .background(StudioChrome.canvas)
+        .padding(48)
+        .frame(maxWidth: 420, alignment: .leading)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
+        .background(StudioChrome.photo)
+    }
+
+    private var currentStageTitle: String {
+        guard let stage = model.progress?.stage,
+              let title = stages.first(where: { $0.0 == stage })?.1 else {
+            return model.status
+        }
+        return title
     }
 
     private var etaText: String? {
@@ -522,19 +563,6 @@ private struct ProcessingView: View {
         return "About \(text) left"
     }
 
-    private var currentIndex: Int {
-        guard let stage = model.progress?.stage else { return 0 }
-        return stages.firstIndex { $0.0 == stage } ?? 0
-    }
-
-    private func isCurrent(_ index: Int) -> Bool { index == currentIndex }
-    private func isPast(_ index: Int) -> Bool { index < currentIndex }
-
-    private func symbol(for index: Int) -> String {
-        if isPast(index) { return "checkmark" }
-        if isCurrent(index) { return "circle.fill" }
-        return "circle"
-    }
 }
 
 private struct StatusToast: View {
@@ -545,16 +573,16 @@ private struct StatusToast: View {
         Group {
             if visible {
                 Text(message)
-                    .font(.callout)
-                    .padding(.horizontal, 14)
-                    .padding(.vertical, 8)
-                    .background(.ultraThinMaterial, in: Capsule())
-                    .overlay(Capsule().strokeBorder(StudioChrome.hairline))
+                    .font(StudioType.ui)
+                    .padding(.horizontal, 16)
+                    .padding(.vertical, 9)
+                    .background(StudioChrome.panel.opacity(0.96), in: RoundedRectangle(cornerRadius: 2, style: .continuous))
+                    .overlay(RoundedRectangle(cornerRadius: 2, style: .continuous).strokeBorder(StudioChrome.hairline))
                     .transition(.move(edge: .bottom).combined(with: .opacity))
             }
         }
-        .padding(.bottom, 18)
-        .animation(.easeOut(duration: 0.2), value: visible)
+        .padding(.bottom, 20)
+        .animation(StudioChrome.easeSlow, value: visible)
         .task(id: message) {
             visible = true
             try? await Task.sleep(for: .seconds(3))
