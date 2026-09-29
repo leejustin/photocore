@@ -48,6 +48,27 @@ struct DeliverWorkspace: View {
                         .frame(width: 220)
                         Spacer()
                     }
+
+                    row(label: "Names") {
+                        TextField("Rename pattern", text: $model.renamePattern)
+                            .textFieldStyle(.plain)
+                            .font(StudioType.caption.monospaced())
+                            .foregroundStyle(StudioChrome.secondary)
+                        Spacer()
+                    }
+                    if let sample = model.previewRenames(limit: 2).first {
+                        Text("e.g. \(sample)")
+                            .font(StudioType.caption)
+                            .foregroundStyle(StudioChrome.tertiary)
+                            .padding(.leading, 68)
+                    }
+
+                    Toggle("Build local proof gallery", isOn: $model.buildProofGallery)
+                        .toggleStyle(.checkbox)
+                        .font(StudioType.caption)
+                    Toggle("Portrait retouch on export", isOn: $model.albumRetouchEnabled)
+                        .toggleStyle(.checkbox)
+                        .font(StudioType.caption)
                 }
 
                 Button("Save \(model.deliverRows.count) photos") { model.deliver() }
@@ -65,18 +86,45 @@ struct DeliverWorkspace: View {
                 }
 
                 if let report = model.lastDelivery, !model.isDelivering {
-                    HStack(spacing: 12) {
-                        Text("Saved \(report.photoCount) to \(report.folder.lastPathComponent)")
-                            .font(StudioType.ui)
-                        Spacer()
-                        Button("Show in Finder") {
-                            NSWorkspace.shared.activateFileViewerSelecting([report.folder])
+                    VStack(alignment: .leading, spacing: 8) {
+                        HStack(spacing: 12) {
+                            Text("Saved \(report.photoCount) to \(report.folder.lastPathComponent)")
+                                .font(StudioType.ui)
+                            Spacer()
+                            Button("Show in Finder") {
+                                NSWorkspace.shared.activateFileViewerSelecting([report.folder])
+                            }
+                            .buttonStyle(StudioQuietButtonStyle())
                         }
-                        .buttonStyle(StudioQuietButtonStyle())
+                        if let gallery = model.lastProofGallery {
+                            HStack(spacing: 12) {
+                                Text("Proof gallery · \(gallery.photoCount) · sneak peek \(gallery.sneakPeekCount)")
+                                    .font(StudioType.caption)
+                                    .foregroundStyle(StudioChrome.secondary)
+                                Spacer()
+                                Button("Open gallery") {
+                                    NSWorkspace.shared.open(gallery.indexURL)
+                                }
+                                .buttonStyle(StudioQuietButtonStyle())
+                            }
+                        }
+                        if model.lastCullReportURL != nil {
+                            Button("Cull report") { model.exportCullReport() }
+                                .buttonStyle(StudioQuietButtonStyle())
+                        }
                     }
                     .padding(.vertical, 4)
                 }
 
+                if model.tasteProfile.isReady {
+                    Text("Taste memory on · \(model.tasteProfile.sampleCount) marks learned")
+                        .font(StudioType.caption)
+                        .foregroundStyle(StudioChrome.tertiary)
+                }
+
+                StudioHairline()
+                Button("Export cull report now") { model.exportCullReport() }
+                    .buttonStyle(StudioQuietButtonStyle())
                 StudioHairline()
 
                 disclosure("Lightroom", isOpen: $showLightroom) {

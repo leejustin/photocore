@@ -573,7 +573,10 @@ public final class ApplePhotoRenderer: @unchecked Sendable {
         recipe: EditRecipe,
         exportSpecification: ExportSpecification = ExportSpecification()
     ) throws -> ExportedPhoto {
-        let image = Self.apply(recipe, to: try Self.sourceImage(photo, recipe: recipe, maxLongEdge: nil))
+        var image = Self.apply(recipe, to: try Self.sourceImage(photo, recipe: recipe, maxLongEdge: nil))
+        if recipe.retouch.isActive {
+            image = PortraitRetouch.apply(recipe.retouch, to: image, faces: photo.signals.faces)
+        }
 
         try FileManager.default.createDirectory(at: outputURL.deletingLastPathComponent(), withIntermediateDirectories: true)
         let renderedImage: CIImage
@@ -610,6 +613,9 @@ public final class ApplePhotoRenderer: @unchecked Sendable {
     /// A downscaled JPEG for the develop loupe. The full export path uses the same recipe.
     public func previewJPEG(photo: AnalyzedPhoto, recipe: EditRecipe, maxLongEdge: Int = 1600, quality: Double = 0.82) throws -> Data {
         var image = Self.apply(recipe, to: try Self.sourceImage(photo, recipe: recipe, maxLongEdge: maxLongEdge))
+        if recipe.retouch.isActive {
+            image = PortraitRetouch.apply(recipe.retouch, to: image, faces: photo.signals.faces)
+        }
         let longEdge = max(image.extent.width, image.extent.height)
         let limit = CGFloat(max(256, maxLongEdge))
         if longEdge > limit, longEdge.isFinite {
@@ -1375,20 +1381,45 @@ public final class PhotoPipelineRunner: @unchecked Sendable {
         cache.retainAssets(imported.map(\.asset))
         try cache.save()
 
-        let analyzed = PhotoFocusRanking.apply(to: rawAnalyzed)
+        let focused = PhotoFocusRanking.apply(to: rawAnalyzed)
+        let cameraTimelines = MultiCameraSync.estimateOffsets(assets: focused.map(\.asset))
+        let analyzed = MultiCameraSync.aligningCaptureDates(focused, timelines: cameraTimelines)
 
         progress(PipelineProgress(stage: .grouping, completed: 0, total: 1, message: "Grouping duplicates and bursts"))
         let visualDistance = AppleVisualDistance.cachedProvider()
         let groupingStartedAt = Date()
         let grouping = PhotoGroupingEngine.group(analyzed, profile: profile, visualDistance: visualDistance)
         groupingSeconds = Date().timeIntervalSince(groupingStartedAt)
-        progress(PipelineProgress(stage: .grouping, completed: 1, total: 1, message: "Found \(grouping.groups.count) groups"))
+        let cameraNote = cameraTimelines.count > 1 ? " across \(cameraTimelines.count) cameras" : ""
+        progress(PipelineProgress(stage: .grouping, completed: 1, total: 1, message: "Found \(grouping.groups.count) groups\(cameraNote)"))
 
-        let scored = analyzed.map { ScoredPhoto(photo: $0, score: PhotoScoring.score($0, profile: profile)) }
+        let taste = TasteMemory.load()
+        let keyFaces = KeyFaceScorer.boosts(for: analyzed)
+        let scored = analyzed.map { photo -> ScoredPhoto in
+            var score = PhotoScoring.score(photo, profile: profile)
+            let tasteDelta = taste.scoreAdjustment(signals: photo.signals)
+            let faceDelta = keyFaces[photo.id]?.amount ?? 0
+            if tasteDelta != 0 || faceDelta != 0 {
+                var reasons = score.reasons
+                if faceDelta > 0, let reason = keyFaces[photo.id]?.reason { reasons.append(reason) }
+                if taste.isReady, abs(tasteDelta) > 0.01 { reasons.append("matches your taste") }
+                score = CompositeScore(
+                    total: min(max(score.total + tasteDelta + faceDelta, 0), 1),
+                    components: score.components,
+                    reasons: reasons
+                )
+            }
+            return ScoredPhoto(photo: photo, score: score)
+        }
         progress(PipelineProgress(stage: .selecting, completed: 0, total: 1, message: "Building shortlist"))
         let selectionStartedAt = Date()
         var selectionProfile = profile
         selectionProfile.targetCount = profile.resolvedTargetCount(for: analyzed.count)
+        if let fraction = taste.preferredKeepFraction, taste.isReady, analyzed.count > 0 {
+            let learned = Int((fraction * Double(analyzed.count)).rounded())
+            selectionProfile.targetCount = min(analyzed.count, max(selectionProfile.targetCount, learned))
+        }
+        selectionProfile.diversityWeight = taste.diversityWeight(base: selectionProfile.diversityWeight)
         var shortlist = PhotoSelectionEngine.select(scored, grouping: grouping, profile: selectionProfile, visualDistance: visualDistance)
         selectionSeconds = Date().timeIntervalSince(selectionStartedAt)
         if let catalog, catalogHealthy {

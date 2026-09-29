@@ -178,9 +178,17 @@ final class PhotoEngineViewModel: ObservableObject {
         .appendingPathComponent("Pictures", isDirectory: true)
         .appendingPathComponent("Photocore", isDirectory: true)
     @Published var deliverWritesSidecarsBesideOriginals = false
+    @Published var buildProofGallery = true
+    @Published var albumRetouchEnabled = false
+    @Published var retouchPreset: RetouchSettings = .wedding
     @Published var isDelivering = false
     @Published var deliverProgress: (done: Int, total: Int)?
     @Published var lastDelivery: DeliveryReport?
+    @Published var lastProofGallery: ProofGalleryReport?
+    @Published var lastCullReportURL: URL?
+    @Published var tasteProfile: TasteProfile = TasteMemory.load()
+    @Published var sprayMode: ReviewFlag? = nil
+    @Published var renamePattern = "{shoot}_{yyyy}{MM}{dd}_{seq:3}"
     /// True when the run's rendered JPEGs already match the chosen look and size.
     @Published var lookIsApplied = false
     @Published var lookRenderProgress: (done: Int, total: Int)?
@@ -397,7 +405,129 @@ final class PhotoEngineViewModel: ObservableObject {
         processingTask = nil
         lookIsApplied = false
         lastDelivery = nil
+        lastProofGallery = nil
+        lastCullReportURL = nil
         if let selectedFolder { rememberRecentFolder(selectedFolder) }
+        learnTasteFromCurrentShoot()
+    }
+
+    func learnTasteFromCurrentShoot() {
+        guard let result else { return }
+        let kept = rows.filter { $0.bucket == .selected || $0.bucket == .protected }.count
+        let updated = TasteMemory.learn(
+            from: Array(reviewMarks.values),
+            analyzed: result.analyzed,
+            keptCount: kept,
+            sourceCount: result.analyzed.count,
+            existing: tasteProfile
+        )
+        tasteProfile = updated
+        try? TasteMemory.save(updated)
+    }
+
+    func matchStyleFromReferences(_ urls: [URL]) {
+        guard let matched = StyleMatcher.match(from: urls, name: "Your style") else {
+            status = "Could not read those reference photos."
+            return
+        }
+        var recipe = matched.recipe
+        if albumRetouchEnabled { recipe.retouch = retouchPreset }
+        // Store as the working develop baseline for keepers without custom recipes.
+        for row in deliverRows {
+            if customRecipes[row.id] == nil {
+                customRecipes[row.id] = recipe
+            }
+        }
+        lookTemperature = matched.recipe.temperature
+        status = "Matched your style from \(matched.sampleCount) references."
+        lookIsApplied = false
+    }
+
+    func applyAlbumConsistency() {
+        let keepers = deliverRows.compactMap { analyzedPhoto(id: $0.id) }
+        guard !keepers.isEmpty else {
+            status = "Nothing in the album to balance."
+            return
+        }
+        let center = AlbumConsistency.center(of: keepers)
+        for row in deliverRows {
+            guard let photo = analyzedPhoto(id: row.id) else { continue }
+            var recipe = customRecipes[row.id] ?? baseRecipe(for: photo)
+            recipe = AlbumConsistency.apply(to: recipe, temperature: center.temperature, exposure: center.exposure)
+            if albumRetouchEnabled { recipe.retouch = retouchPreset }
+            customRecipes[row.id] = recipe
+        }
+        status = "Balanced exposure across the album."
+        lookIsApplied = false
+    }
+
+    func spray(_ id: PhotoID) {
+        guard let flag = sprayMode else { return }
+        updateMark(id) { $0.flag = flag }
+    }
+
+    func exportCullReport() {
+        guard let result, let folder = selectedFolder else { return }
+        let cameras = Set(result.analyzed.map { MultiCameraSync.cameraKey(for: $0.asset.metadata) }).sorted()
+        let entries = rows.map { row in
+            let mark = sidecarMark(for: row)
+            return PortableCullEntry(
+                fileName: row.sourceURL.lastPathComponent,
+                relativePath: row.relativePath,
+                bucket: row.bucket.rawValue,
+                flag: mark.flag.rawValue,
+                stars: mark.stars,
+                color: mark.color.rawValue,
+                reasons: row.reasons
+            )
+        }
+        let report = CullReport(
+            shootName: folder.lastPathComponent,
+            sourceCount: result.analyzed.count,
+            keptCount: rows.filter { $0.bucket == .selected || $0.bucket == .protected }.count,
+            alternateCount: rows.filter { $0.bucket == .alternate }.count,
+            hiddenCount: rows.filter { $0.bucket == .hidden }.count,
+            unusableCount: rows.filter { $0.reasons.contains(where: PhotoTechnicalReject.isTechnicalRejectReason) }.count,
+            pickCount: reviewMarks.values.filter { $0.flag == .pick }.count,
+            rejectCount: reviewMarks.values.filter { $0.flag == .reject }.count,
+            confirmationCount: confirmations.count,
+            cameras: cameras,
+            tasteReady: tasteProfile.isReady,
+            entries: entries
+        )
+        let dir = FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent("Pictures/Photocore", isDirectory: true)
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        let base = dir.appendingPathComponent("\(folder.lastPathComponent)-cull")
+        let json = base.appendingPathExtension("json")
+        let md = base.appendingPathExtension("md")
+        do {
+            try report.writeJSON(to: json)
+            try report.writeMarkdown(to: md)
+            lastCullReportURL = md
+            status = "Cull report saved."
+            NSWorkspace.shared.activateFileViewerSelecting([json, md])
+        } catch {
+            errorMessage = error.localizedDescription
+        }
+    }
+
+    /// Preview rename tokens for the current album order (does not rename source files).
+    func previewRenames(limit: Int = 8) -> [String] {
+        let shoot = selectedFolder?.lastPathComponent ?? "Shoot"
+        return deliverRows.prefix(limit).enumerated().map { index, row in
+            BatchRename.apply(
+                pattern: renamePattern,
+                token: RenameToken(
+                    shootName: shoot,
+                    sequence: index + 1,
+                    captureDate: analyzedPhoto(id: row.id)?.asset.metadata.captureDate,
+                    originalName: row.sourceURL.lastPathComponent,
+                    cameraModel: analyzedPhoto(id: row.id)?.asset.metadata.cameraModel
+                ),
+                ext: "jpg"
+            )
+        }
     }
 
     var albumSummary: AlbumSummary {
@@ -1128,15 +1258,31 @@ final class PhotoEngineViewModel: ObservableObject {
             (result?.exports ?? []).map { ($0.photoID, URL(fileURLWithPath: $0.outputPath)) },
             uniquingKeysWith: { first, _ in first }
         )
+        let shoot = selectedFolder?.lastPathComponent ?? "Album"
         let jobs: [DeliveryJob] = deliverRows.enumerated().compactMap { index, row in
             guard let photo = analyzedPhoto(id: row.id) else { return nil }
-            let custom = customRecipes[row.id]
+            var custom = customRecipes[row.id]
+            if albumRetouchEnabled {
+                if custom == nil { custom = baseRecipe(for: photo) }
+                custom?.retouch = retouchPreset
+            }
+            let fileName = BatchRename.apply(
+                pattern: renamePattern,
+                token: RenameToken(
+                    shootName: shoot,
+                    sequence: index + 1,
+                    captureDate: photo.asset.metadata.captureDate,
+                    originalName: row.sourceURL.lastPathComponent,
+                    cameraModel: photo.asset.metadata.cameraModel
+                ),
+                ext: "jpg"
+            )
             return DeliveryJob(
                 photo: photo,
-                fileName: String(format: "%03d-%@.jpg", index + 1, row.sourceURL.deletingPathExtension().lastPathComponent),
+                fileName: fileName,
                 mark: sidecarMark(for: row),
                 customRecipe: custom,
-                reusableExport: (lookIsApplied && custom == nil) ? exportByID[row.id] : nil
+                reusableExport: (lookIsApplied && customRecipes[row.id] == nil && !albumRetouchEnabled) ? exportByID[row.id] : nil
             )
         }
         guard !jobs.isEmpty else {
@@ -1206,8 +1352,23 @@ final class PhotoEngineViewModel: ObservableObject {
         isDelivering = false
         deliverProgress = nil
         lastDelivery = report
+        learnTasteFromCurrentShoot()
+        if buildProofGallery {
+            let jpegs = (try? FileManager.default.contentsOfDirectory(at: report.folder, includingPropertiesForKeys: nil))?
+                .filter { $0.pathExtension.lowercased() == "jpg" || $0.pathExtension.lowercased() == "jpeg" }
+                .sorted { $0.lastPathComponent < $1.lastPathComponent } ?? []
+            if let gallery = try? ProofGalleryBuilder.build(
+                deliveredJPEGs: jpegs,
+                analyzed: result?.analyzed ?? [],
+                options: ProofGalleryOptions(title: selectedFolder?.lastPathComponent ?? "Album"),
+                into: report.folder
+            ) {
+                lastProofGallery = gallery
+            }
+        }
+        exportCullReport()
         status = report.sidecarsSkipped == 0
-            ? "Saved \(report.photoCount) photos."
+            ? "Saved \(report.photoCount) photos\(buildProofGallery ? " + proof gallery" : "")."
             : "Saved \(report.photoCount) photos. Left \(report.sidecarsSkipped) existing files untouched."
     }
 

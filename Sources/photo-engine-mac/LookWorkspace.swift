@@ -8,6 +8,7 @@ struct LookWorkspace: View {
     @ObservedObject var model: PhotoEngineViewModel
     @State private var importingLUT = false
     @State private var importingXMP = false
+    @State private var importingStyleRefs = false
     @State private var showMore = false
 
     private var samples: [AnalyzedPhoto] { model.lookSamplePhotos }
@@ -80,6 +81,11 @@ struct LookWorkspace: View {
                 model.importLook(from: url, kind: .xmp)
             }
         }
+        .fileImporter(isPresented: $importingStyleRefs, allowedContentTypes: [.jpeg, .heic, .png, .image], allowsMultipleSelection: true) { result in
+            if case .success(let urls) = result {
+                model.matchStyleFromReferences(urls)
+            }
+        }
     }
 
     private var lookStrip: some View {
@@ -146,6 +152,8 @@ struct LookWorkspace: View {
                 .frame(width: 200)
             }
             Spacer()
+            Button("Match my style…") { importingStyleRefs = true }
+            Button("Balance album") { model.applyAlbumConsistency() }
             Button("Import LUT…") { importingLUT = true }
             Button("Import XMP…") { importingXMP = true }
         }
@@ -159,6 +167,9 @@ struct LookWorkspace: View {
                     .toggleStyle(.checkbox)
                     .font(StudioType.caption)
             }
+            Toggle("Retouch", isOn: $model.albumRetouchEnabled)
+                .toggleStyle(.checkbox)
+                .font(StudioType.caption)
             if let progress = model.lookRenderProgress {
                 ProgressView(value: Double(progress.done), total: Double(max(progress.total, 1)))
                     .tint(StudioChrome.text)

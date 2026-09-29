@@ -11,6 +11,26 @@ struct LibraryWorkspace: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
+            HStack(spacing: 14) {
+                Text("Spray")
+                    .font(StudioType.caption)
+                    .foregroundStyle(StudioChrome.tertiary)
+                sprayButton("Off", flag: nil)
+                sprayButton("Pick", flag: .pick)
+                sprayButton("Hide", flag: .reject)
+                if model.tasteProfile.isReady {
+                    Text("Taste on")
+                        .font(StudioType.caption)
+                        .foregroundStyle(StudioChrome.tertiary)
+                }
+                Spacer()
+                Button("Cull report") { model.exportCullReport() }
+                    .buttonStyle(StudioQuietButtonStyle())
+            }
+            .padding(.horizontal, 14)
+            .padding(.vertical, 8)
+            StudioHairline()
+
             if model.visibleRows.isEmpty {
                 Text("Nothing in \(model.filter.title.lowercased()).")
                     .font(StudioType.ui)
@@ -42,6 +62,14 @@ struct LibraryWorkspace: View {
             }
         }
         .background(StudioChrome.photo)
+    }
+
+    private func sprayButton(_ title: String, flag: ReviewFlag?) -> some View {
+        let active = model.sprayMode == flag
+        return Button(title) { model.sprayMode = flag }
+            .buttonStyle(.plain)
+            .font(active ? StudioType.uiMedium : StudioType.caption)
+            .foregroundStyle(active ? StudioChrome.text : StudioChrome.tertiary)
     }
 
     private func prewarmAround(_ id: PhotoID?) {
@@ -92,6 +120,9 @@ private struct PhotoGridCell: View {
             }
             .onTapGesture {
                 model.focusedID = row.id
+                if model.sprayMode != nil {
+                    model.spray(row.id)
+                }
             }
             .help(row.sourceURL.lastPathComponent)
             .contextMenu { contextMenuItems }
