@@ -9,12 +9,19 @@ import UniformTypeIdentifiers
 @main
 struct PhotoEngineMacApp: App {
     @StateObject private var model = PhotoEngineViewModel()
+    @State private var didApplyLaunchArguments = false
 
     var body: some Scene {
         WindowGroup {
             ContentView(model: model)
                 .frame(minWidth: 1100, minHeight: 720)
                 .navigationTitle(model.windowTitle)
+                .onAppear {
+                    guard !didApplyLaunchArguments else { return }
+                    didApplyLaunchArguments = true
+                    applyLaunchArguments()
+                    startControlFileMonitor()
+                }
         }
         .windowStyle(.hiddenTitleBar)
         .defaultSize(width: 1440, height: 900)
@@ -64,6 +71,94 @@ struct PhotoEngineMacApp: App {
             CommandGroup(replacing: .help) {
                 Button("Keyboard Shortcuts") { model.showingShortcuts = true }
                     .keyboardShortcut("/", modifiers: .command)
+            }
+        }
+    }
+
+    /// `--folder /path` opens a shoot. `--curate` starts culling once the count is ready.
+    /// `--workspace album|confirm|look|deliver|adjust` switches after curation finishes.
+    /// `--ready-file /tmp/flag` is created when the requested workspace is showing.
+    @MainActor
+    private func applyLaunchArguments() {
+        let args = CommandLine.arguments
+        if let idx = args.firstIndex(of: "--folder"), args.index(after: idx) < args.endIndex {
+            let url = URL(fileURLWithPath: args[args.index(after: idx)], isDirectory: true)
+            model.selectFolder(url)
+        }
+        let workspaceArg: StudioWorkspace? = {
+            guard let idx = args.firstIndex(of: "--workspace"), args.index(after: idx) < args.endIndex else { return nil }
+            return StudioWorkspace(rawValue: args[args.index(after: idx)])
+        }()
+        let readyFile: URL? = {
+            guard let idx = args.firstIndex(of: "--ready-file"), args.index(after: idx) < args.endIndex else { return nil }
+            return URL(fileURLWithPath: args[args.index(after: idx)])
+        }()
+        if args.contains("--curate") {
+            Task { @MainActor in
+                for _ in 0..<80 {
+                    if model.selectedFolder == nil { return }
+                    if !model.isCountingPhotos, model.sourcePhotoCount != nil {
+                        model.process()
+                        break
+                    }
+                    try? await Task.sleep(for: .milliseconds(100))
+                }
+                for _ in 0..<600 {
+                    if model.result != nil, !model.isRunning {
+                        if let workspaceArg { applyWorkspace(workspaceArg) }
+                        // Let SwiftUI settle before signaling readiness.
+                        try? await Task.sleep(for: .milliseconds(700))
+                        if let readyFile {
+                            try? Data().write(to: readyFile)
+                        }
+                        return
+                    }
+                    try? await Task.sleep(for: .milliseconds(200))
+                }
+            }
+        } else {
+            if let workspaceArg { applyWorkspace(workspaceArg) }
+            if let readyFile {
+                Task { @MainActor in
+                    try? await Task.sleep(for: .milliseconds(500))
+                    try? Data().write(to: readyFile)
+                }
+            }
+        }
+    }
+
+    @MainActor
+    private func applyWorkspace(_ workspace: StudioWorkspace) {
+        model.workspace = workspace
+        if workspace == .album { model.albumMode = .grid }
+        if workspace == .adjust { model.openAdjust() }
+    }
+
+    /// Screenshot helper: write `workspace=album` (etc.) into `--control-file`.
+    @MainActor
+    private func startControlFileMonitor() {
+        let args = CommandLine.arguments
+        guard let idx = args.firstIndex(of: "--control-file"), args.index(after: idx) < args.endIndex else { return }
+        let url = URL(fileURLWithPath: args[args.index(after: idx)])
+        Task { @MainActor in
+            var last = ""
+            while !Task.isCancelled {
+                if let text = try? String(contentsOf: url, encoding: .utf8), text != last {
+                    last = text
+                    for line in text.split(whereSeparator: \.isNewline) {
+                        let parts = line.split(separator: "=", maxSplits: 1).map(String.init)
+                        guard parts.count == 2, parts[0] == "workspace",
+                              let workspace = StudioWorkspace(rawValue: parts[1]) else { continue }
+                        applyWorkspace(workspace)
+                        try? await Task.sleep(for: .milliseconds(500))
+                        if let readyIdx = args.firstIndex(of: "--ready-file"),
+                           args.index(after: readyIdx) < args.endIndex {
+                            let ready = URL(fileURLWithPath: args[args.index(after: readyIdx)])
+                            try? Data().write(to: ready)
+                        }
+                    }
+                }
+                try? await Task.sleep(for: .milliseconds(250))
             }
         }
     }

@@ -38,3 +38,8 @@ Models/Converted/
 # Scratch work is intentionally not part of the product repository
 work/
 
+
+# Screenshot automation locals (keep committed PNGs)
+outputs/screenshots/demo-shoot/
+outputs/screenshots/.ready
+outputs/screenshots/.control
