@@ -21,7 +21,11 @@ public struct SceneLabel: Codable, Sendable, Equatable, Hashable {
 /// What a photo is of. Runs only on keepers, so its cost does not grow with the roll.
 public enum SceneLabeler {
     /// Labels too generic to say anything about a trip.
-    static let ignored: Set<String> = ["structure", "material", "textile", "document", "people", "adult", "consumer_electronics"]
+    static let ignored: Set<String> = [
+        "structure", "material", "textile", "document", "people", "adult", "consumer_electronics",
+        // Too vague to say anything in a caption ("outdoor and cloudy").
+        "outdoor", "indoor", "sky", "cloudy", "liquid", "water_body", "conveyance", "optical_equipment", "land", "wood_processed"
+    ]
 
     public static func labels(for image: CGImage, limit: Int = 5, minimumConfidence: Double = 0.25) -> [SceneLabel] {
         let request = VNClassifyImageRequest()

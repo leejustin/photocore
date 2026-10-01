@@ -219,8 +219,7 @@ public struct TemplateDiaryWriter: DiaryWriter {
         let sections = request.chapters.map { chapter -> DiaryText.Section in
             let labels = Self.topLabels(chapter.photos.flatMap(\.labels), limit: 2)
             let heading = chapter.place ?? chapter.when.capitalizedFirst
-            let part = chapter.when.split(separator: " ").last.map(String.init) ?? "day"
-            let diary = labels.isEmpty ? "" : "A\(part.first.map { "aeiou".contains($0) } == true ? "n" : "") \(part) of " + ListFormatter.localizedString(byJoining: labels) + "."
+            let diary = labels.isEmpty ? "" : "Photos of " + ListFormatter.localizedString(byJoining: labels) + "."
             return DiaryText.Section(id: chapter.id, heading: heading, diary: diary)
         }
         let photos = request.chapters.flatMap { chapter in

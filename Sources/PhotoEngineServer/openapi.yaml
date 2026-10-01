@@ -4,7 +4,9 @@ info:
   version: "2.0.0"
   description: |
     Local curation API. Bind is 127.0.0.1 only. Every route except GET /healthz
-    requires Authorization: Bearer. Clients never choose an output path.
+    and the shared-book routes under /b/ requires Authorization: Bearer with the
+    server token. Book edits need the book's own owner token instead. Clients
+    never choose an output path.
 servers:
   - url: http://127.0.0.1:8787
 paths:
@@ -172,6 +174,80 @@ paths:
       responses:
         "200":
           description: text/event-stream
+  /v2/trips:
+    post:
+      summary: Start a paid trip finish. Returns the owner token once.
+      responses:
+        "201":
+          description: "{id, slug, ownerToken, bookPath, editPath}"
+  /v2/trips/{tid}:
+    get:
+      summary: Trip status, photo counts and the last finish job
+      responses:
+        "200":
+          description: Trip
+  /v2/trips/{tid}/photos/{name}:
+    put:
+      summary: Upload one keeper (JPEG or HEIC body, 60 MB max, 400 per trip)
+      responses:
+        "201":
+          description: Stored
+  /v2/trips/{tid}/finish:
+    post:
+      summary: Queue the finish (cull guest photos, facts, diary, photos, page, Instagram pack)
+      responses:
+        "202":
+          description: Job
+        "412":
+          description: No keepers uploaded yet
+  /v2/preview:
+    post:
+      summary: Render one photo with the paid finish, for the upsell preview
+      responses:
+        "200":
+          description: image/jpeg
+  /b/{slug}/:
+    get:
+      summary: The shared book page (public by link)
+      security: []
+      responses:
+        "200":
+          description: text/html
+  /b/{slug}/edits:
+    post:
+      summary: "Owner edit {key, value}; Authorization: Bearer <owner token>"
+      security: []
+      responses:
+        "200":
+          description: Applied
+  /b/{slug}/guest:
+    get:
+      summary: Guest notes and hearts
+      security: []
+      responses:
+        "200":
+          description: "{notes, hearts}"
+  /b/{slug}/guest/notes:
+    post:
+      summary: "Add a guest note {name, text}"
+      security: []
+      responses:
+        "201":
+          description: Updated activity
+  /b/{slug}/guest/hearts:
+    post:
+      summary: "Heart a photo {photo}"
+      security: []
+      responses:
+        "200":
+          description: Updated activity
+  /b/{slug}/guest/photos/{name}:
+    put:
+      summary: A guest adds a photo; it is culled on the next finish (200 per book)
+      security: []
+      responses:
+        "201":
+          description: Stored
 components:
   parameters:
     sid:

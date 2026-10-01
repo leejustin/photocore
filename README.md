@@ -1,21 +1,81 @@
-# Photo Engine
+# Photocore
 
-Photo Engine is a local-first photo culling and editing system designed for Apple Silicon. It imports folders of JPEG/HEIC and camera RAW photographs, identifies exact and near duplicates, groups timestamped bursts, computes explainable quality signals, produces a diverse shortlist, applies restrained edits (built-in looks, imported LUTs, or Lightroom XMP presets), and exports finished JPEGs.
+**Finish the trip.** Photocore turns a camera roll into a finished trip: the best photos, edited, laid out as a shared online book with a short diary of where you went, plus an Instagram set ready to post.
 
-The Mac app is a culling studio: a photo grid, a keyboard cull, basic develop controls, and Lightroom XMP sidecars. The processing engine stays in independent Swift modules so the same Vision pipeline can run in the app, the CLI, or a localhost worker that a phone or hosted front end can call.
+- **Free, on the iPhone.** Pick a trip and Photocore culls it on the device, asks about a few close calls, and saves the keepers as a Photos album. Nothing is uploaded or copied.
+- **Paid, hosted.** "Finish the trip" uploads only the keepers to a Photocore server, which edits them, writes the diary and captions, publishes the book, and builds the Instagram pack. Guests can leave notes and hearts and add their own photos, which are culled into the book.
+- **The Mac studio** stays the owner and pro tool, and the same engine runs the server.
+
+The engine is one set of Swift packages that runs on the iPhone, the Mac app, the CLI and the server.
 
 ## Current status
 
-The local vertical slice is implemented: folder discovery, JPEG/HEIC metadata, stable asset identities, exact/near-duplicate grouping using Vision's supported feature-print distance, bounded parallel analysis with exact-content reuse, subject/face quality signals, configurable culling presets, deterministic shortlisting, persistent keep/protect/exclude overrides, versioned binary analysis caching, durable SQLite sessions and artifact accounting, five edited-JPEG looks, sanitized metadata, measured JSON manifests, a conservative exact-duplicate cleanup preview with explicit system-Trash execution, a CLI, and a SwiftUI shell.
+Built and tested on branch `feat/consumer-trip-book` (see [the build plan](./outputs/consumer-build-plan.md) and [the evaluation log](./outputs/evaluation-log.md)):
 
-Start with:
+| Part | State |
+|---|---|
+| Engine on iOS and macOS | Culls on both; 40 Swift tests pass on Mac and the iPhone simulator |
+| iPhone app (`Apps/PhotocoreiOS`) | Trips found from capture dates, streamed cull, swipe review, Photos album, set aside and restore, finish card |
+| Trip book | Chapters by local day and place, diary and captions, owner edits, guest notes and hearts, Instagram pack |
+| Paid finish server | Trip upload, finish job, preview, public book pages, guest uploads |
+| Not built yet | Payments (StoreKit), accounts, publishing books to object storage, Android, a live Claude run |
+
+The original specifications are still useful background:
 
 - [Engine implementation plan](./outputs/photo-engine-implementation-plan.md)
 - [Local Photo Curator specification](./outputs/local-photo-curator-spec.md)
-- [Venue Photo Content Service specification](./outputs/venue-photo-content-subscription-spec.md)
 - [Hybrid processing platform specification](./outputs/hybrid-photo-processing-platform-spec.md)
 
-## Initial technical direction
+## The iPhone app
+
+```bash
+xcrun simctl addmedia booted /path/to/some/*.JPG
+Scripts/ios-app.sh -PhotocoreAutoOpen YES
+```
+
+`Scripts/ios-app.sh` builds `Apps/PhotocoreiOS`, installs it on the booted simulator, grants Photos access and launches it. To run on a phone, open `Apps/PhotocoreiOS/PhotocoreiOS.xcodeproj` and set your team.
+
+How it stays safe on a real camera roll:
+
+- **One trip at a time, capped.** Trips are found by 20-hour gaps, need 20 photos, and split above 21 days or 1,500 photos. Trips queue and cull one after another.
+- **Streamed, not copied.** Thumbnails are read from Photos in batches, analyzed in memory and dropped. Only about 5 KB of analysis per photo is stored, and a killed app resumes from the last batch.
+- **Guards.** It refuses to start under 200 MB free, pauses when the phone is hot, and slows down in Low Power Mode.
+- **Nothing is deleted by culling.** "Set aside" hides the other photos in a "Photocore · Set aside" album and can restore them with one tap. Favorites, edited, shared and album photos are never set aside. Deleting is a separate step, at most 500 at a time, through the iOS confirmation into Recently Deleted (30 days). Every step is logged.
+
+## The trip book
+
+```bash
+swift run photo-engine book /path/to/trip --tone warm --theme book --output ./exports/trip-book
+```
+
+This culls the folder, reads scene labels, smart crops and place names for the keepers, writes the diary, renders finished photos, and writes `index.html` plus `instagram/` (1080 x 1350 carousel, 1080 x 1920 stories, `caption.txt`).
+
+The diary is written by Claude when `ANTHROPIC_API_KEY` (or `ANTHROPIC_AUTH_TOKEN`) is set, using `claude-opus-5-5` with structured output and server-side refusal fallbacks. Claude sees only the keepers' facts (place, time of day, scene labels, number of people) and 512-pixel thumbnails, never file names or the whole roll, and is told not to identify people or invent events. Without a key, on refusal, or on an outage, an offline writer produces plain captions from the same facts. Owner edits are stored apart from generated text, so regenerating never overwrites them.
+
+Local time in the book follows a GPS place's time zone first, then the camera's recorded UTC offset. Cameras often stay on home time while traveling.
+
+## The paid finish server
+
+`photocore-server` adds these routes (full list in `Sources/PhotoEngineServer/openapi.yaml`):
+
+| Route | Auth | Purpose |
+|---|---|---|
+| `POST /v2/trips` | Server token | Start a finish; returns the owner token once |
+| `PUT /v2/trips/{id}/photos/{name}` | Server token | Upload a keeper (JPEG or HEIC, 60 MB, 400 per trip) |
+| `POST /v2/trips/{id}/finish` | Server token | Queue the finish job |
+| `POST /v2/preview` | Server token | Render one photo with the paid edit, for the upsell |
+| `GET /b/{slug}/` | Public link | The book page, photos and Instagram files |
+| `POST /b/{slug}/edits` | Owner token | Edit the title, intro, headings, diary or a caption |
+| `/b/{slug}/guest/...` | Public link | Notes, hearts and guest photo uploads, with count and size limits |
+
+Book pages are public to anyone with the unguessable link, so only expose the server where that is intended. Today that means the tailnet setup below. Publishing books to object storage behind a CDN is the planned production path.
+
+```bash
+PHOTO_ENGINE_TOKEN=dev-token ANTHROPIC_API_KEY=... swift run photocore-server
+Scripts/ios-app.sh -PhotocoreServerURL http://localhost:8787 -PhotocoreServerToken dev-token
+```
+
+## Technical direction
 
 - Swift 6 with strict concurrency.
 - Swift Package Manager for the engine, CLI, and tests.
@@ -27,7 +87,7 @@ Start with:
 - A narrow persistence adapter backed by SQLite for durable sessions/artifacts plus a compact binary property-list analysis cache that can be evicted.
 - Versioned JSON manifests for portable pipeline inputs and outputs.
 
-## Try it locally
+## Engine commands
 
 Build the command-line engine:
 
@@ -39,9 +99,14 @@ swift run photo-engine catalog /path/to/photos
 swift run photo-engine run /path/to/photos --profile trip --cull balanced --target 60 --style natural --size compact --base raw --output ./exports/trip
 swift run photo-engine calibrate /path/to/photos --sheet /tmp/photocore-calibrate.jpg
 swift run photo-engine compare-render /path/to/manifest.json --count 6 --sheet /tmp/photocore-compare.jpg
+swift run photo-engine eval /path/to/photos --profile trip --target 40
+swift test
+Scripts/ios-engine-test.sh
 ```
 
 `--base raw` decodes a RAW master with Core Image. `--base camera` starts from the camera JPEG beside that RAW, when one exists. `calibrate` prints Vision feature-print distances and can write a contact sheet. `compare-render` writes the current recipe beside the camera JPEG so a shoot can be judged on real frames.
+
+## The Mac studio and worker
 
 Launch the Mac studio:
 
@@ -97,7 +162,7 @@ Vision feature-print revision 2, measured on 512–1024 px thumbnails:
 
 Pairs at 0.30–0.47 were the same shot repeated. 0.52–0.57 were the same scene with a different composition. A same-shot threshold of about **0.50**, and a same-moment threshold of about **0.62** only when frames are within 3 seconds, is what the profiles use. Older Hamming-scale cutoffs of 7–10 were 15–20× too large for this distance.
 
-Person identity, a learned ranker, and lens-profile chromatic aberration beyond `CIRAWFilter` stay out of scope. Automatic culling never modifies source photographs; cleanup is limited to an explicit, verified exact-duplicate Trash action. Occasion profiles change which technical rejects are hard-hidden (creative keeps unusual frames; group events protect faces). Record a release-build owner run in `outputs/evaluation-log.md` when the Pycon and Italy slices are measured again.
+Vision face signals are not fully deterministic on borderline faces (see the evaluation log); a single shared face-detection pass is the planned fix. Person identity, a learned ranker, and lens-profile chromatic aberration beyond `CIRAWFilter` stay out of scope. Automatic culling never modifies source photographs; cleanup is limited to an explicit, verified exact-duplicate Trash action. Occasion profiles change which technical rejects are hard-hidden (creative keeps unusual frames; group events protect faces). Record a release-build owner run in `outputs/evaluation-log.md` when the Pycon and Italy slices are measured again.
 
 ## Repository policy
 

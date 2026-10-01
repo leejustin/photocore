@@ -14,7 +14,9 @@ struct APIMiddleware<Context: RequestContext>: RouterMiddleware {
             }
             return Response(status: .noContent, headers: corsHeaders(origin))
         }
-        if path != "/healthz" {
+        // Shared books are public by link; their edit route checks the owner's
+        // own token, and guest routes have their own size and count limits.
+        if path != "/healthz" && !path.hasPrefix("/b/") {
             let authorization = request.headers[.authorization]
             guard security.acceptsAuthorization(authorization) else {
                 throw APIError.unauthorized()

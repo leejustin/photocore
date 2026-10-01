@@ -1,0 +1,130 @@
+import SwiftUI
+
+/// The upsell: one keeper shown before and after the paid finish, then upload,
+/// finish and share. Appears after the free cull.
+struct FinishCard: View {
+    let run: TripRun
+    @State private var finish = TripFinish()
+    @State private var showAfter = true
+    @State private var showingSettings = false
+    @State private var server = FinishServer.saved
+    @Environment(\.openURL) private var openURL
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            Text("Finish the trip")
+                .font(.display(26)).foregroundStyle(Color.ink)
+            Text("Every keeper edited to look its best, a shared book with a short diary of where you went, and an Instagram set ready to post.")
+                .font(.subheadline).foregroundStyle(Color.ink.opacity(0.7))
+            preview
+            content
+        }
+        .padding(18)
+        .background(Color.paper)
+        .clipShape(.rect(cornerRadius: 20))
+        .overlay(RoundedRectangle(cornerRadius: 20).stroke(Color.accentColor.opacity(0.35), lineWidth: 1.5))
+        .sheet(isPresented: $showingSettings, onDismiss: { server = FinishServer.saved }) { ServerSettingsView() }
+        .task(id: server) {
+            guard let server, let first = run.keepers.first, let identifier = run.identifier(first.id) else { return }
+            await finish.loadPreview(identifier: identifier, server: server)
+        }
+    }
+
+    @ViewBuilder private var preview: some View {
+        if let before = finish.before {
+            ZStack(alignment: .bottomLeading) {
+                Image(uiImage: (showAfter ? finish.after : nil) ?? before)
+                    .resizable().aspectRatio(contentMode: .fill)
+                    .frame(maxWidth: .infinity).frame(height: 220)
+                    .clipShape(.rect(cornerRadius: 14))
+                    .animation(.easeInOut(duration: 0.25), value: showAfter)
+                if finish.after != nil {
+                    Picker("", selection: $showAfter) {
+                        Text("Before").tag(false)
+                        Text("After").tag(true)
+                    }
+                    .pickerStyle(.segmented)
+                    .frame(width: 180)
+                    .padding(4)
+                    .background(.regularMaterial, in: .capsule)
+                    .padding(10)
+                }
+            }
+        }
+    }
+
+    @ViewBuilder private var content: some View {
+        switch finish.stage {
+        case .idle:
+            if let server {
+                Button("Finish \(run.keepers.count) photos") {
+                    let ids = run.keepers.compactMap { run.identifier($0.id) }
+                    Task { await finish.finish(title: run.trip.title, identifiers: ids, server: server) }
+                }
+                .buttonStyle(PrimaryButtonStyle())
+                .disabled(run.keepers.isEmpty)
+                Text("Only these keepers are uploaded. Test build: no charge.")
+                    .font(.footnote).foregroundStyle(Color.ink.opacity(0.55))
+            } else {
+                Button("Connect a Photocore server") { showingSettings = true }
+                    .buttonStyle(PrimaryButtonStyle())
+            }
+        case .uploading(let done, let total):
+            ProgressView(value: Double(done), total: Double(max(total, 1))) {
+                Text("Uploading \(done) of \(total) keepers").font(.subheadline)
+            }
+        case .finishing(let message):
+            HStack(spacing: 10) {
+                ProgressView()
+                Text(message).font(.subheadline).foregroundStyle(Color.ink.opacity(0.7))
+            }
+        case .done(let book, let edit):
+            Label("Your book is ready", systemImage: "book.closed").font(.headline)
+            HStack {
+                ShareLink(item: book) { Label("Share", systemImage: "square.and.arrow.up") }
+                    .buttonStyle(.borderedProminent)
+                Button("Open") { openURL(book) }.buttonStyle(.bordered)
+                Button("Edit") { openURL(edit) }.buttonStyle(.bordered)
+            }
+        case .failed(let message):
+            Text(message).font(.subheadline).foregroundStyle(.red)
+            Button("Try again") {
+                guard let server else { return }
+                let ids = run.keepers.compactMap { run.identifier($0.id) }
+                Task { await finish.finish(title: run.trip.title, identifiers: ids, server: server) }
+            }
+            .buttonStyle(.bordered)
+        }
+    }
+}
+
+struct ServerSettingsView: View {
+    @Environment(\.dismiss) private var dismiss
+    @State private var url = UserDefaults.standard.string(forKey: "PhotocoreServerURL") ?? ""
+    @State private var token = UserDefaults.standard.string(forKey: "PhotocoreServerToken") ?? ""
+
+    var body: some View {
+        NavigationStack {
+            Form {
+                Section {
+                    TextField("https://photocore.example.ts.net", text: $url)
+                        .textInputAutocapitalization(.never).keyboardType(.URL).autocorrectionDisabled()
+                    SecureField("Server token", text: $token)
+                } footer: {
+                    Text("The paid finish runs on a Photocore server. Only the keepers you choose are uploaded to it.")
+                }
+            }
+            .navigationTitle("Photocore server")
+            .toolbar {
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Save") {
+                        FinishServer.save(url: url, token: token)
+                        dismiss()
+                    }
+                    .disabled(URL(string: url) == nil || token.isEmpty)
+                }
+                ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } }
+            }
+        }
+    }
+}

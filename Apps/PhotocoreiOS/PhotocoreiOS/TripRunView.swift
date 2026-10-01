@@ -126,6 +126,7 @@ struct TripRunView: View {
                     .buttonStyle(.plain)
                 }
                 KeeperGrid(run: run)
+                FinishCard(run: run)
                 othersSection
             }
             .padding(20)

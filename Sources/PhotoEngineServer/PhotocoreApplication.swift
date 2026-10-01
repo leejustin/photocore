@@ -29,6 +29,7 @@ public enum PhotocoreApplication {
         registerPhotoRoutes(router, env: env)
         registerMediaRoutes(router, env: env)
         registerLookRoutes(router, env: env)
+        registerTripRoutes(router, env: env, trips: TripStore(root: configuration.security.outputRoot.appendingPathComponent("trips", isDirectory: true)))
         return Application(
             router: router,
             configuration: .init(address: .hostname("127.0.0.1", port: configuration.port), serverName: "Photocore"),
