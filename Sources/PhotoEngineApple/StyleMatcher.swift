@@ -1,6 +1,6 @@
-import AppKit
 import CoreImage
 import Foundation
+import ImageIO
 import PhotoEngineCore
 
 /// Learns a simple album look from reference JPEGs the photographer already graded.
@@ -57,10 +57,8 @@ public enum StyleMatcher {
 
     private static func loadCIImage(_ url: URL) -> CIImage? {
         if let image = CIImage(contentsOf: url) { return image }
-        guard let data = try? Data(contentsOf: url), let ns = NSImage(data: data),
-              let tiff = ns.tiffRepresentation,
-              let rep = NSBitmapImageRep(data: tiff),
-              let cg = rep.cgImage else { return nil }
+        guard let source = CGImageSourceCreateWithURL(url as CFURL, nil),
+              let cg = CGImageSourceCreateImageAtIndex(source, 0, nil) else { return nil }
         return CIImage(cgImage: cg)
     }
 

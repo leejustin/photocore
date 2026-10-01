@@ -392,7 +392,22 @@ public struct AppleAnalysisEngine: Sendable {
             aestheticsRequest = request
             requests.append(request)
         }
-        try handler.perform(requests)
+        VisionCompute.prepare(requests)
+        do {
+            try handler.perform(requests)
+        } catch {
+            // One optional model (aesthetics, landmarks) can fail on a device or
+            // simulator without its accelerator. Retry each request alone so the
+            // photo still gets whatever signals are available; only a missing
+            // feature print is fatal for grouping, and that is handled upstream.
+            var anySucceeded = false
+            for request in requests {
+                if (try? VNImageRequestHandler(cgImage: image, options: [:]).perform([request])) != nil {
+                    anySucceeded = true
+                }
+            }
+            if !anySucceeded { throw error }
+        }
 
         let featurePrint = try featureRequest.results?.first.map {
             try JSONEncoder().encode(Vision.FeaturePrintObservation($0))
@@ -480,6 +495,7 @@ public enum AppleVisualDistance {
     public static func featurePrintData(for image: CGImage) throws -> Data? {
         let request = VNGenerateImageFeaturePrintRequest()
         request.revision = VNGenerateImageFeaturePrintRequestRevision2
+        VisionCompute.prepare([request])
         try VNImageRequestHandler(cgImage: image, options: [:]).perform([request])
         return try request.results?.first.map {
             try JSONEncoder().encode(Vision.FeaturePrintObservation($0))
@@ -759,6 +775,7 @@ public final class ApplePhotoRenderer: @unchecked Sendable {
         let request = VNDetectHorizonRequest()
         let handler = VNImageRequestHandler(url: url, orientation: CGImagePropertyOrientation(exifOrientation: orientation), options: [:])
         do {
+            VisionCompute.prepare([request])
             try handler.perform([request])
             guard let angle = request.results?.first?.angle else { return nil }
             // Vision angle is radians; convert to degrees and invert for our straighten convention.
@@ -1894,5 +1911,24 @@ private extension CGImagePropertyOrientation {
         case 8: self = .left
         default: self = .up
         }
+    }
+}
+
+
+/// Where Vision runs its models. The iOS simulator has no Neural Engine or
+/// Metal-backed espresso context for several models, so requests are pinned to
+/// the CPU there. Devices and Macs keep Vision's default placement.
+public enum VisionCompute {
+    public static func prepare(_ requests: [VNRequest]) {
+        #if targetEnvironment(simulator)
+        for request in requests {
+            guard let supported = try? request.supportedComputeStageDevices else { continue }
+            for (stage, devices) in supported {
+                if let cpu = devices.first(where: { if case .cpu = $0 { return true } else { return false } }) {
+                    request.setComputeDevice(cpu, for: stage)
+                }
+            }
+        }
+        #endif
     }
 }
