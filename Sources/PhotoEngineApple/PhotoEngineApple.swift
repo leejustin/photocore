@@ -393,6 +393,8 @@ public struct AppleAnalysisEngine: Sendable {
             requests.append(request)
         }
         VisionCompute.prepare(requests)
+        VisionCompute.gate.wait()
+        defer { VisionCompute.gate.signal() }
         do {
             try handler.perform(requests)
         } catch {
@@ -1120,6 +1122,10 @@ public final class PhotoPipelineRunner: @unchecked Sendable {
     private let catalog: PhotoCatalog?
     private let catalogInitializationMessage: String?
 
+    /// How many newly analyzed photos are written to the analysis cache at a time.
+    /// Smaller values lose less work when a phone suspends the app mid-cull.
+    public var checkpointInterval: Int = 48
+
     public init(importer: PhotoFolderImporter = PhotoFolderImporter(), analyzer: AppleAnalysisEngine = AppleAnalysisEngine(), renderer: ApplePhotoRenderer = ApplePhotoRenderer(), catalog: PhotoCatalog? = nil) {
         self.importer = importer
         self.analyzer = analyzer
@@ -1330,10 +1336,18 @@ public final class PhotoPipelineRunner: @unchecked Sendable {
             let workers = min(max(ProcessInfo.processInfo.activeProcessorCount / 2, 1), 4, pendingIndices.count)
             workerCount = workers
             let analysisStartedAt = Date()
-            DispatchQueue.concurrentPerform(iterations: workers) { worker in
-                for position in stride(from: worker, to: pendingIndices.count, by: workers) {
+            // Analyze in checkpointed batches. Each finished batch is written to the
+            // analysis cache, so a phone that suspends or kills the app mid-cull
+            // resumes from the last batch instead of starting over.
+            let batchSize = max(checkpointInterval, workers)
+            var batchStart = 0
+            while batchStart < pendingIndices.count, !accumulator.hasError, !shouldCancel() {
+            let batch = Array(pendingIndices[batchStart..<min(batchStart + batchSize, pendingIndices.count)])
+            batchStart += batch.count
+            DispatchQueue.concurrentPerform(iterations: min(workers, batch.count)) { worker in
+                for position in stride(from: worker, to: batch.count, by: min(workers, batch.count)) {
                     guard !accumulator.hasError, !shouldCancel() else { return }
-                    let index = pendingIndices[position]
+                    let index = batch[position]
                     let item = imported[index]
                     var stopWorker = false
                     autoreleasepool {
@@ -1354,6 +1368,15 @@ public final class PhotoPipelineRunner: @unchecked Sendable {
                     }
                     if stopWorker { return }
                 }
+            }
+            var checkpointed = 0
+            for index in batch {
+                if let signals = accumulator.result(at: index) {
+                    cache.update(asset: imported[index].asset, signals: signals)
+                    checkpointed += 1
+                }
+            }
+            if checkpointed > 0 { try? cache.save() }
             }
             for representative in analysisRepresentatives {
                 guard let signals = accumulator.result(at: representative) else { continue }
@@ -1919,6 +1942,12 @@ private extension CGImagePropertyOrientation {
 /// Metal-backed espresso context for several models, so requests are pinned to
 /// the CPU there. Devices and Macs keep Vision's default placement.
 public enum VisionCompute {
+    /// Process-wide cap on concurrent Vision analysis. Vision's internal face
+    /// queues can deadlock when many threads submit batched requests at once
+    /// (observed with two culls running side by side), so every caller shares
+    /// this gate regardless of how many pipelines are running.
+    public static let gate = DispatchSemaphore(value: min(max(ProcessInfo.processInfo.activeProcessorCount / 2, 1), 4))
+
     public static func prepare(_ requests: [VNRequest]) {
         #if targetEnvironment(simulator)
         for request in requests {

@@ -11,7 +11,7 @@ Instagram pack. See the product doc for the full story.
 | # | Chunk | Status |
 |---|---|---|
 | 1 | Branch, commit eval work, engine libraries compile and pass a pipeline test on iOS | done |
-| 2 | On-device consumer engine: Photos library ingest, screenshot/document filter, auto-enhance, resumable chunked cull | todo |
+| 2 | On-device consumer engine: Photos library ingest, screenshot/document filter, auto-enhance, resumable chunked cull | done |
 | 3 | iOS app: trip picker, cull progress, swipe queue, keepers to a Photos album; build and run in simulator | todo |
 | 4 | Engine upgrades: masked local edits (person segmentation), scene labels, saliency crops, place names | todo |
 | 5 | Trip book: sections from moments, static HTML book, AI diary and captions (Claude API + offline fallback), Instagram pack | todo |
@@ -25,3 +25,4 @@ Instagram pack. See the product doc for the full story.
 ## Log
 
 - Chunk 1: added `.iOS(.v18)`; replaced AppKit image fallback in StyleMatcher with Image I/O; guarded the loopback `LocalCurationServer` to macOS; added `PhotoEngineAppleTests` (Swift Testing) that runs the full pipeline on synthetic JPEGs.
+- Chunk 2: `PhotoLibraryIngest` exports a trip from Photos to 1024 px JPEGs with date and GPS, skips screenshots, and keeps a `library-index.json` so resumed trips skip current files; `PhotoLibraryWriter` saves keepers as an album and Favorites. `UtilityShotDetector` drops receipts and menus (six or more text lines covering 6% of the frame; one large false box on shapes is ignored). `AutoEnhance` is the free-tier edit. The runner now checkpoints the analysis cache every `checkpointInterval` photos, so a cancelled or killed cull resumes. Found and fixed a Vision deadlock when two culls ran at once: all Vision analysis now shares a process-wide gate. 8 Swift tests pass on Mac and iPhone simulator.
