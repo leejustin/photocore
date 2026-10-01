@@ -206,6 +206,7 @@ enum ImageMetadataReader {
         let size = (fileAttributes?[.size] as? NSNumber)?.int64Value ?? 0
 
         let captureDate = captureDate(exif: exif, tiff: tiff)
+        let coordinate = coordinate(gps: dictionary.object(forKey: kCGImagePropertyGPSDictionary) as? NSDictionary)
 
         let format = PhotoFormatSupport.format(for: url)
 
@@ -219,8 +220,22 @@ enum ImageMetadataReader {
             lensModel: exif?.object(forKey: kCGImagePropertyExifLensModel) as? String,
             fileSize: size,
             format: format,
-            rating: readRating(from: source)
+            rating: readRating(from: source),
+            latitude: coordinate?.latitude,
+            longitude: coordinate?.longitude
         )
+    }
+
+    static func coordinate(gps: NSDictionary?) -> (latitude: Double, longitude: Double)? {
+        guard let gps,
+              let latitude = (gps.object(forKey: kCGImagePropertyGPSLatitude) as? NSNumber)?.doubleValue,
+              let longitude = (gps.object(forKey: kCGImagePropertyGPSLongitude) as? NSNumber)?.doubleValue else { return nil }
+        let south = (gps.object(forKey: kCGImagePropertyGPSLatitudeRef) as? String)?.uppercased() == "S"
+        let west = (gps.object(forKey: kCGImagePropertyGPSLongitudeRef) as? String)?.uppercased() == "W"
+        let lat = south ? -abs(latitude) : latitude
+        let lon = west ? -abs(longitude) : longitude
+        guard (-90...90).contains(lat), (-180...180).contains(lon), !(lat == 0 && lon == 0) else { return nil }
+        return (lat, lon)
     }
 
     private static func readRating(from source: CGImageSource) -> Int? {
@@ -498,7 +513,7 @@ public enum AppleVisualDistance {
         let request = VNGenerateImageFeaturePrintRequest()
         request.revision = VNGenerateImageFeaturePrintRequestRevision2
         VisionCompute.prepare([request])
-        try VNImageRequestHandler(cgImage: image, options: [:]).perform([request])
+        try VisionCompute.shared { try VNImageRequestHandler(cgImage: image, options: [:]).perform([request]) }
         return try request.results?.first.map {
             try JSONEncoder().encode(Vision.FeaturePrintObservation($0))
         }
@@ -686,7 +701,7 @@ public final class ApplePhotoRenderer: @unchecked Sendable {
         guard longEdge.isFinite, longEdge > 0 else { return image }
         let probeScale = min(1, 1024 / longEdge)
         let probe = image.transformed(by: CGAffineTransform(scaleX: probeScale, y: probeScale))
-        let filters = probe.autoAdjustmentFilters(options: [.redEye: false, .crop: false, .level: false])
+        let filters = VisionCompute.shared { probe.autoAdjustmentFilters(options: [.redEye: false, .crop: false, .level: false]) }
         return filters.reduce(image) { current, filter in
             filter.setValue(current, forKey: kCIInputImageKey)
             return filter.outputImage ?? current
@@ -778,7 +793,7 @@ public final class ApplePhotoRenderer: @unchecked Sendable {
         let handler = VNImageRequestHandler(url: url, orientation: CGImagePropertyOrientation(exifOrientation: orientation), options: [:])
         do {
             VisionCompute.prepare([request])
-            try handler.perform([request])
+            try VisionCompute.shared { try handler.perform([request]) }
             guard let angle = request.results?.first?.angle else { return nil }
             // Vision angle is radians; convert to degrees and invert for our straighten convention.
             return -Double(angle) * 180 / .pi
@@ -1942,11 +1957,35 @@ private extension CGImagePropertyOrientation {
 /// Metal-backed espresso context for several models, so requests are pinned to
 /// the CPU there. Devices and Macs keep Vision's default placement.
 public enum VisionCompute {
-    /// Process-wide cap on concurrent Vision analysis. Vision's internal face
-    /// queues can deadlock when many threads submit batched requests at once
-    /// (observed with two culls running side by side), so every caller shares
-    /// this gate regardless of how many pipelines are running.
-    public static let gate = DispatchSemaphore(value: min(max(ProcessInfo.processInfo.activeProcessorCount / 2, 1), 4))
+    /// Process-wide cap on concurrent Vision work, shared by every caller:
+    /// the cull's workers, keeper labeling and masks, and Core Image auto
+    /// adjustment (which runs Vision face detection inside). Vision's internal
+    /// queues deadlock when they cannot get threads, so the cap stays at the
+    /// pipeline's own worker count. Run one cull per process at a time: the app
+    /// runs one trip at a time and the server's job queue is serial. Tests that
+    /// touch Vision are serialized for the same reason (`VisionSuites`).
+    public static let gate = DispatchSemaphore(value: permits)
+    static let permits = min(max(ProcessInfo.processInfo.activeProcessorCount / 2, 1), 4)
+    private static let exclusiveLock = NSLock()
+
+    /// Runs `work` with no other Vision request in flight. Used for text
+    /// recognition, whose detector parks on its own serial queue and was present
+    /// in every deadlock sampled on 2026-10-01.
+    /// Runs `work` holding one shared permit. Use for every Vision request and
+    /// for Core Image auto adjustment, which runs Vision face detection inside.
+    public static func shared<T>(_ work: () throws -> T) rethrows -> T {
+        gate.wait()
+        defer { gate.signal() }
+        return try work()
+    }
+
+    public static func exclusive<T>(_ work: () throws -> T) rethrows -> T {
+        exclusiveLock.lock()
+        for _ in 0..<permits { gate.wait() }
+        exclusiveLock.unlock()
+        defer { for _ in 0..<permits { gate.signal() } }
+        return try work()
+    }
 
     /// The aesthetics model has no usable CPU fallback in the iOS simulator: it
     /// returns the same near-zero score for every image, which would drag every

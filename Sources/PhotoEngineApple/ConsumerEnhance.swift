@@ -22,10 +22,10 @@ public enum UtilityShotDetector {
         request.recognitionLevel = .fast
         request.usesLanguageCorrection = false
         VisionCompute.prepare([request])
-        VisionCompute.gate.wait()
-        defer { VisionCompute.gate.signal() }
-        guard (try? VNImageRequestHandler(cgImage: image, options: [:]).perform([request])) != nil,
-              let observations = request.results else { return (0, 0) }
+        let performed = VisionCompute.exclusive {
+            (try? VNImageRequestHandler(cgImage: image, options: [:]).perform([request])) != nil
+        }
+        guard performed, let observations = request.results else { return (0, 0) }
         let confident = observations.filter { $0.confidence >= 0.4 }
         let area = confident.reduce(0.0) { $0 + Double($1.boundingBox.width * $1.boundingBox.height) }
         return (min(area, 1), confident.count)
@@ -68,7 +68,7 @@ public enum AutoEnhance {
 
     public static func render(image cg: CGImage, context: CIContext = CIContext()) throws -> Result {
         var image = CIImage(cgImage: cg)
-        let filters = image.autoAdjustmentFilters(options: [.redEye: true, .crop: false, .level: false])
+        let filters = VisionCompute.shared { image.autoAdjustmentFilters(options: [.redEye: true, .crop: false, .level: false]) }
         var applied: [String] = []
         for filter in filters {
             filter.setValue(image, forKey: kCIInputImageKey)

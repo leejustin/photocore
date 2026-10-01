@@ -53,6 +53,10 @@ public struct PhotoMetadata: Codable, Sendable, Equatable {
     public var format: PhotoFormat
     /// In-camera or prior XMP rating when present (0...5).
     public var rating: Int?
+    /// Capture location from EXIF GPS, signed degrees. Used for place names in
+    /// the trip book; exports still strip GPS by default.
+    public var latitude: Double?
+    public var longitude: Double?
 
     public init(
         pixelWidth: Int,
@@ -64,7 +68,9 @@ public struct PhotoMetadata: Codable, Sendable, Equatable {
         lensModel: String? = nil,
         fileSize: Int64 = 0,
         format: PhotoFormat = .unknown,
-        rating: Int? = nil
+        rating: Int? = nil,
+        latitude: Double? = nil,
+        longitude: Double? = nil
     ) {
         self.pixelWidth = pixelWidth
         self.pixelHeight = pixelHeight
@@ -76,6 +82,8 @@ public struct PhotoMetadata: Codable, Sendable, Equatable {
         self.fileSize = fileSize
         self.format = format
         self.rating = rating
+        self.latitude = latitude
+        self.longitude = longitude
     }
 }
 

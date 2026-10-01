@@ -67,3 +67,18 @@ Cause: Vision's face capture quality and landmarks requests each detect faces on
 Follow-up: detect faces once with `VNDetectFaceRectanglesRequest`, pass them as `inputFaceObservations` to the quality and landmarks requests, and drop faces below a stable confidence. Then re-run this comparison.
 
 Also found: the aesthetics model returns one constant near-zero score for every image in the iOS simulator. Aesthetics is now skipped in the simulator and the analysis cache is keyed by platform.
+
+## 2026-10-01 — Vision deadlock under stacked culls
+
+`swift test` hung (0% CPU) once chunk 4 added more Vision-heavy tests. Samples showed every gate holder parked in Vision's `VNControlledCapacityTasksQueue dispatchGroupWait`, one thread on the text detector's serial queue, and the remaining test threads blocked on `VisionCompute.gate`.
+
+| Setup | Result |
+| --- | --- |
+| All suites serial (`--no-parallel`) | 25 pass in 3.4 s |
+| Any single new test with the pipeline tests | Passes |
+| Eight Vision tests in parallel, gate at 4 or 2 | Hangs every time |
+| Vision suites nested in one `.serialized` suite | 8 of 8 runs pass, about 3 s each |
+
+Cause: several culls at once, each with worker threads parked on the gate, starve Vision's internal queues of threads. Production never does this: the app culls one trip at a time and the server's job queue is serial. Every Vision caller, including Core Image auto adjustment (which uses Vision face detection), now goes through the gate, and text recognition runs exclusively.
+
+Subject-aware finish on seven Pycon frames: masks on 3 of 7 (the lion dance, a portrait on a swing, a café table); none on the four landscapes and sunsets, which is correct. A 1.2% background blur melted framing tree trunks and looked fake, so the default finish has no blur and the portrait preset uses 0.3%.
