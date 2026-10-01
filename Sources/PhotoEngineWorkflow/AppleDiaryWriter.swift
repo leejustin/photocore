@@ -46,28 +46,11 @@ struct TripOpeningDraft {
 
 @available(macOS 26, iOS 26, *)
 @Generable
-struct PhotoDraft {
-    @Guide(description: "The photo key exactly as given, such as p3")
-    var key: String
-    @Guide(description: "Two to four words for a grid label")
-    var label: String
-    @Guide(description: "One short line describing the photo")
-    var caption: String
-    @Guide(description: "One line plus up to four hashtags")
-    var instagramCaption: String
-    @Guide(description: "A plain description of what is visible")
-    var altText: String
-}
-
-@available(macOS 26, iOS 26, *)
-@Generable
 struct ChapterDraft {
-    @Guide(description: "A heading of two to five words")
+    @Guide(description: "A heading of two to five words, different from the book title")
     var heading: String
-    @Guide(description: "One to three sentences in first person plural")
+    @Guide(description: "One or two sentences in first person plural, using only the facts")
     var diary: String
-    @Guide(description: "One entry for every photo key in the chapter")
-    var photos: [PhotoDraft]
 }
 
 @available(macOS 26, iOS 26, *)
@@ -128,9 +111,9 @@ enum AppleDiarySession {
             Chapter \(chapter.id), \(chapter.day), \(chapter.when).
             Facts:
             \(facts(request, scope: scope))
-            Photos in this chapter, with what each shows:
-            \(chapter.photos.map { "\($0.key): " + ($0.labels.isEmpty ? "no labels" : $0.labels.joined(separator: ", ")) + ($0.people > 0 ? "; \($0.people) people" : "") + ($0.text.isEmpty ? "" : "; words: " + $0.text.joined(separator: " / ")) }.joined(separator: "\n"))
-            Write the heading, a diary entry built only from these facts, and one caption set per photo describing only its labels, in a \(request.tone.rawValue) tone.
+            What the photos in this chapter show:
+            \(chapter.photos.map { ($0.labels.isEmpty ? "" : $0.labels.joined(separator: ", ")) + ($0.people > 0 ? " (\($0.people) people)" : "") }.filter { !$0.isEmpty }.joined(separator: "; "))
+            Write the chapter heading and a short diary entry built only from these facts, in a \(request.tone.rawValue) tone.
             """
             do {
                 let draft = try await session(privateCloud: privateCloud).respond(
@@ -138,14 +121,9 @@ enum AppleDiarySession {
                     generating: ChapterDraft.self
                 ).content
                 sections.append(DiaryText.Section(id: chapter.id, heading: draft.heading, diary: draft.diary))
-                let drafted = Dictionary(draft.photos.map { ($0.key, $0) }, uniquingKeysWith: { a, _ in a })
-                for key in keys {
-                    if let p = drafted[key] {
-                        photos.append(DiaryText.Photo(key: key, label: p.label, caption: p.caption, instagram_caption: p.instagramCaption, alt_text: p.altText))
-                    } else if let safe = safePhotos[key] {
-                        photos.append(safe)
-                    }
-                }
+                // The small on-device model writes poor captions (it repeats labels
+                // and fragments of signs), so captions come from the facts.
+                photos.append(contentsOf: keys.compactMap { safePhotos[$0] })
             } catch {
                 if let safe = safeSections[chapter.id] { sections.append(safe) }
                 photos.append(contentsOf: keys.compactMap { safePhotos[$0] })

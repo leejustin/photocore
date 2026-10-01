@@ -15,7 +15,19 @@ public struct SceneLabel: Codable, Sendable, Equatable, Hashable {
     }
 
     /// "outdoor_scene" reads as "outdoor scene" in a caption prompt or a header.
-    public var readable: String { identifier.replacingOccurrences(of: "_", with: " ") }
+    /// A few classifier names read oddly in a caption and are renamed.
+    public var readable: String {
+        if let renamed = Self.renamed[identifier] { return renamed }
+        return identifier.replacingOccurrences(of: "_", with: " ")
+    }
+
+    static let renamed: [String: String] = [
+        "portal": "doorway", "optical_equipment": "glasses", "conveyance": "vehicle", "water_body": "water",
+        "wood_processed": "wood", "sunset_sunrise": "sunset", "foodstuff": "food", "dragon_parade": "dragon parade"
+    ]
+
+    /// Confident enough to name in a caption.
+    public var isConfident: Bool { confidence >= 0.45 }
 }
 
 /// What a photo is of. Runs only on keepers, so its cost does not grow with the roll.

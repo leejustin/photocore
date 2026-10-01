@@ -153,7 +153,7 @@ public enum TripBookComposer {
                 counter += 1
                 let key = "p\(counter)"
                 byKey[key] = photo
-                let labels = photo.labels.map(\.readable)
+                let labels = photo.labels.filter(\.isConfident).map(\.readable)
                 if !labels.isEmpty { add(.scene, "Photo \(key) shows: " + labels.joined(separator: ", "), scope: key) }
                 if photo.faceCount > 0 { add(.people, "Photo \(key): \(photo.faceCount) \(photo.faceCount == 1 ? "person" : "people")", scope: key) }
                 let text = enrichment[photo.id]?.text ?? []
@@ -226,9 +226,19 @@ public enum TripBookComposer {
         var out = text
         out.title = pick(text.title, fallback.title)
         out.intro = pick(text.intro, fallback.intro)
+        // Headings must differ from the title and from each other; a model that
+        // reuses the owner's note for every chapter falls back to the place or time.
+        func normalized(_ text: String) -> String { text.lowercased().filter { $0.isLetter || $0.isNumber } }
+        var seen: Set<String> = [normalized(out.title)]
         out.sections = text.sections.map { section in
             guard let safe = safeSections[section.id] else { return section }
-            return DiaryText.Section(id: section.id, heading: pick(section.heading, safe.heading), diary: pick(section.diary, safe.diary))
+            var heading = pick(section.heading, safe.heading)
+            if seen.contains(normalized(heading)) {
+                let when = request.chapters.first { $0.id == section.id }?.when.capitalizedFirst ?? safe.heading
+                heading = seen.contains(normalized(safe.heading)) ? when : safe.heading
+            }
+            seen.insert(normalized(heading))
+            return DiaryText.Section(id: section.id, heading: heading, diary: pick(section.diary, safe.diary))
         }
         out.photos = text.photos.map { photo in
             guard let safe = safePhotos[photo.key] else { return photo }
@@ -337,13 +347,14 @@ public struct TemplateDiaryWriter: DiaryWriter {
             chapter.photos.map { photo -> DiaryText.Photo in
                 let top = Array(photo.labels.prefix(2))
                 let label = top.first?.capitalizedFirst ?? (photo.people > 0 ? "People" : "Scene")
+                // Sign text is a fact for models that can see the photo, but OCR
+                // fragments ("TION BOX") make poor captions on their own.
                 let caption: String
-                if let sign = photo.text.first {
-                    caption = "\u{201C}\(sign)\u{201D}"
-                } else if !top.isEmpty {
+                if !top.isEmpty {
                     caption = ListFormatter.localizedString(byJoining: top).capitalizedFirst
                 } else {
-                    caption = chapter.place ?? ""
+                    // Nothing true to say: an empty caption beats a filler.
+                    caption = ""
                 }
                 let place = chapter.place.map { " · \($0)" } ?? ""
                 let tags = photo.labels.prefix(3).map { "#" + $0.replacingOccurrences(of: " ", with: "") }.joined(separator: " ")

@@ -23,6 +23,36 @@ public enum BookRenderer {
         "photos/" + (photo.fileName as NSString).deletingPathExtension + ".jpg"
     }
 
+    /// Rows for a chapter: the first photo alone as the chapter's hero, then
+    /// portraits in pairs, landscapes alternating between a full-width single and
+    /// a pair, so a page reads like a laid-out book rather than a grid.
+    public static func rows(for photos: [BookPhoto]) -> [[BookPhoto]] {
+        guard let first = photos.first else { return [] }
+        var rows: [[BookPhoto]] = [[first]]
+        var rest = Array(photos.dropFirst())
+        var wideNext = false
+        while let photo = rest.first {
+            rest.removeFirst()
+            if photo.isPortrait {
+                if let partner = rest.firstIndex(where: \.isPortrait) {
+                    rows.append([photo, rest.remove(at: partner)])
+                } else if let other = rest.first {
+                    rest.removeFirst()
+                    rows.append([photo, other])
+                } else {
+                    rows.append([photo])
+                }
+            } else if wideNext || rest.isEmpty || rest.first?.isPortrait == true {
+                rows.append([photo])
+                wideNext = false
+            } else {
+                rows.append([photo, rest.removeFirst()])
+                wideNext = true
+            }
+        }
+        return rows
+    }
+
     public static func html(_ book: TripBook, options: Options = Options()) -> String {
         let cover = book.allPhotos.first { $0.id == book.coverPhotoID } ?? book.allPhotos.first
         var body = ""
@@ -30,38 +60,55 @@ public enum BookRenderer {
         if let cover {
             body += "<img class=\"cover-img\" src=\"\(attr(photoPath(cover)))\" alt=\"\(attr(cover.altText))\">"
         }
-        body += "<div class=\"cover-text\"><p class=\"kicker\">\(text(book.dateRange))</p>"
-        body += "<h1 \(editable("title"))>\(text(book.title))</h1>"
-        body += "<p class=\"intro\" \(editable("intro"))>\(text(book.intro))</p></div></header>"
+        body += "<div class=\"cover-shade\"></div><div class=\"cover-text\">"
+        body += "<p class=\"kicker\">\(text(book.dateRange))</p>"
+        body += "<h1 \(editable("title"))>\(text(book.title))</h1></div></header>"
         body += "<main>"
-        for section in book.sections {
-            body += "<section id=\"\(attr(section.id))\">"
-            body += "<p class=\"kicker\">\(text(section.dateLine))</p>"
-            body += "<h2 \(editable("section.\(section.id).heading"))>\(text(section.heading))</h2>"
+        body += "<p class=\"intro\" \(editable("intro"))>\(text(book.intro))</p>"
+        if book.sections.count > 1 {
+            body += "<nav class=\"chapters\" aria-label=\"Chapters\">"
+            for (index, section) in book.sections.enumerated() {
+                body += "<a href=\"#\(attr(section.id))\"><span>\(String(format: "%02d", index + 1))</span> \(text(section.heading))</a>"
+            }
+            body += "</nav>"
+        }
+        for (index, section) in book.sections.enumerated() {
+            var photos = section.photos
+            if photos.count > 1, let cover, photos.first?.id == cover.id { photos.removeFirst() }
+            body += "<section class=\"chapter\" id=\"\(attr(section.id))\">"
+            body += "<div class=\"chapter-head\"><p class=\"number\">\(String(format: "%02d", index + 1))</p>"
+            body += "<div><p class=\"kicker\">\(text(section.dateLine))\(section.place.map { " · " + text($0) } ?? "")</p>"
+            body += "<h2 \(editable("section.\(section.id).heading"))>\(text(section.heading))</h2></div></div>"
             if !section.diary.isEmpty {
-                body += "<p class=\"diary\" \(editable("section.\(section.id).diary"))>\(text(section.diary))</p>"
+                body += "<blockquote class=\"diary\" \(editable("section.\(section.id).diary"))>\(text(section.diary))</blockquote>"
             }
-            body += "<div class=\"photos\">"
-            for photo in section.photos {
-                body += "<figure class=\"\(photo.isPortrait ? "portrait" : "landscape")\">"
-                body += "<img loading=\"lazy\" src=\"\(attr(photoPath(photo)))\" alt=\"\(attr(photo.altText))\">"
-                body += "<figcaption \(editable("photo.\(photo.id.description).caption"))>\(text(photo.caption))</figcaption>"
-                if options.guestEndpoint != nil {
-                    body += "<button class=\"heart\" data-photo=\"\(attr(photo.id.description))\" aria-label=\"Love this photo\">\u{2661}<span></span></button>"
+            for (rowIndex, row) in rows(for: photos).enumerated() {
+                let kind = row.count == 1 ? (rowIndex == 0 ? "hero" : "single") : "pair"
+                let shape = row.count == 2 ? (row.allSatisfy(\.isPortrait) ? " tall" : " wide") : (row[0].isPortrait ? " tall" : "")
+                body += "<div class=\"row \(kind)\(shape)\">"
+                for photo in row {
+                    body += "<figure>"
+                    body += "<img loading=\"lazy\" decoding=\"async\" src=\"\(attr(photoPath(photo)))\" alt=\"\(attr(photo.altText))\">"
+                    body += "<figcaption \(editable("photo.\(photo.id.description).caption"))>\(text(photo.caption))</figcaption>"
+                    if options.guestEndpoint != nil {
+                        body += "<button class=\"heart\" data-photo=\"\(attr(photo.id.description))\" aria-label=\"Love this photo\">\u{2661}<span></span></button>"
+                    }
+                    body += "</figure>"
                 }
-                body += "</figure>"
+                body += "</div>"
             }
-            body += "</div></section>"
+            body += "</section>"
         }
         if options.guestEndpoint != nil {
             body += """
-            <section class="guestbook"><h2>Notes from everyone</h2><ul id="notes"></ul>
+            <section class="guestbook"><h2>Notes from everyone</h2>
+            <p class="hint">Were you there? Add a memory, or tap \u{2661} on your favorites.</p><ul id="notes"></ul>
             <form id="note-form"><input id="note-name" maxlength="40" placeholder="Your name" required>
-            <textarea id="note-text" maxlength="500" placeholder="Add a memory from the trip" required></textarea>
+            <textarea id="note-text" maxlength="500" rows="3" placeholder="A memory from the trip" required></textarea>
             <button type="submit">Add note</button></form></section>
             """
         }
-        body += "</main><footer>\(text(options.footer))</footer>"
+        body += "</main><footer><p>\(text(options.footer))</p></footer>"
 
         let config = """
         window.PHOTOCORE = { edit: \(jsString(options.editEndpoint)), guest: \(jsString(options.guestEndpoint)) };
@@ -69,11 +116,15 @@ public enum BookRenderer {
         return """
         <!doctype html>
         <html lang="en"><head><meta charset="utf-8">
-        <meta name="viewport" content="width=device-width, initial-scale=1">
+        <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+        <meta name="color-scheme" content="light dark">
         <title>\(text(book.title))</title>
+        <meta name="description" content="\(attr(book.intro))">
+        <meta property="og:type" content="article">
         <meta property="og:title" content="\(attr(book.title))">
         <meta property="og:description" content="\(attr(book.intro))">
         \(cover.map { "<meta property=\"og:image\" content=\"\(attr(photoPath($0)))\">" } ?? "")
+        <meta name="twitter:card" content="summary_large_image">
         <style>\(css)</style></head>
         <body class="theme-\(book.theme.rawValue)">\(body)
         <script>\(config)\(script)</script></body></html>
@@ -101,45 +152,89 @@ public enum BookRenderer {
     }
 
     static let css = """
-    :root { --paper:#f9f6f1; --ink:#1e1c1a; --muted:#6b655e; --accent:#c65c36; --line:#e7e1d8; --card:#fff; }
-    @media (prefers-color-scheme: dark) { :root { --paper:#161514; --ink:#f1eee8; --muted:#a49d94; --accent:#e6825d; --line:#2c2925; --card:#1f1d1b; } }
+    :root { --paper:#f7f3ec; --ink:#1d1a17; --muted:#6f675e; --faint:#a49b90; --accent:#b8532f; --line:#e4ddd1; --card:#fffdf9; --serif:"New York","Iowan Old Style","Palatino Linotype",Palatino,Georgia,serif; --sans:-apple-system,BlinkMacSystemFont,"Helvetica Neue","Segoe UI",sans-serif; }
+    @media (prefers-color-scheme: dark) { :root { --paper:#141210; --ink:#efeae2; --muted:#a69e94; --faint:#6d665e; --accent:#e58a63; --line:#2a2622; --card:#1c1916; } }
     * { box-sizing:border-box; }
-    body { margin:0; background:var(--paper); color:var(--ink); font:17px/1.6 -apple-system, BlinkMacSystemFont, "Helvetica Neue", sans-serif; }
-    h1, h2 { font-family: "New York", "Iowan Old Style", Georgia, serif; font-weight:600; letter-spacing:-0.01em; margin:0; }
-    h1 { font-size: clamp(36px, 7vw, 64px); line-height:1.05; }
-    h2 { font-size: clamp(26px, 4vw, 34px); line-height:1.15; margin-bottom:12px; }
-    .kicker { text-transform:uppercase; letter-spacing:.12em; font-size:12px; color:var(--muted); margin:0 0 8px; }
-    .cover { max-width:1080px; margin:0 auto; padding:24px 16px 8px; }
-    .cover-img { width:100%; aspect-ratio: 3 / 2; object-fit:cover; border-radius:20px; display:block; }
-    .cover-text { padding:28px 4px 8px; max-width:720px; }
-    .intro { font-size:20px; color:var(--muted); margin:14px 0 0; }
-    main { max-width:1080px; margin:0 auto; padding:0 16px 48px; }
-    section { padding:48px 0 8px; border-top:1px solid var(--line); margin-top:32px; }
-    .diary { font-family: "New York", "Iowan Old Style", Georgia, serif; font-size:20px; max-width:680px; margin:0 0 24px; }
-    .photos { display:grid; grid-template-columns: repeat(2, 1fr); gap:14px; }
+    html { scroll-behavior:smooth; -webkit-text-size-adjust:100%; }
+    body { margin:0; background:var(--paper); color:var(--ink); font:17px/1.65 var(--sans); }
+    h1, h2 { font-family:var(--serif); font-weight:600; letter-spacing:-0.015em; margin:0; }
+    .kicker { text-transform:uppercase; letter-spacing:.14em; font-size:11.5px; font-weight:600; color:var(--muted); margin:0 0 10px; }
+    .cover { position:relative; height:min(92vh, 860px); min-height:460px; overflow:hidden; background:#000; }
+    .cover-img { position:absolute; inset:0; width:100%; height:100%; object-fit:cover; }
+    .cover-shade { position:absolute; inset:0; background:linear-gradient(to bottom, rgba(0,0,0,.05) 35%, rgba(0,0,0,.62)); }
+    .cover-text { position:absolute; left:0; right:0; bottom:0; padding:0 max(24px, calc((100vw - 1040px) / 2)) 56px; color:#fff; }
+    .cover-text .kicker { color:rgba(255,255,255,.82); }
+    .cover h1 { font-size:clamp(42px, 8vw, 92px); line-height:1.02; max-width:14ch; text-shadow:0 2px 24px rgba(0,0,0,.25); }
+    main { max-width:1040px; margin:0 auto; padding:0 20px 40px; }
+    .intro { font-family:var(--serif); font-size:clamp(21px, 2.6vw, 26px); line-height:1.45; max-width:30em; margin:48px 0 8px; }
+    .chapters { display:flex; gap:8px; overflow-x:auto; padding:18px 0 4px; scrollbar-width:none; }
+    .chapters::-webkit-scrollbar { display:none; }
+    .chapters a { flex:none; text-decoration:none; color:var(--ink); font-size:14px; padding:7px 14px; border:1px solid var(--line); border-radius:999px; background:var(--card); white-space:nowrap; }
+    .chapters a span { color:var(--accent); font-weight:600; margin-right:4px; font-variant-numeric:tabular-nums; }
+    .chapter { padding-top:72px; }
+    .chapter-head { display:flex; gap:20px; align-items:flex-start; margin-bottom:18px; }
+    .number { font-family:var(--serif); font-size:44px; line-height:.9; color:var(--accent); margin:0; font-variant-numeric:tabular-nums; }
+    .chapter h2 { font-size:clamp(28px, 4.2vw, 40px); line-height:1.1; }
+    .diary { font-family:var(--serif); font-style:italic; font-size:clamp(19px, 2.2vw, 22px); line-height:1.5; max-width:34em; margin:0 0 30px 64px; padding-left:18px; border-left:2px solid var(--accent); }
+    .row { display:grid; gap:14px; margin:0 0 22px; }
+    .row.pair { grid-template-columns:1fr 1fr; }
+    .row.hero { margin-left:calc(-1 * max(20px, (100vw - 1040px) / 2 + 20px) / 4); margin-right:calc(-1 * max(20px, (100vw - 1040px) / 2 + 20px) / 4); }
     figure { margin:0; position:relative; }
-    figure.landscape { grid-column: span 2; }
-    figure img { width:100%; display:block; border-radius:14px; cursor:zoom-in; background:var(--line); }
-    figcaption { font-size:15px; color:var(--muted); padding:8px 2px 0; min-height:1em; }
-    footer { text-align:center; color:var(--muted); font-size:13px; padding:32px 16px 48px; }
-    [data-key][contenteditable="true"] { outline:1px dashed var(--accent); outline-offset:4px; border-radius:4px; }
-    .heart { position:absolute; top:10px; right:10px; border:0; border-radius:999px; padding:6px 10px; background:rgba(0,0,0,.45); color:#fff; font-size:16px; cursor:pointer; }
+    figure img { width:100%; display:block; border-radius:6px; cursor:zoom-in; background:var(--line); }
+    .row.hero img, .row.single img { aspect-ratio:3 / 2; object-fit:cover; }
+    .row.single.tall { max-width:640px; margin-left:auto; margin-right:auto; }
+    .row.single.tall img, .row.hero.tall img { aspect-ratio:4 / 5; }
+    .row.pair.wide img { aspect-ratio:3 / 2; object-fit:cover; }
+    .row.pair.tall img { aspect-ratio:4 / 5; object-fit:cover; }
+    .row.pair:not(.wide):not(.tall) img { aspect-ratio:1 / 1; object-fit:cover; }
+    figcaption { font-size:14px; color:var(--muted); padding:8px 2px 0; }
+    figcaption:empty { display:none; }
+    [data-key][contenteditable="true"] { outline:1px dashed var(--accent); outline-offset:6px; border-radius:4px; cursor:text; }
+    .heart { position:absolute; top:12px; right:12px; border:0; border-radius:999px; padding:6px 11px; background:rgba(20,18,16,.42); backdrop-filter:blur(8px); -webkit-backdrop-filter:blur(8px); color:#fff; font-size:15px; cursor:pointer; }
     .heart.on { background:var(--accent); }
-    .heart span:not(:empty) { margin-left:4px; font-size:13px; }
-    .guestbook ul { list-style:none; padding:0; }
+    .heart span:not(:empty) { margin-left:5px; font-size:13px; }
+    .guestbook { margin-top:88px; padding:32px; border-radius:18px; background:var(--card); border:1px solid var(--line); }
+    .guestbook h2 { font-size:28px; }
+    .hint { color:var(--muted); margin:6px 0 16px; }
+    .guestbook ul { list-style:none; padding:0; margin:0 0 20px; }
     .guestbook li { padding:12px 0; border-bottom:1px solid var(--line); }
+    .guestbook li:last-child { border-bottom:0; }
     .guestbook form { display:grid; gap:10px; max-width:560px; }
-    .guestbook input, .guestbook textarea { font:inherit; padding:10px 12px; border-radius:10px; border:1px solid var(--line); background:var(--card); color:var(--ink); }
-    .guestbook button { justify-self:start; font:inherit; padding:10px 18px; border:0; border-radius:10px; background:var(--accent); color:#fff; cursor:pointer; }
-    .lightbox { position:fixed; inset:0; background:rgba(0,0,0,.92); display:flex; align-items:center; justify-content:center; z-index:10; cursor:zoom-out; }
-    .lightbox img { max-width:96vw; max-height:92vh; border-radius:8px; }
-    @media (max-width: 640px) { .photos { grid-template-columns: 1fr; } figure.landscape { grid-column: auto; } body { font-size:16px; } }
-    body.theme-scrapbook { --paper:#efe7da; }
-    .theme-scrapbook figure { background:#fff; padding:12px 12px 4px; box-shadow:0 6px 18px rgba(0,0,0,.12); border-radius:2px; }
-    .theme-scrapbook figure:nth-child(odd) { transform: rotate(-1.2deg); }
-    .theme-scrapbook figure:nth-child(even) { transform: rotate(1deg); }
+    .guestbook input, .guestbook textarea { font:inherit; padding:11px 13px; border-radius:10px; border:1px solid var(--line); background:var(--paper); color:var(--ink); }
+    .guestbook button { justify-self:start; font:inherit; font-weight:600; padding:10px 20px; border:0; border-radius:999px; background:var(--accent); color:#fff; cursor:pointer; }
+    footer { text-align:center; color:var(--faint); font-size:13px; letter-spacing:.04em; padding:56px 20px 64px; }
+    .lightbox { position:fixed; inset:0; background:rgba(0,0,0,.94); display:flex; align-items:center; justify-content:center; z-index:10; cursor:zoom-out; }
+    .lightbox img { max-width:96vw; max-height:92vh; border-radius:4px; }
+    @media (max-width: 640px) {
+      body { font-size:16px; }
+      .cover { height:78vh; min-height:420px; }
+      .cover-text { padding:0 22px 36px; }
+      main { padding:0 16px 32px; }
+      .intro { margin-top:32px; }
+      .chapter { padding-top:52px; }
+      .chapter-head { gap:14px; }
+      .number { font-size:34px; }
+      .diary { margin-left:0; }
+      .row { gap:8px; margin-bottom:14px; }
+      .row.hero { margin-left:-16px; margin-right:-16px; }
+      .row.hero img { border-radius:0; }
+      .row.hero figcaption { padding-left:16px; padding-right:16px; }
+      .row.pair.wide { grid-template-columns:1fr; }
+      .guestbook { padding:22px; margin-top:64px; }
+    }
+    @media print {
+      .chapters, .heart, .guestbook, footer { display:none; }
+      body { background:#fff; color:#000; }
+      .cover { height:100vh; page-break-after:always; }
+      .chapter { page-break-before:always; padding-top:0; }
+      .row { break-inside:avoid; }
+    }
+    body.theme-scrapbook { --paper:#ece3d4; }
+    .theme-scrapbook figure { background:#fff; padding:12px 12px 6px; box-shadow:0 8px 22px rgba(0,0,0,.14); border-radius:2px; }
+    .theme-scrapbook .row figure:nth-child(odd) { transform:rotate(-1.1deg); }
+    .theme-scrapbook .row figure:nth-child(even) { transform:rotate(.9deg); }
     .theme-scrapbook figure img { border-radius:0; }
-    .theme-scrapbook figcaption { font-family: "Bradley Hand", "Segoe Print", "Comic Sans MS", cursive; font-size:18px; color:#3a3530; text-align:center; padding:10px 4px 8px; }
+    .theme-scrapbook figcaption { font-family:"Bradley Hand","Segoe Print","Comic Sans MS",cursive; font-size:18px; color:#3a3530; text-align:center; padding:10px 4px 8px; }
     """
 
     static let script = """

@@ -231,6 +231,20 @@ struct TripBookTests {
         #expect(social.contains("\"/v1/books/x/guest\""))
     }
 
+    @Test("chapters open on a single photo, then pair portraits and alternate landscapes")
+    func layoutRows() {
+        func photo(_ portrait: Bool) -> BookPhoto { BookPhoto(id: PhotoID(), fileName: "x.jpg", isPortrait: portrait) }
+        let land = (0..<5).map { _ in photo(false) }
+        let tall = (0..<3).map { _ in photo(true) }
+        let rows = BookRenderer.rows(for: [land[0], tall[0], land[1], tall[1], land[2], land[3], land[4], tall[2]])
+        #expect(rows.first?.count == 1, "the opener is a single photo")
+        #expect(rows.contains { $0.count == 2 && $0.allSatisfy(\.isPortrait) }, "portraits are paired")
+        #expect(rows.flatMap { $0 }.count == 8, "no photo is lost or repeated")
+        #expect(Set(rows.flatMap { $0 }.map(\.id)).count == 8)
+        #expect(BookRenderer.rows(for: []).isEmpty)
+        #expect(BookRenderer.rows(for: [land[0]]).map(\.count) == [1])
+    }
+
     @Test("the carousel walks through every chapter, cover first")
     func carouselPick() {
         let sections = (1...3).map { s in
