@@ -63,9 +63,17 @@ final class TripFinish {
         after = UIImage(data: body)
     }
 
-    func finish(title: String, identifiers: [String], server: FinishServer) async {
+    /// A book finished earlier for this trip, so the card opens on the link.
+    func restore(tripID: String) {
+        if let saved = BookStore.book(for: tripID) { stage = .done(book: saved.book, edit: saved.edit) }
+    }
+
+    func finish(tripID: String, title: String?, note: String, events: [String], identifiers: [String], server: FinishServer) async {
         do {
-            let created: Created = try await call(server, "v2/trips", method: "POST", json: ["title": title])
+            var body: [String: Any] = ["calendarEvents": events]
+            if let title { body["title"] = title }
+            if !note.trimmingCharacters(in: .whitespaces).isEmpty { body["note"] = note }
+            let created: Created = try await call(server, "v2/trips", method: "POST", json: body)
             for (index, identifier) in identifiers.enumerated() {
                 stage = .uploading(done: index, total: identifiers.count)
                 guard let original = await Self.original(identifier: identifier) else { continue }
@@ -86,6 +94,7 @@ final class TripFinish {
                 case "succeeded":
                     let book = server.baseURL.appendingPathComponent(created.bookPath)
                     let edit = URL(string: book.absoluteString + "#edit=" + created.ownerToken) ?? book
+                    BookStore.save(FinishedBook(book: book, edit: edit, finishedAt: Date()), for: tripID)
                     stage = .done(book: book, edit: edit)
                     return
                 case "failed", "cancelled":

@@ -40,7 +40,7 @@ How it stays safe on a real camera roll:
 - **One trip at a time, capped.** Trips are found by 20-hour gaps, need 20 photos, and split above 21 days or 1,500 photos. Trips queue and cull one after another.
 - **Streamed, not copied.** Thumbnails are read from Photos in batches, analyzed in memory and dropped. Only about 5 KB of analysis per photo is stored, and a killed app resumes from the last batch.
 - **Guards.** It refuses to start under 200 MB free, pauses when the phone is hot, and slows down in Low Power Mode.
-- **Nothing is deleted by culling.** "Set aside" hides the other photos in a "Photocore · Set aside" album and can restore them with one tap. Favorites, edited, shared and album photos are never set aside. Deleting is a separate step, at most 500 at a time, through the iOS confirmation into Recently Deleted (30 days). Every step is logged.
+- **Nothing is deleted by culling.** "Set aside" gathers the other photos in a "Photocore · Set aside" album to look over; nothing else changes and one tap undoes it. Photocore never hides photos: iOS keeps hidden photos away from apps, so an app could hide them but never unhide them. Favorites, edited, shared and album photos are never set aside. Deleting is a separate step, at most 500 at a time, through the iOS confirmation into Recently Deleted (30 days). Every step is logged, with a pending entry written before any change.
 
 ## The trip book
 

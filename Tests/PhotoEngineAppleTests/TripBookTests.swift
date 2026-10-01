@@ -147,6 +147,15 @@ struct TripBookTests {
         #expect(try OpenAICompatibleDiaryWriter.parse(data) == text)
     }
 
+    @Test("the owner's short note becomes the title")
+    func noteTitle() async {
+        let facts = Self.facts([(t0, "Alfama")], tz: 0)
+        let book = await TripBookComposer.compose(facts: facts, writer: TemplateDiaryWriter(), context: TripContext(note: "sam's 30th in Lisbon"))
+        #expect(book.title == "Sam's 30th in Lisbon")
+        let long = await TripBookComposer.compose(facts: facts, writer: TemplateDiaryWriter(), context: TripContext(note: String(repeating: "a very long note ", count: 6)))
+        #expect(long.title == "Alfama")
+    }
+
     @Test("an outage falls back to the offline writer")
     func fallback() async throws {
         MockProvider.response = (529, Data("{}".utf8))

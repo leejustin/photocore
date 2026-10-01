@@ -289,5 +289,58 @@ public struct GroundingCheck: Sendable {
         return flagged
     }
 
-    public func accepts(_ text: String) -> Bool { unsupported(in: text).isEmpty }
+    public func accepts(_ text: String) -> Bool {
+        if Self.taggerAvailable(text) { return unsupported(in: text).isEmpty }
+        return strictUnsupported(in: text).isEmpty
+    }
+
+    /// Words with no tagger behind them are not common function words.
+    static let functionWords: Set<String> = [
+        "the", "a", "an", "and", "or", "but", "of", "in", "on", "at", "to", "for", "with", "by", "from", "over", "under",
+        "into", "out", "up", "down", "near", "after", "before", "around", "through", "then", "this", "that", "these",
+        "those", "it", "its", "is", "was", "were", "are", "be", "been", "being", "had", "has", "have", "so", "very",
+        "just", "all", "some", "more", "most", "came", "come", "went", "go", "got", "get", "made", "make", "there",
+        "here", "what", "when", "where", "who", "how", "not", "no", "yes", "our", "we", "us", "you", "your", "they",
+        "their", "them", "one", "two", "few", "many", "much", "still", "again", "also", "too", "good", "great", "nice",
+        "little", "big", "long", "warm", "quiet", "bright", "dark", "late", "early", "together", "photos", "photo"
+    ]
+
+    /// Some systems (the iOS simulator) can lack the tagger's models; then no
+    /// word gets a lexical class.
+    static func taggerAvailable(_ text: String) -> Bool {
+        let tagger = NLTagger(tagSchemes: [.lexicalClass])
+        tagger.string = text
+        var tagged = false
+        tagger.enumerateTags(in: text.startIndex..<text.endIndex, unit: .word, scheme: .lexicalClass, options: [.omitWhitespace, .omitPunctuation]) { tag, _ in
+            if let tag, tag != .otherWord { tagged = true; return false }
+            return true
+        }
+        return tagged
+    }
+
+    /// Without word classes: any word of four or more letters outside the facts,
+    /// the generic nouns and common function words needs support.
+    func strictUnsupported(in text: String) -> [String] {
+        var flagged = unsupportedNamesAndNumbers(in: text)
+        for word in Self.words(in: text) {
+            let lower = word.lowercased()
+            let base = Self.irregular[lower] ?? (lower.hasSuffix("s") ? String(lower.dropLast()) : lower)
+            guard lower.count >= 4, word.allSatisfy(\.isLetter) else { continue }
+            if Self.functionWords.contains(lower) || Self.genericNouns.contains(base) || known(word, lemma: base) { continue }
+            flagged.append(word)
+        }
+        return flagged
+    }
+
+    func unsupportedNamesAndNumbers(in text: String) -> [String] {
+        var flagged: [String] = []
+        for sentence in text.split(whereSeparator: { ".!?\n".contains($0) }) {
+            for (index, word) in Self.words(in: String(sentence)).enumerated() {
+                let isNumber = word.contains(where: \.isNumber)
+                let isName = index > 0 && word.first?.isUppercase == true
+                if (isNumber || isName) && !known(word, lemma: nil) { flagged.append(word) }
+            }
+        }
+        return flagged
+    }
 }

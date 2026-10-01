@@ -4,12 +4,14 @@ import SwiftUI
 /// Everything Photocore has set aside, with restore and a deliberate, capped delete.
 struct SetAsideView: View {
     @State private var log = SetAsideLog.load()
+    @State private var album: [String] = []
     @State private var confirmDelete = false
     @State private var working = false
     @State private var message: String?
     @Environment(\.openURL) private var openURL
 
-    private var setAside: [String] { log.currentlySetAside() }
+    /// The album is the source of truth; the log adds anything mid-flight.
+    private var setAside: [String] { Array(Set(album).union(log.currentlySetAside())).sorted() }
     private var deleted: [SetAsideLog.Entry] { log.deleted() }
     private var nextBatch: Int { min(setAside.count, SetAsidePlanner.deleteBatchLimit) }
 
@@ -33,7 +35,7 @@ struct SetAsideView: View {
             } header: {
                 Text("Set aside · \(setAside.count)")
             } footer: {
-                Text("Set-aside photos are hidden and kept in the \u{201C}\(PhotoLibrarySafety.albumTitle)\u{201D} album. Nothing is deleted until you choose to, at most \(SetAsidePlanner.deleteBatchLimit) at a time.")
+                Text("Set-aside photos are gathered in the \u{201C}\(PhotoLibrarySafety.albumTitle)\u{201D} album so you can look them over. They stay in your library until you delete them, at most \(SetAsidePlanner.deleteBatchLimit) at a time.")
             }
 
             if !deleted.isEmpty {
@@ -49,6 +51,7 @@ struct SetAsideView: View {
             }
         }
         .navigationTitle("Set aside")
+        .task { album = await Task.detached { PhotoLibrarySafety.albumContents() }.value }
         .alert("Delete \(nextBatch) photos?", isPresented: $confirmDelete) {
             Button("Continue", role: .destructive) { delete() }
             Button("Cancel", role: .cancel) {}
@@ -64,12 +67,9 @@ struct SetAsideView: View {
         working = true
         Task {
             do {
-                let ids = setAside
-                try await PhotoLibrarySafety.restore(ids)
-                for (trip, group) in Dictionary(grouping: ids, by: { log.latest[$0]?.tripID ?? "" }) {
-                    log.record(group, tripID: trip, state: .restored)
-                }
-                try log.save()
+                _ = try await PhotoLibrarySafety.restoreEverything()
+                log = SetAsideLog.load()
+                album = PhotoLibrarySafety.albumContents()
             } catch {
                 message = error.localizedDescription
             }
@@ -86,6 +86,7 @@ struct SetAsideView: View {
                     log.record(group, tripID: trip, state: .deleted)
                 }
                 try log.save()
+                album = PhotoLibrarySafety.albumContents()
             } catch {
                 // Declining the system confirmation lands here; nothing was deleted.
                 message = "Nothing was deleted."

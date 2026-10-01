@@ -8,7 +8,9 @@ struct FinishCard: View {
     @State private var showAfter = true
     @State private var showingSettings = false
     @State private var server = FinishServer.saved
-    @Environment(\.openURL) private var openURL
+    @State private var note = ""
+    @State private var events: [String] = []
+    @State private var reading: URL?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
@@ -24,6 +26,8 @@ struct FinishCard: View {
         .clipShape(.rect(cornerRadius: 20))
         .overlay(RoundedRectangle(cornerRadius: 20).stroke(Color.accentColor.opacity(0.35), lineWidth: 1.5))
         .sheet(isPresented: $showingSettings, onDismiss: { server = FinishServer.saved }) { ServerSettingsView() }
+        .sheet(item: $reading) { SafariView(url: $0).ignoresSafeArea() }
+        .onAppear { finish.restore(tripID: run.trip.id) }
         .task(id: server) {
             guard let server, let first = run.keepers.first, let identifier = run.identifier(first.id) else { return }
             await finish.loadPreview(identifier: identifier, server: server)
@@ -57,10 +61,8 @@ struct FinishCard: View {
         switch finish.stage {
         case .idle:
             if let server {
-                Button("Finish \(run.keepers.count) photos") {
-                    let ids = run.keepers.compactMap { run.identifier($0.id) }
-                    Task { await finish.finish(title: run.trip.title, identifiers: ids, server: server) }
-                }
+                TripContextPicker(trip: run.trip, note: $note, events: $events)
+                Button("Finish \(run.keepers.count) photos") { start(server) }
                 .buttonStyle(PrimaryButtonStyle())
                 .disabled(run.keepers.isEmpty)
                 Text("Only these keepers are uploaded. Test build: no charge.")
@@ -79,21 +81,31 @@ struct FinishCard: View {
                 Text(message).font(.subheadline).foregroundStyle(Color.ink.opacity(0.7))
             }
         case .done(let book, let edit):
-            Label("Your book is ready", systemImage: "book.closed").font(.headline)
-            HStack {
-                ShareLink(item: book) { Label("Share", systemImage: "square.and.arrow.up") }
-                    .buttonStyle(.borderedProminent)
-                Button("Open") { openURL(book) }.buttonStyle(.bordered)
-                Button("Edit") { openURL(edit) }.buttonStyle(.bordered)
+            Button { reading = book } label: {
+                Label("Read your book", systemImage: "book")
             }
+            .buttonStyle(PrimaryButtonStyle())
+            HStack {
+                ShareLink(item: book, subject: Text(run.trip.title), message: Text("Our trip, the best photos and a little diary.")) {
+                    Label("Share", systemImage: "square.and.arrow.up")
+                }
+                .buttonStyle(.bordered)
+                Button { reading = edit } label: { Label("Edit words", systemImage: "pencil") }
+                    .buttonStyle(.bordered)
+            }
+            Text("Anyone with the link can see the book, leave notes and add their own photos.")
+                .font(.footnote).foregroundStyle(Color.ink.opacity(0.55))
         case .failed(let message):
             Text(message).font(.subheadline).foregroundStyle(.red)
-            Button("Try again") {
-                guard let server else { return }
-                let ids = run.keepers.compactMap { run.identifier($0.id) }
-                Task { await finish.finish(title: run.trip.title, identifiers: ids, server: server) }
-            }
-            .buttonStyle(.bordered)
+            Button("Try again") { if let server { start(server) } }
+                .buttonStyle(.bordered)
+        }
+    }
+
+    private func start(_ server: FinishServer) {
+        let ids = run.keepers.compactMap { run.identifier($0.id) }
+        Task {
+            await finish.finish(tripID: run.trip.id, title: run.trip.place, note: note, events: events, identifiers: ids, server: server)
         }
     }
 }

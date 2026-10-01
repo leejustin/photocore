@@ -1,3 +1,4 @@
+import Photos
 import SwiftUI
 
 @main
@@ -8,10 +9,16 @@ struct PhotocoreApp: App {
         TripQueue.removeLegacyWorkingCopies()
     }
 
+    @AppStorage("PhotocoreWelcomed") private var welcomed = false
+
     var body: some Scene {
         WindowGroup {
-            HomeView()
-                .environment(queue)
+            if welcomed || PHPhotoLibrary.authorizationStatus(for: .readWrite) != .notDetermined {
+                HomeView()
+                    .environment(queue)
+            } else {
+                WelcomeView { welcomed = true }
+            }
         }
     }
 }

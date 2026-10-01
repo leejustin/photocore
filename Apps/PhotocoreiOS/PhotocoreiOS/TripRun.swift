@@ -136,11 +136,8 @@ final class TripRun {
     }
 
     func setAside(_ plan: SetAsidePlan) async throws {
-        try await PhotoLibrarySafety.setAside(plan.eligible)
-        var log = SetAsideLog.load()
-        log.record(plan.eligible, tripID: trip.id, state: .setAside)
-        try log.save()
-        setAsideCount = log.currentlySetAside(tripID: trip.id).count
+        try await PhotoLibrarySafety.setAside(plan.eligible, tripID: trip.id)
+        setAsideCount = SetAsideLog.load().currentlySetAside(tripID: trip.id).count
         protectedCount = plan.protected.count
     }
 

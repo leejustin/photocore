@@ -148,7 +148,7 @@ struct TripRunView: View {
                     Text("Save \(run.keepers.count) to a Photos album")
                 }
             }
-            .buttonStyle(PrimaryButtonStyle())
+            .buttonStyle(SecondaryButtonStyle())
             .disabled(run.keepers.isEmpty || saving || run.albumSaved)
             .padding(.horizontal, 20)
             .padding(.vertical, 12)
@@ -175,7 +175,7 @@ struct TripRunView: View {
                 .font(.footnote.weight(.semibold)).textCase(.uppercase).tracking(1)
                 .foregroundStyle(Color.ink.opacity(0.5))
             if run.setAsideCount > 0 {
-                Text("\(run.setAsideCount) set aside in the \u{201C}\(PhotoLibrarySafety.albumTitle)\u{201D} album and hidden from your library. Nothing was deleted.")
+                Text("\(run.setAsideCount) gathered in the \u{201C}\(PhotoLibrarySafety.albumTitle)\u{201D} album. Nothing was deleted. Review and delete them from the archive button on the home screen when you're ready.")
                     .font(.subheadline).foregroundStyle(Color.ink.opacity(0.7))
                 if run.protectedCount > 0 {
                     Text("\(run.protectedCount) favorites, edited, shared or album photos were left where they are.")
@@ -186,7 +186,7 @@ struct TripRunView: View {
                 }
                 .buttonStyle(.bordered)
             } else {
-                Text("They stay in your library. You can set them aside to tidy up: they are hidden and gathered in one album, and you can restore them with one tap.")
+                Text("They stay in your library. To tidy up, set them aside: they're gathered in one album to look over, and deleting is a separate step you confirm.")
                     .font(.subheadline).foregroundStyle(Color.ink.opacity(0.7))
                 Button {
                     guard !planning else { return }
@@ -211,7 +211,7 @@ struct TripRunView: View {
 
     private var setAsideMessage: String {
         guard let plan = pendingSetAside else { return "" }
-        var text = "They will be hidden and gathered in the \u{201C}\(PhotoLibrarySafety.albumTitle)\u{201D} album. Nothing is deleted, and you can restore them anytime."
+        var text = "They'll be gathered in the \u{201C}\(PhotoLibrarySafety.albumTitle)\u{201D} album. Nothing changes in your library, and you can undo it anytime."
         if !plan.protected.isEmpty {
             text += " \(plan.protected.count) favorites, edited, shared or album photos will be left alone."
         }

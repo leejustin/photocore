@@ -101,6 +101,18 @@ struct PrimaryButtonStyle: ButtonStyle {
     }
 }
 
+/// The quieter action next to a primary one, so two orange buttons never compete.
+struct SecondaryButtonStyle: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .font(.headline)
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, 15)
+            .background(Color.ink.opacity(configuration.isPressed ? 0.12 : 0.07), in: .rect(cornerRadius: 14))
+            .foregroundStyle(Color.ink)
+    }
+}
+
 struct LaunchOptions {
     static var autoOpenFirstTrip: Bool { UserDefaults.standard.bool(forKey: "PhotocoreAutoOpen") }
     static var autoSwipe: Bool { UserDefaults.standard.bool(forKey: "PhotocoreAutoSwipe") }

@@ -42,6 +42,7 @@ struct HomeView: View {
     }
 
     private func status(for trip: TripSummary) -> String? {
+        if BookStore.book(for: trip.id) != nil { return "Book ready" }
         guard let run = queue.runs[trip.id] else { return nil }
         switch run.stage {
         case .queued: return "Up next"
@@ -56,7 +57,7 @@ struct HomeView: View {
             Text("Finish the trip.")
                 .font(.display(38))
                 .foregroundStyle(Color.ink)
-            Text("Photocore picks the best photos from each trip and leaves the rest. It runs on this iPhone, so nothing is uploaded.")
+            Text("Photocore picks the best photos from each trip. Culling runs on this iPhone; nothing leaves it unless you choose to finish a trip into a book.")
                 .font(.body)
                 .foregroundStyle(Color.ink.opacity(0.65))
         }

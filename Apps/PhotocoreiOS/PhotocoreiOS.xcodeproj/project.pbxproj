@@ -175,6 +175,7 @@
 				CURRENT_PROJECT_VERSION = 1;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_KEY_CFBundleDisplayName = Photocore;
+				INFOPLIST_KEY_NSCalendarsFullAccessUsageDescription = "Photocore can suggest what a trip was from your calendar. Only titles you pick are used.";
 				INFOPLIST_KEY_NSPhotoLibraryAddUsageDescription = "Photocore saves your keepers as an album.";
 				INFOPLIST_KEY_NSPhotoLibraryUsageDescription = "Photocore picks the best photos from your trips. Culling runs on this iPhone.";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
@@ -202,6 +203,7 @@
 				CURRENT_PROJECT_VERSION = 1;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_KEY_CFBundleDisplayName = Photocore;
+				INFOPLIST_KEY_NSCalendarsFullAccessUsageDescription = "Photocore can suggest what a trip was from your calendar. Only titles you pick are used.";
 				INFOPLIST_KEY_NSPhotoLibraryAddUsageDescription = "Photocore saves your keepers as an album.";
 				INFOPLIST_KEY_NSPhotoLibraryUsageDescription = "Photocore picks the best photos from your trips. Culling runs on this iPhone.";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;

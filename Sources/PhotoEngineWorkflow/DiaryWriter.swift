@@ -203,7 +203,11 @@ public enum TripBookComposer {
             writerName = TemplateDiaryWriter().name
             text = TemplateDiaryWriter().text(for: request)
         }
-        let (checked, rejected) = ground(text, request: request)
+        var (checked, rejected) = ground(text, request: request)
+        // The owner's own short note is the best title there is.
+        if let note = context.note?.trimmingCharacters(in: .whitespacesAndNewlines), !note.isEmpty, note.count <= 60 {
+            checked.title = note.prefix(1).uppercased() + note.dropFirst()
+        }
         var book = assemble(text: checked, request: request, byKey: byKey, chapters: chapters, writer: writerName, theme: theme)
         book.groundingRejections = rejected
         return book

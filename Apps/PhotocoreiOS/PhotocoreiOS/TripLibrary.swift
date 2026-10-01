@@ -1,3 +1,4 @@
+import CoreLocation
 import Foundation
 import Observation
 import Photos
@@ -12,17 +13,23 @@ struct TripSummary: Identifiable, Hashable, Sendable {
     var photoCount: Int
     var days: Int
     var coverIdentifier: String
+    var coverLatitude: Double?
+    var coverLongitude: Double?
+    var place: String?
 
-    var title: String {
+    var dates: String {
         let formatter = DateIntervalFormatter()
         formatter.dateStyle = .medium
         formatter.timeStyle = .none
         return formatter.string(from: start, to: end)
     }
 
+    /// "Lisbon" when the photos say where, otherwise the dates.
+    var title: String { place ?? dates }
+
     var subtitle: String {
         let dayWord = days == 1 ? "1 day" : "\(days) days"
-        return "\(dayWord) · \(photoCount) photos"
+        return (place == nil ? "" : dates + " · ") + "\(dayWord) · \(photoCount) photos"
     }
 }
 
@@ -55,6 +62,15 @@ final class TripLibrary {
         isLoading = true
         defer { isLoading = false }
         trips = await Task.detached(priority: .userInitiated) { Self.scanTrips() }.value
+        // Name trips by place where the cover photo has a location. One lookup per
+        // area, cached on disk, done after the list is already on screen.
+        for index in trips.indices {
+            guard let lat = trips[index].coverLatitude, let lon = trips[index].coverLongitude else { continue }
+            let names = await PlaceNamer.shared.names(for: [(lat, lon)])
+            if let place = names.values.first {
+                trips[index].place = place.locality ?? place.name
+            }
+        }
     }
 
     nonisolated static func scanTrips() -> [TripSummary] {
@@ -63,10 +79,12 @@ final class TripLibrary {
         options.sortDescriptors = [NSSortDescriptor(key: "creationDate", ascending: true)]
         var dates: [Date] = []
         var identifiers: [String] = []
+        var locations: [CLLocationCoordinate2D?] = []
         PHAsset.fetchAssets(with: options).enumerateObjects { asset, _, _ in
             guard let date = asset.creationDate, !asset.mediaSubtypes.contains(.photoScreenshot) else { return }
             dates.append(date)
             identifiers.append(asset.localIdentifier)
+            locations.append(asset.location?.coordinate)
         }
         return TripDetector.detect(dates: dates).map { trip in
             TripSummary(
@@ -75,7 +93,9 @@ final class TripLibrary {
                 end: trip.end,
                 photoCount: trip.photoCount,
                 days: trip.days,
-                coverIdentifier: identifiers[trip.coverIndex]
+                coverIdentifier: identifiers[trip.coverIndex],
+                coverLatitude: locations[trip.coverIndex]?.latitude,
+                coverLongitude: locations[trip.coverIndex]?.longitude
             )
         }
     }

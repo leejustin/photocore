@@ -32,9 +32,9 @@ public struct SetAsidePlan: Sendable, Equatable {
 }
 
 /// Decides which non-keepers may be set aside. Deletion is never part of a cull:
-/// setting aside hides photos and gathers them in an album, which Photocore can
-/// undo with one tap. Deleting is a separate, capped step that goes through the
-/// system's own confirmation into Recently Deleted.
+/// setting aside only gathers photos in an album, which one tap undoes. Deleting
+/// is a separate, capped step that goes through the system's own confirmation
+/// into Recently Deleted.
 public enum SetAsidePlanner {
     /// Largest number of photos one delete request may include.
     public static let deleteBatchLimit = 500
@@ -63,6 +63,9 @@ public enum SetAsidePlanner {
 /// without a trace and the person can always find where a photo went.
 public struct SetAsideLog: Codable, Sendable, Equatable {
     public enum State: String, Codable, Sendable {
+        /// Written before asking iOS to hide, so a photo is never hidden without
+        /// a record even if the app is killed while the system prompt is up.
+        case pending
         case setAside
         case restored
         case deleted
@@ -114,7 +117,7 @@ public struct SetAsideLog: Codable, Sendable, Equatable {
 
     public func currentlySetAside(tripID: String? = nil) -> [String] {
         latest.values
-            .filter { $0.state == .setAside && (tripID == nil || $0.tripID == tripID) }
+            .filter { ($0.state == .setAside || $0.state == .pending) && (tripID == nil || $0.tripID == tripID) }
             .sorted { $0.date < $1.date }
             .map(\.identifier)
     }
@@ -129,10 +132,8 @@ public enum PhotoLibrarySafety {
     public static let albumTitle = "Photocore · Set aside"
 
     public static func protection(for identifiers: [String]) -> [String: LibraryProtection] {
-        let options = PHFetchOptions()
-        options.includeHiddenAssets = true
         var result: [String: LibraryProtection] = [:]
-        PHAsset.fetchAssets(withLocalIdentifiers: identifiers, options: options).enumerateObjects { asset, _, _ in
+        PHAsset.fetchAssets(withLocalIdentifiers: identifiers, options: nil).enumerateObjects { asset, _, _ in
             var inOtherAlbum = false
             PHAssetCollection.fetchAssetCollectionsContaining(asset, with: .album, options: nil).enumerateObjects { collection, _, stop in
                 if collection.localizedTitle != albumTitle && !(collection.localizedTitle ?? "").hasPrefix("Photocore") {
@@ -150,7 +151,12 @@ public enum PhotoLibrarySafety {
         return result
     }
 
-    /// Hides the photos and adds them to the set-aside album. Fully reversible.
+    /// Gathers the photos in the set-aside album. Nothing else changes: the
+    /// photos stay in the library and in every other album.
+    ///
+    /// Photocore never hides photos. iOS keeps hidden photos away from apps
+    /// (the Hidden album is locked), so an app that hides a photo cannot unhide
+    /// it; that was measured on 2026-10-01 and is why set aside is album-only.
     public static func setAside(_ identifiers: [String]) async throws {
         guard !identifiers.isEmpty else { return }
         let assets = PHAsset.fetchAssets(withLocalIdentifiers: identifiers, options: nil)
@@ -159,26 +165,15 @@ public enum PhotoLibrarySafety {
             let request = album.flatMap { PHAssetCollectionChangeRequest(for: $0) }
                 ?? PHAssetCollectionChangeRequest.creationRequestForAssetCollection(withTitle: albumTitle)
             request.addAssets(assets)
-            assets.enumerateObjects { asset, _, _ in
-                PHAssetChangeRequest(for: asset).isHidden = true
-            }
         }
     }
 
-    /// Unhides the photos and takes them out of the set-aside album.
+    /// Takes the photos out of the set-aside album.
     public static func restore(_ identifiers: [String]) async throws {
-        guard !identifiers.isEmpty else { return }
-        let options = PHFetchOptions()
-        options.includeHiddenAssets = true
-        let assets = PHAsset.fetchAssets(withLocalIdentifiers: identifiers, options: options)
-        let album = existingAlbum()
+        guard !identifiers.isEmpty, let album = existingAlbum() else { return }
+        let assets = PHAsset.fetchAssets(withLocalIdentifiers: identifiers, options: nil)
         try await PHPhotoLibrary.shared().performChanges {
-            assets.enumerateObjects { asset, _, _ in
-                PHAssetChangeRequest(for: asset).isHidden = false
-            }
-            if let album, let request = PHAssetCollectionChangeRequest(for: album) {
-                request.removeAssets(assets)
-            }
+            PHAssetCollectionChangeRequest(for: album)?.removeAssets(assets)
         }
     }
 
@@ -187,13 +182,51 @@ public enum PhotoLibrarySafety {
     /// Returns the identifiers actually deleted.
     public static func delete(_ identifiers: [String]) async throws -> [String] {
         guard let batch = SetAsidePlanner.deleteBatches(identifiers).first else { return [] }
-        let options = PHFetchOptions()
-        options.includeHiddenAssets = true
-        let assets = PHAsset.fetchAssets(withLocalIdentifiers: batch, options: options)
+        let assets = PHAsset.fetchAssets(withLocalIdentifiers: batch, options: nil)
         try await PHPhotoLibrary.shared().performChanges {
             PHAssetChangeRequest.deleteAssets(assets)
         }
         return batch
+    }
+
+    /// Everything in the set-aside album, whatever the log says. The album is the
+    /// source of truth for restore.
+    public static func albumContents() -> [String] {
+        guard let album = existingAlbum() else { return [] }
+        var identifiers: [String] = []
+        PHAsset.fetchAssets(in: album, options: nil).enumerateObjects { asset, _, _ in identifiers.append(asset.localIdentifier) }
+        return identifiers
+    }
+
+    /// Records, hides, then confirms. If the person declines the iOS prompt or
+    /// the app dies first, the pending entry stays and restore still finds it.
+    public static func setAside(_ identifiers: [String], tripID: String, logURL: URL = SetAsideLog.defaultURL()) async throws {
+        var log = SetAsideLog.load(from: logURL)
+        log.record(identifiers, tripID: tripID, state: .pending)
+        try log.save(to: logURL)
+        do {
+            try await setAside(identifiers)
+        } catch {
+            log.record(identifiers, tripID: tripID, state: .restored)
+            try? log.save(to: logURL)
+            throw error
+        }
+        log.record(identifiers, tripID: tripID, state: .setAside)
+        try log.save(to: logURL)
+    }
+
+    /// Restores everything in the album plus anything the log still lists.
+    public static func restoreEverything(logURL: URL = SetAsideLog.defaultURL()) async throws -> Int {
+        var log = SetAsideLog.load(from: logURL)
+        let logged = log.currentlySetAside()
+        let all = Array(Set(albumContents()).union(logged))
+        guard !all.isEmpty else { return 0 }
+        try await restore(all)
+        for (trip, group) in Dictionary(grouping: all, by: { log.latest[$0]?.tripID ?? "" }) {
+            log.record(group, tripID: trip, state: .restored)
+        }
+        try log.save(to: logURL)
+        return all.count
     }
 
     private static func existingAlbum() -> PHAssetCollection? {
