@@ -387,7 +387,7 @@ public struct AppleAnalysisEngine: Sendable {
 
         var requests: [VNRequest] = [featureRequest, faceRequest, landmarksRequest]
         var aestheticsRequest: VNCalculateImageAestheticsScoresRequest?
-        if #available(macOS 15.0, *) {
+        if VisionCompute.aestheticsAvailable, #available(macOS 15.0, *) {
             let request = VNCalculateImageAestheticsScoresRequest()
             aestheticsRequest = request
             requests.append(request)
@@ -1947,6 +1947,17 @@ public enum VisionCompute {
     /// (observed with two culls running side by side), so every caller shares
     /// this gate regardless of how many pipelines are running.
     public static let gate = DispatchSemaphore(value: min(max(ProcessInfo.processInfo.activeProcessorCount / 2, 1), 4))
+
+    /// The aesthetics model has no usable CPU fallback in the iOS simulator: it
+    /// returns the same near-zero score for every image, which would drag every
+    /// photo below the cut. Scoring already handles a missing aesthetic score.
+    public static var aestheticsAvailable: Bool {
+        #if targetEnvironment(simulator)
+        false
+        #else
+        true
+        #endif
+    }
 
     public static func prepare(_ requests: [VNRequest]) {
         #if targetEnvironment(simulator)
