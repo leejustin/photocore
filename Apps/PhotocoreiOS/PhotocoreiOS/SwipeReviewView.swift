@@ -47,8 +47,8 @@ struct SwipeReviewView: View {
     private func card(for moment: ConfirmationMoment) -> some View {
         let shown = chosen ?? moment.suggestedID
         return VStack(alignment: .leading, spacing: 12) {
-            if let photo = run.photo(shown) {
-                FileImage(url: photo.asset.url, maxPixel: 1200, contentMode: .fit)
+            if let identifier = run.identifier(shown) {
+                AssetImage(identifier: identifier, contentMode: .fit)
                     .clipShape(.rect(cornerRadius: 18))
             }
             Text(explanation(moment))
@@ -84,10 +84,10 @@ struct SwipeReviewView: View {
         ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: 8) {
                 ForEach(moment.candidateIDs, id: \.self) { id in
-                    if let photo = run.photo(id) {
+                    if let identifier = run.identifier(id) {
                         let selected = (chosen ?? moment.suggestedID) == id
                         Button { chosen = id } label: {
-                            FileImage(url: photo.asset.url, maxPixel: 300)
+                            AssetImage(identifier: identifier)
                                 .frame(width: 72, height: 72)
                                 .clipShape(.rect(cornerRadius: 10))
                                 .overlay(RoundedRectangle(cornerRadius: 10).stroke(selected ? Color.accentColor : .clear, lineWidth: 3))

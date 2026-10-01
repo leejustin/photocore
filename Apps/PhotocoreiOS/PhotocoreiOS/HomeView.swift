@@ -2,7 +2,8 @@ import SwiftUI
 
 struct HomeView: View {
     @State private var library = TripLibrary()
-    @State private var path: [TripSummary] = []
+    @State private var path = NavigationPath()
+    @Environment(TripQueue.self) private var queue
 
     var body: some View {
         NavigationStack(path: $path) {
@@ -18,14 +19,35 @@ struct HomeView: View {
             .navigationDestination(for: TripSummary.self) { trip in
                 TripRunView(trip: trip)
             }
+            .navigationDestination(for: String.self) { _ in
+                SetAsideView()
+            }
+            .toolbar {
+                ToolbarItem(placement: .topBarTrailing) {
+                    NavigationLink(value: "set-aside") {
+                        Image(systemName: "archivebox")
+                    }
+                    .accessibilityLabel("Set aside")
+                }
+            }
             .refreshable { await library.reload() }
         }
         .tint(.accentColor)
         .task {
             await library.start()
             if LaunchOptions.autoOpenFirstTrip, let first = library.trips.first, path.isEmpty {
-                path = [first]
+                path.append(first)
             }
+        }
+    }
+
+    private func status(for trip: TripSummary) -> String? {
+        guard let run = queue.runs[trip.id] else { return nil }
+        switch run.stage {
+        case .queued: return "Up next"
+        case .analyzing, .deciding, .paused: return "Culling"
+        case .ready: return "\(run.keepers.count) kept"
+        default: return nil
         }
     }
 
@@ -60,7 +82,7 @@ struct HomeView: View {
                     .tracking(1)
                     .foregroundStyle(Color.ink.opacity(0.5))
                 ForEach(library.trips) { trip in
-                    NavigationLink(value: trip) { TripCard(trip: trip) }
+                    NavigationLink(value: trip) { TripCard(trip: trip, status: status(for: trip)) }
                         .buttonStyle(.plain)
                 }
             }
@@ -70,6 +92,7 @@ struct HomeView: View {
 
 struct TripCard: View {
     let trip: TripSummary
+    var status: String?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -81,6 +104,13 @@ struct TripCard: View {
                     Text(trip.subtitle).font(.subheadline).foregroundStyle(Color.ink.opacity(0.6))
                 }
                 Spacer()
+                if let status {
+                    Text(status)
+                        .font(.caption.weight(.semibold))
+                        .padding(.horizontal, 10).padding(.vertical, 5)
+                        .background(Color.accentColor.opacity(0.14), in: .capsule)
+                        .foregroundStyle(Color.ink)
+                }
                 Image(systemName: "chevron.right").foregroundStyle(Color.ink.opacity(0.35))
             }
             .padding(16)

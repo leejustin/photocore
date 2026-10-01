@@ -36,6 +36,17 @@ struct TripDetectorTests {
         #expect(trips.reduce(0) { $0 + $1.photoCount } == 120)
     }
 
+    @Test("a huge trip splits into parts under the photo cap")
+    func photoCap() {
+        // Four busy days, 900 photos a day: one 3,600-photo run.
+        var dates: [Date] = []
+        for day in 0..<4 { dates += burst(day: Double(day), count: 900, everyMinutes: 0.8) }
+        let trips = TripDetector.detect(dates: dates, maximumPhotos: 1_500)
+        #expect(trips.count >= 3)
+        #expect(trips.allSatisfy { $0.photoCount <= 1_500 })
+        #expect(trips.reduce(0) { $0 + $1.photoCount } == 3_600)
+    }
+
     @Test("empty roll has no trips")
     func empty() {
         #expect(TripDetector.detect(dates: []).isEmpty)

@@ -25,12 +25,17 @@ public enum TripDetector {
     ///     under it; going home for a few days is over it.
     ///   - minimumPhotos: shorter runs are everyday life, not a trip.
     ///   - maximumDays: longer runs are split at their largest internal pause.
+    ///   - maximumPhotos: bigger runs are split the same way, so no single cull
+    ///     is larger than a phone can finish comfortably in one sitting.
     /// - Returns: trips, most recent first.
+    public static let defaultMaximumPhotos = 1_500
+
     public static func detect(
         dates: [Date],
         gap: TimeInterval = 20 * 3600,
         minimumPhotos: Int = 20,
-        maximumDays: Int = 21
+        maximumDays: Int = 21,
+        maximumPhotos: Int = defaultMaximumPhotos
     ) -> [DetectedTrip] {
         let order = dates.indices.sorted { dates[$0] < dates[$1] }
         guard !order.isEmpty else { return [] }
@@ -45,7 +50,7 @@ public enum TripDetector {
             }
         }
         runs.append(current)
-        let split = runs.flatMap { splitLong($0, dates: dates, maximumDays: maximumDays) }
+        let split = runs.flatMap { splitLong($0, dates: dates, maximumDays: maximumDays, maximumPhotos: maximumPhotos) }
         return split
             .filter { $0.count >= minimumPhotos }
             .map { run in
@@ -54,9 +59,9 @@ public enum TripDetector {
             .sorted { $0.start > $1.start }
     }
 
-    private static func splitLong(_ run: [Int], dates: [Date], maximumDays: Int) -> [[Int]] {
-        guard run.count > 1,
-              dates[run[run.count - 1]].timeIntervalSince(dates[run[0]]) > Double(maximumDays) * 86_400 else { return [run] }
+    private static func splitLong(_ run: [Int], dates: [Date], maximumDays: Int, maximumPhotos: Int) -> [[Int]] {
+        let tooLong = dates[run[run.count - 1]].timeIntervalSince(dates[run[0]]) > Double(maximumDays) * 86_400
+        guard run.count > 1, tooLong || run.count > maximumPhotos else { return [run] }
         var largest = 1
         var largestGap = -1.0
         for position in 1..<run.count {
@@ -66,7 +71,7 @@ public enum TripDetector {
                 largest = position
             }
         }
-        return splitLong(Array(run[..<largest]), dates: dates, maximumDays: maximumDays)
-            + splitLong(Array(run[largest...]), dates: dates, maximumDays: maximumDays)
+        return splitLong(Array(run[..<largest]), dates: dates, maximumDays: maximumDays, maximumPhotos: maximumPhotos)
+            + splitLong(Array(run[largest...]), dates: dates, maximumDays: maximumDays, maximumPhotos: maximumPhotos)
     }
 }

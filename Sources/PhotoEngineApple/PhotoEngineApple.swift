@@ -1229,6 +1229,67 @@ public final class PhotoPipelineRunner: @unchecked Sendable {
         )
     }
 
+    public struct Decision: Sendable {
+        public var analyzed: [AnalyzedPhoto]
+        public var grouping: PhotoGrouping
+        public var scored: [ScoredPhoto]
+        public var shortlist: Shortlist
+        public var groupingSeconds: Double
+        public var visualDistance: VisualDistanceProvider
+        public var selectionProfile: ScoringProfile
+    }
+
+    /// Everything after analysis: focus ranking, camera sync, grouping, scoring
+    /// with taste memory and key faces, and selection. The Mac runner and the
+    /// phone's streamed cull share it so both decide the same way.
+    public static func decide(
+        rawAnalyzed: [AnalyzedPhoto],
+        profile: ScoringProfile,
+        progress: @escaping @Sendable (PipelineProgress) -> Void = { _ in }
+    ) -> Decision {
+        let focused = PhotoFocusRanking.apply(to: rawAnalyzed)
+        let cameraTimelines = MultiCameraSync.estimateOffsets(assets: focused.map(\.asset))
+        let analyzed = MultiCameraSync.aligningCaptureDates(focused, timelines: cameraTimelines)
+
+        progress(PipelineProgress(stage: .grouping, completed: 0, total: 1, message: "Grouping duplicates and bursts"))
+        let visualDistance = AppleVisualDistance.cachedProvider()
+        let groupingStartedAt = Date()
+        let grouping = PhotoGroupingEngine.group(analyzed, profile: profile, visualDistance: visualDistance)
+        let groupingSeconds = Date().timeIntervalSince(groupingStartedAt)
+        let cameraNote = cameraTimelines.count > 1 ? " across \(cameraTimelines.count) cameras" : ""
+        progress(PipelineProgress(stage: .grouping, completed: 1, total: 1, message: "Found \(grouping.groups.count) groups\(cameraNote)"))
+
+        let taste = TasteMemory.load()
+        let keyFaces = KeyFaceScorer.boosts(for: analyzed)
+        let scored = analyzed.map { photo -> ScoredPhoto in
+            var score = PhotoScoring.score(photo, profile: profile)
+            let tasteDelta = taste.scoreAdjustment(signals: photo.signals)
+            let faceDelta = keyFaces[photo.id]?.amount ?? 0
+            if tasteDelta != 0 || faceDelta != 0 {
+                var reasons = score.reasons
+                if faceDelta > 0, let reason = keyFaces[photo.id]?.reason { reasons.append(reason) }
+                if taste.isReady, abs(tasteDelta) > 0.01 { reasons.append("matches your taste") }
+                score = CompositeScore(
+                    total: min(max(score.total + tasteDelta + faceDelta, 0), 1),
+                    components: score.components,
+                    reasons: reasons
+                )
+            }
+            return ScoredPhoto(photo: photo, score: score)
+        }
+        progress(PipelineProgress(stage: .selecting, completed: 0, total: 1, message: "Building shortlist"))
+        var selectionProfile = profile
+        selectionProfile.targetCount = profile.resolvedTargetCount(for: analyzed.count)
+        if let fraction = taste.preferredKeepFraction, taste.isReady, analyzed.count > 0 {
+            let learned = Int((fraction * Double(analyzed.count)).rounded())
+            selectionProfile.targetCount = min(analyzed.count, max(selectionProfile.targetCount, learned))
+        }
+        selectionProfile.diversityWeight = taste.diversityWeight(base: selectionProfile.diversityWeight)
+        let shortlist = PhotoSelectionEngine.select(scored, grouping: grouping, profile: selectionProfile, visualDistance: visualDistance)
+        progress(PipelineProgress(stage: .selecting, completed: 1, total: 1, message: "Selected \(shortlist.selectedIDs.count) photos"))
+        return Decision(analyzed: analyzed, grouping: grouping, scored: scored, shortlist: shortlist, groupingSeconds: groupingSeconds, visualDistance: visualDistance, selectionProfile: selectionProfile)
+    }
+
     public func prunePreviousRuns(in outputDirectory: URL, keeping runDirectory: URL? = nil) throws -> Int {
         try GeneratedArtifactCleanup.pruneSupersededRuns(in: outputDirectory, keeping: runDirectory)
     }
@@ -1436,46 +1497,17 @@ public final class PhotoPipelineRunner: @unchecked Sendable {
         cache.retainAssets(imported.map(\.asset))
         try cache.save()
 
-        let focused = PhotoFocusRanking.apply(to: rawAnalyzed)
-        let cameraTimelines = MultiCameraSync.estimateOffsets(assets: focused.map(\.asset))
-        let analyzed = MultiCameraSync.aligningCaptureDates(focused, timelines: cameraTimelines)
-
-        progress(PipelineProgress(stage: .grouping, completed: 0, total: 1, message: "Grouping duplicates and bursts"))
-        let visualDistance = AppleVisualDistance.cachedProvider()
         let groupingStartedAt = Date()
-        let grouping = PhotoGroupingEngine.group(analyzed, profile: profile, visualDistance: visualDistance)
-        groupingSeconds = Date().timeIntervalSince(groupingStartedAt)
-        let cameraNote = cameraTimelines.count > 1 ? " across \(cameraTimelines.count) cameras" : ""
-        progress(PipelineProgress(stage: .grouping, completed: 1, total: 1, message: "Found \(grouping.groups.count) groups\(cameraNote)"))
-
-        let taste = TasteMemory.load()
-        let keyFaces = KeyFaceScorer.boosts(for: analyzed)
-        let scored = analyzed.map { photo -> ScoredPhoto in
-            var score = PhotoScoring.score(photo, profile: profile)
-            let tasteDelta = taste.scoreAdjustment(signals: photo.signals)
-            let faceDelta = keyFaces[photo.id]?.amount ?? 0
-            if tasteDelta != 0 || faceDelta != 0 {
-                var reasons = score.reasons
-                if faceDelta > 0, let reason = keyFaces[photo.id]?.reason { reasons.append(reason) }
-                if taste.isReady, abs(tasteDelta) > 0.01 { reasons.append("matches your taste") }
-                score = CompositeScore(
-                    total: min(max(score.total + tasteDelta + faceDelta, 0), 1),
-                    components: score.components,
-                    reasons: reasons
-                )
-            }
-            return ScoredPhoto(photo: photo, score: score)
-        }
-        progress(PipelineProgress(stage: .selecting, completed: 0, total: 1, message: "Building shortlist"))
-        let selectionStartedAt = Date()
-        var selectionProfile = profile
-        selectionProfile.targetCount = profile.resolvedTargetCount(for: analyzed.count)
-        if let fraction = taste.preferredKeepFraction, taste.isReady, analyzed.count > 0 {
-            let learned = Int((fraction * Double(analyzed.count)).rounded())
-            selectionProfile.targetCount = min(analyzed.count, max(selectionProfile.targetCount, learned))
-        }
-        selectionProfile.diversityWeight = taste.diversityWeight(base: selectionProfile.diversityWeight)
-        var shortlist = PhotoSelectionEngine.select(scored, grouping: grouping, profile: selectionProfile, visualDistance: visualDistance)
+        let decided = Self.decide(rawAnalyzed: rawAnalyzed, profile: profile, progress: progress)
+        let analyzed = decided.analyzed
+        let grouping = decided.grouping
+        let scored = decided.scored
+        var shortlist = decided.shortlist
+        let visualDistance = decided.visualDistance
+        groupingSeconds = decided.groupingSeconds
+        let selectionStartedAt = groupingStartedAt.addingTimeInterval(decided.groupingSeconds)
+        let selectionProfile = decided.selectionProfile
+        _ = visualDistance
         selectionSeconds = Date().timeIntervalSince(selectionStartedAt)
         if let catalog, catalogHealthy {
             do {
