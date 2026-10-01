@@ -222,8 +222,19 @@ enum ImageMetadataReader {
             format: format,
             rating: readRating(from: source),
             latitude: coordinate?.latitude,
-            longitude: coordinate?.longitude
+            longitude: coordinate?.longitude,
+            utcOffsetSeconds: utcOffset(exif: exif)
         )
+    }
+
+    /// "+08:00" or "-05:30" from OffsetTimeOriginal, in seconds east of UTC.
+    static func utcOffset(exif: NSDictionary?) -> Int? {
+        guard let text = exif?.object(forKey: kCGImagePropertyExifOffsetTimeOriginal) as? String else { return nil }
+        let trimmed = text.trimmingCharacters(in: .whitespaces)
+        guard trimmed.count >= 6, let sign = trimmed.first, sign == "+" || sign == "-" else { return nil }
+        let parts = trimmed.dropFirst().split(separator: ":")
+        guard parts.count == 2, let hours = Int(parts[0]), let minutes = Int(parts[1]), hours <= 14, minutes < 60 else { return nil }
+        return (sign == "-" ? -1 : 1) * (hours * 3600 + minutes * 60)
     }
 
     static func coordinate(gps: NSDictionary?) -> (latitude: Double, longitude: Double)? {

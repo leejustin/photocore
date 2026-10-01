@@ -128,7 +128,7 @@ public enum FinishRenderer {
         public var height: Int
     }
 
-    public static func render(url: URL, maxPixel: Int = 3072, settings: SubjectEditSettings = .natural, crop: NormalizedCrop? = nil, context: CIContext = CIContext()) throws -> Output {
+    public static func render(url: URL, maxPixel: Int = 3072, settings: SubjectEditSettings = .natural, crop: NormalizedCrop? = nil, outputSize: CGSize? = nil, context: CIContext = CIContext()) throws -> Output {
         guard let cg = CGImage.photocoreThumbnail(url: url, maxPixel: maxPixel),
               let vision = CGImage.photocoreThumbnail(url: url, maxPixel: 1024) else {
             throw CocoaError(.fileReadCorruptFile)
@@ -146,6 +146,15 @@ public enum FinishRenderer {
             let rect = crop.pixelRect(width: cg.width, height: cg.height)
             let flipped = CGRect(x: rect.minX, y: CGFloat(cg.height) - rect.maxY, width: rect.width, height: rect.height)
             final = final.cropped(to: flipped).transformed(by: CGAffineTransform(translationX: -flipped.minX, y: -flipped.minY))
+        }
+        if let outputSize, final.extent.width > 0, final.extent.height > 0 {
+            // Exact social sizes such as 1080 x 1350. Upscaling a small source is
+            // allowed here because the platforms would do it anyway, less carefully.
+            let origin = final.extent.origin
+            final = final
+                .transformed(by: CGAffineTransform(translationX: -origin.x, y: -origin.y))
+                .transformed(by: CGAffineTransform(scaleX: outputSize.width / final.extent.width, y: outputSize.height / final.extent.height))
+                .cropped(to: CGRect(origin: .zero, size: outputSize))
         }
         let colorSpace = CGColorSpace(name: CGColorSpace.sRGB) ?? CGColorSpaceCreateDeviceRGB()
         guard let data = context.jpegRepresentation(of: final, colorSpace: colorSpace, options: [

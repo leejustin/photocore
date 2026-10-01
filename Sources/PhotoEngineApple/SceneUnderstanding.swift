@@ -122,11 +122,14 @@ public struct PlaceName: Codable, Sendable, Equatable {
     public var name: String
     public var locality: String?
     public var country: String?
+    /// The place's time zone, used for local time when a photo has no offset.
+    public var timeZoneIdentifier: String?
 
-    public init(name: String, locality: String? = nil, country: String? = nil) {
+    public init(name: String, locality: String? = nil, country: String? = nil, timeZoneIdentifier: String? = nil) {
         self.name = name
         self.locality = locality
         self.country = country
+        self.timeZoneIdentifier = timeZoneIdentifier
     }
 
     /// The short form used in section headers.
@@ -199,13 +202,15 @@ public actor PlaceNamer {
         guard let placemark = try? await geocoder.reverseGeocodeLocation(CLLocation(latitude: latitude, longitude: longitude)).first else {
             return nil
         }
-        return place(
+        var found = place(
             areasOfInterest: placemark.areasOfInterest ?? [],
             subLocality: placemark.subLocality,
             locality: placemark.locality,
             administrativeArea: placemark.administrativeArea,
             country: placemark.country
         )
+        found?.timeZoneIdentifier = placemark.timeZone?.identifier
+        return found
     }
 
     /// Picks the most specific readable name: a landmark, then a neighborhood,

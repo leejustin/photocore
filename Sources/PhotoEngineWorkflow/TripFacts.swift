@@ -17,8 +17,33 @@ public struct PhotoFacts: Codable, Sendable, Equatable, Identifiable {
     public var crops: [String: NormalizedCrop]
     public var pixelWidth: Int
     public var pixelHeight: Int
+    public var utcOffsetSeconds: Int?
+
+    public init(id: PhotoID, fileName: String, captureDate: Date?, latitude: Double?, longitude: Double?, place: PlaceName?, labels: [SceneLabel], faceCount: Int, crops: [String: NormalizedCrop], pixelWidth: Int, pixelHeight: Int, utcOffsetSeconds: Int? = nil) {
+        self.id = id
+        self.fileName = fileName
+        self.captureDate = captureDate
+        self.latitude = latitude
+        self.longitude = longitude
+        self.place = place
+        self.labels = labels
+        self.faceCount = faceCount
+        self.crops = crops
+        self.pixelWidth = pixelWidth
+        self.pixelHeight = pixelHeight
+        self.utcOffsetSeconds = utcOffsetSeconds
+    }
 
     public var isPortraitOrientation: Bool { pixelHeight > pixelWidth }
+
+    /// Where the photo was taken, in time. A place found from GPS wins, because
+    /// travelers often leave a camera's clock on home time; then the camera's
+    /// recorded offset; then this device's time zone.
+    public var localTimeZone: TimeZone {
+        if let id = place?.timeZoneIdentifier, let zone = TimeZone(identifier: id) { return zone }
+        if let offset = utcOffsetSeconds, let zone = TimeZone(secondsFromGMT: offset) { return zone }
+        return .current
+    }
 }
 
 public struct TripFacts: Codable, Sendable, Equatable {
@@ -78,7 +103,8 @@ public enum TripFactsBuilder {
                 faceCount: photo.signals.faceCount,
                 crops: Dictionary(uniqueKeysWithValues: crops.map { ($0.key.rawValue, $0.value) }),
                 pixelWidth: upright ? metadata.pixelHeight : metadata.pixelWidth,
-                pixelHeight: upright ? metadata.pixelWidth : metadata.pixelHeight
+                pixelHeight: upright ? metadata.pixelWidth : metadata.pixelHeight,
+                utcOffsetSeconds: metadata.utcOffsetSeconds
             ))
             progress(index + 1, ordered.count)
         }

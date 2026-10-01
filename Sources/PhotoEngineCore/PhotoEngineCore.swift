@@ -57,6 +57,9 @@ public struct PhotoMetadata: Codable, Sendable, Equatable {
     /// the trip book; exports still strip GPS by default.
     public var latitude: Double?
     public var longitude: Double?
+    /// The camera's UTC offset at capture, when the file records it. Used to show
+    /// local time of day in the trip book.
+    public var utcOffsetSeconds: Int?
 
     public init(
         pixelWidth: Int,
@@ -70,7 +73,8 @@ public struct PhotoMetadata: Codable, Sendable, Equatable {
         format: PhotoFormat = .unknown,
         rating: Int? = nil,
         latitude: Double? = nil,
-        longitude: Double? = nil
+        longitude: Double? = nil,
+        utcOffsetSeconds: Int? = nil
     ) {
         self.pixelWidth = pixelWidth
         self.pixelHeight = pixelHeight
@@ -84,6 +88,7 @@ public struct PhotoMetadata: Codable, Sendable, Equatable {
         self.rating = rating
         self.latitude = latitude
         self.longitude = longitude
+        self.utcOffsetSeconds = utcOffsetSeconds
     }
 }
 

@@ -44,6 +44,15 @@ struct PhotoEngineCommand {
             try Calibration.run(folder: folder, sheet: sheet)
         case "eval":
             try CullEval.run(arguments: Array(arguments.dropFirst()))
+        case "book":
+            let rest = Array(arguments.dropFirst())
+            let outcome = AsyncOutcome()
+            Task.detached {
+                do { try await BookCommand.run(arguments: rest) } catch { outcome.error = error }
+                outcome.done.signal()
+            }
+            outcome.done.wait()
+            if let error = outcome.error { throw error }
         case "compare-render":
             guard arguments.count >= 2 else { throw PhotoEngineError.invalidArgument("compare-render requires a manifest path") }
             let manifest = URL(fileURLWithPath: arguments[1])
@@ -247,6 +256,7 @@ struct PhotoEngineCommand {
           photo-engine run <folder> [--profile everyday|groupEvent|trip|creative] [--cull gentle|balanced|highlights] [--target N | --keep-percent P] [--style natural|warm|vibrant|soft|blackAndWhite] [--intensity 0...1] [--size full|compact] [--base raw|camera] [--output folder]
           photo-engine calibrate <folder> [--sheet out.jpg]
           photo-engine eval <folder> [--profile everyday|groupEvent|trip|creative] [--cull gentle|balanced|highlights] [--target N | --keep-percent P] [--limit N] [--output folder]
+          photo-engine book <folder> [--output folder] [--tone warm|dry|minimal] [--theme book|scrapbook] [--keep-percent P] [--offline]
           photo-engine compare-render <manifest.json> [--count 6] [--sheet out.jpg]
           photo-engine serve [--port 8787]
           photo-engine smoke-test
@@ -266,4 +276,10 @@ struct PhotoEngineCommand {
         Clients cannot choose output paths. Each job writes under the worker output root.
         """)
     }
+}
+
+/// Bridges an async command into the synchronous CLI entry point.
+final class AsyncOutcome: @unchecked Sendable {
+    let done = DispatchSemaphore(value: 0)
+    var error: Error?
 }
