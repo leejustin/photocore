@@ -42,6 +42,8 @@ struct PhotoEngineCommand {
             let folder = URL(fileURLWithPath: arguments[1], isDirectory: true).standardizedFileURL
             let sheet = option(arguments, name: "--sheet").map { URL(fileURLWithPath: $0) }
             try Calibration.run(folder: folder, sheet: sheet)
+        case "eval":
+            try CullEval.run(arguments: Array(arguments.dropFirst()))
         case "compare-render":
             guard arguments.count >= 2 else { throw PhotoEngineError.invalidArgument("compare-render requires a manifest path") }
             let manifest = URL(fileURLWithPath: arguments[1])
@@ -244,6 +246,7 @@ struct PhotoEngineCommand {
           photo-engine catalog <folder>
           photo-engine run <folder> [--profile everyday|groupEvent|trip|creative] [--cull gentle|balanced|highlights] [--target N | --keep-percent P] [--style natural|warm|vibrant|soft|blackAndWhite] [--intensity 0...1] [--size full|compact] [--base raw|camera] [--output folder]
           photo-engine calibrate <folder> [--sheet out.jpg]
+          photo-engine eval <folder> [--profile everyday|groupEvent|trip|creative] [--cull gentle|balanced|highlights] [--target N | --keep-percent P] [--limit N] [--output folder]
           photo-engine compare-render <manifest.json> [--count 6] [--sheet out.jpg]
           photo-engine serve [--port 8787]
           photo-engine smoke-test

@@ -40,6 +40,7 @@ struct PhotoEngineChecks {
             ("moment window uses the looser threshold", momentWindowUsesLooserThreshold),
             ("legacy visual thresholds migrate", legacyVisualThresholdsMigrate),
             ("same-moment candidates become alternates", sameMomentCandidatesBecomeAlternates),
+            ("distant lookalikes are not hard-removed", distantLookalikesAreNotHardRemoved),
             ("review queue stays small", reviewQueueStaysSmall),
             ("focus ranking spreads sharpness", focusRankingSpreadsSharpness),
             ("focus ranking needs enough samples", focusRankingNeedsSamples),
@@ -772,7 +773,12 @@ struct PhotoEngineChecks {
     }
 
     private static func sameMomentCandidatesBecomeAlternates() throws {
-        let photos = (0..<3).map { withFakePrint(analyzed(index: $0, hash: "m\($0)", perceptualHash: UInt64($0) << 20, date: nil), UInt8($0)) }
+        let t0 = Date(timeIntervalSince1970: 50_000)
+        let photos = [
+            withFakePrint(analyzed(index: 0, hash: "m0", perceptualHash: 0, date: t0), 0),
+            withFakePrint(analyzed(index: 1, hash: "m1", perceptualHash: 1 << 20, date: t0.addingTimeInterval(2)), 1),
+            withFakePrint(analyzed(index: 2, hash: "m2", perceptualHash: 2 << 20, date: t0.addingTimeInterval(120)), 2)
+        ]
         let scored = photos.map { ScoredPhoto(photo: $0, score: PhotoScoring.score($0, profile: .default(for: .everyday))) }
         var profile = ScoringProfile.default(for: .everyday)
         profile.targetCount = 3
@@ -783,6 +789,25 @@ struct PhotoEngineChecks {
         try expect(shortlist.selectedIDs.count == 2, "a same-moment duplicate was kept alongside its twin")
         let alternates = shortlist.decisions.filter { $0.bucket == .alternate }
         try expect(alternates.count == 1 && alternates[0].reasons.first == SelectionReason.sameMomentAsKept, "twin was not marked as an alternate")
+    }
+
+    private static func distantLookalikesAreNotHardRemoved() throws {
+        let t0 = Date(timeIntervalSince1970: 60_000)
+        // Same venue look — low Vision distance — but minutes apart.
+        let photos = (0..<6).map { index in
+            withFakePrint(
+                analyzed(index: index, hash: "v\(index)", perceptualHash: UInt64(index) << 10, date: t0.addingTimeInterval(Double(index) * 180)),
+                0
+            )
+        }
+        let scored = photos.map { ScoredPhoto(photo: $0, score: PhotoScoring.score($0, profile: .default(for: .everyday))) }
+        var profile = ScoringProfile.default(for: .everyday)
+        profile.targetCount = 4
+        profile.nearDuplicateVisualDistance = 0.5
+        let shortlist = PhotoSelectionEngine.select(scored, grouping: PhotoGrouping(groups: []), profile: profile) { _, _ in 0.28 }
+        try expect(shortlist.selectedIDs.count == 4, "venue-similar frames minutes apart collapsed to \(shortlist.selectedIDs.count)")
+        let sameMoment = shortlist.decisions.filter { $0.reasons.contains(SelectionReason.sameMomentAsKept) }
+        try expect(sameMoment.isEmpty, "hard same-moment removal fired without time corroboration")
     }
 
     private static func reviewQueueStaysSmall() throws {

@@ -1498,12 +1498,25 @@ public enum PhotoSelectionEngine {
             let chosen = remaining.remove(at: bestIndex)
             selected.append(chosen)
             var sameMomentIDs = Set<PhotoID>()
+            let chosenDate = chosen.photo.asset.metadata.captureDate
+            // Hard "same moment" removal needs time corroboration. Venue-homogeneous
+            // shoots (mats, stages, travel days) often sit under the visual near-dup
+            // threshold even across unrelated minutes; soft diversity still applies.
+            let momentWindow = max(profile.burstWindow, profile.maxBurstDuration)
             for candidate in remaining {
                 let similarity: Double
+                var hardSameMoment = false
                 if let distance = visualDistance(candidate.photo.signals, chosen.photo.signals) {
                     // Distances are on Vision's calibrated scale (~0.3 same shot, ~1.0 unrelated).
                     similarity = exp(-distance / max(profile.nearDuplicateVisualDistance, 0.001))
-                    if distance <= profile.nearDuplicateVisualDistance { sameMomentIDs.insert(candidate.id) }
+                    if distance <= profile.nearDuplicateVisualDistance {
+                        if let chosenDate, let candidateDate = candidate.photo.asset.metadata.captureDate {
+                            hardSameMoment = abs(candidateDate.timeIntervalSince(chosenDate)) <= momentWindow
+                        } else {
+                            // No timestamps: require a tighter visual match before hard-removing.
+                            hardSameMoment = distance <= profile.nearDuplicateVisualDistance * 0.65
+                        }
+                    }
                 } else {
                     let hamming = PhotoSimilarity.hammingDistance(
                         candidate.photo.signals.fingerprint.perceptualHash,
@@ -1513,9 +1526,16 @@ public enum PhotoSelectionEngine {
                         candidate.photo.signals.fingerprint.perceptualHash,
                         chosen.photo.signals.fingerprint.perceptualHash
                     )
-                    if hamming <= profile.nearDuplicateHammingDistance { sameMomentIDs.insert(candidate.id) }
+                    if hamming <= profile.nearDuplicateHammingDistance {
+                        if let chosenDate, let candidateDate = candidate.photo.asset.metadata.captureDate {
+                            hardSameMoment = abs(candidateDate.timeIntervalSince(chosenDate)) <= momentWindow
+                        } else {
+                            hardSameMoment = hamming <= max(3, profile.nearDuplicateHammingDistance / 2)
+                        }
+                    }
                 }
                 maximumSimilarity[candidate.id] = max(maximumSimilarity[candidate.id] ?? 0, similarity)
+                if hardSameMoment { sameMomentIDs.insert(candidate.id) }
             }
             if !sameMomentIDs.isEmpty {
                 for candidate in remaining where sameMomentIDs.contains(candidate.id) {
