@@ -56,13 +56,21 @@ public enum BookRenderer {
     public static func html(_ book: TripBook, options: Options = Options()) -> String {
         let cover = book.allPhotos.first { $0.id == book.coverPhotoID } ?? book.allPhotos.first
         var body = ""
-        body += "<header class=\"cover\">"
-        if let cover {
-            body += "<img class=\"cover-img\" src=\"\(attr(photoPath(cover)))\" alt=\"\(attr(cover.altText))\">"
+        if book.theme == .polaroid {
+            body += "<header class=\"pcover\">"
+            if let cover {
+                body += "<figure class=\"print big\"><img src=\"\(attr(photoPath(cover)))\" alt=\"\(attr(cover.altText))\"><figcaption>\(text(book.dateRange))</figcaption></figure>"
+            }
+            body += "<h1 \(editable("title"))>\(text(book.title))</h1></header>"
+        } else {
+            body += "<header class=\"cover\">"
+            if let cover {
+                body += "<img class=\"cover-img\" src=\"\(attr(photoPath(cover)))\" alt=\"\(attr(cover.altText))\">"
+            }
+            body += "<div class=\"cover-shade\"></div><div class=\"cover-text\">"
+            body += "<p class=\"kicker\">\(text(book.dateRange))</p>"
+            body += "<h1 \(editable("title"))>\(text(book.title))</h1></div></header>"
         }
-        body += "<div class=\"cover-shade\"></div><div class=\"cover-text\">"
-        body += "<p class=\"kicker\">\(text(book.dateRange))</p>"
-        body += "<h1 \(editable("title"))>\(text(book.title))</h1></div></header>"
         body += "<main>"
         body += "<p class=\"intro\" \(editable("intro"))>\(text(book.intro))</p>"
         if book.sections.count > 1 {
@@ -81,6 +89,20 @@ public enum BookRenderer {
             body += "<h2 \(editable("section.\(section.id).heading"))>\(text(section.heading))</h2></div></div>"
             if !section.diary.isEmpty {
                 body += "<blockquote class=\"diary\" \(editable("section.\(section.id).diary"))>\(text(section.diary))</blockquote>"
+            }
+            if book.theme == .polaroid {
+                body += "<div class=\"board\">"
+                for photo in photos {
+                    body += "<figure class=\"print\">"
+                    body += "<img loading=\"lazy\" decoding=\"async\" src=\"\(attr(photoPath(photo)))\" alt=\"\(attr(photo.altText))\">"
+                    body += "<figcaption \(editable("photo.\(photo.id.description).caption"))>\(text(photo.caption))</figcaption>"
+                    if options.guestEndpoint != nil {
+                        body += "<button class=\"heart\" data-photo=\"\(attr(photo.id.description))\" aria-label=\"Love this photo\">\u{2661}<span></span></button>"
+                    }
+                    body += "</figure>"
+                }
+                body += "</div></section>"
+                continue
             }
             for (rowIndex, row) in rows(for: photos).enumerated() {
                 let kind = row.count == 1 ? (rowIndex == 0 ? "hero" : "single") : "pair"
@@ -105,7 +127,11 @@ public enum BookRenderer {
             <p class="hint">Were you there? Add a memory, or tap \u{2661} on your favorites.</p><ul id="notes"></ul>
             <form id="note-form"><input id="note-name" maxlength="40" placeholder="Your name" required>
             <textarea id="note-text" maxlength="500" rows="3" placeholder="A memory from the trip" required></textarea>
-            <button type="submit">Add note</button></form></section>
+            <button type="submit">Add note</button></form>
+            <div class="addphotos"><h3>Were you there too?</h3>
+            <p class="hint">Add your photos from the trip. The owner's next update picks the best ones and leaves out repeats.</p>
+            <label class="upload">Add your photos<input id="guest-photos" type="file" accept="image/jpeg,image/heic" multiple></label>
+            <p id="upload-status" class="hint" aria-live="polite"></p></div></section>
             """
         }
         body += "</main><footer><p>\(text(options.footer))</p></footer>"
@@ -125,6 +151,7 @@ public enum BookRenderer {
         <meta property="og:description" content="\(attr(book.intro))">
         \(cover.map { "<meta property=\"og:image\" content=\"\(attr(photoPath($0)))\">" } ?? "")
         <meta name="twitter:card" content="summary_large_image">
+        \(book.theme == .polaroid ? "<link rel=\"stylesheet\" href=\"https://fonts.googleapis.com/css2?family=Caveat:wght@500;700&display=swap\">" : "")
         <style>\(css)</style></head>
         <body class="theme-\(book.theme.rawValue)">\(body)
         <script>\(config)\(script)</script></body></html>
@@ -201,6 +228,10 @@ public enum BookRenderer {
     .guestbook li:last-child { border-bottom:0; }
     .guestbook form { display:grid; gap:10px; max-width:560px; }
     .guestbook input, .guestbook textarea { font:inherit; padding:11px 13px; border-radius:10px; border:1px solid var(--line); background:var(--paper); color:var(--ink); }
+    .addphotos { margin-top:28px; padding-top:22px; border-top:1px solid var(--line); }
+    .addphotos h3 { font-family:var(--serif); font-size:22px; margin:0; }
+    .upload { display:inline-block; font-weight:600; padding:10px 20px; border-radius:999px; border:1.5px solid var(--accent); color:var(--accent); cursor:pointer; }
+    .upload input { display:none; }
     .guestbook button { justify-self:start; font:inherit; font-weight:600; padding:10px 20px; border:0; border-radius:999px; background:var(--accent); color:#fff; cursor:pointer; }
     footer { text-align:center; color:var(--faint); font-size:13px; letter-spacing:.04em; padding:56px 20px 64px; }
     .lightbox { position:fixed; inset:0; background:rgba(0,0,0,.94); display:flex; align-items:center; justify-content:center; z-index:10; cursor:zoom-out; }
@@ -229,12 +260,34 @@ public enum BookRenderer {
       .chapter { page-break-before:always; padding-top:0; }
       .row { break-inside:avoid; }
     }
-    body.theme-scrapbook { --paper:#ece3d4; }
-    .theme-scrapbook figure { background:#fff; padding:12px 12px 6px; box-shadow:0 8px 22px rgba(0,0,0,.14); border-radius:2px; }
-    .theme-scrapbook .row figure:nth-child(odd) { transform:rotate(-1.1deg); }
-    .theme-scrapbook .row figure:nth-child(even) { transform:rotate(.9deg); }
-    .theme-scrapbook figure img { border-radius:0; }
-    .theme-scrapbook figcaption { font-family:"Bradley Hand","Segoe Print","Comic Sans MS",cursive; font-size:18px; color:#3a3530; text-align:center; padding:10px 4px 8px; }
+    /* Polaroid theme: instant prints pinned to a board. Apple devices use their
+       built-in handwriting fonts; others load Caveat. */
+    body.theme-polaroid { --paper:#efe8dc; --hand:"Bradley Hand","Noteworthy","Caveat","Segoe Print",cursive; background:var(--paper) radial-gradient(rgba(0,0,0,.035) 1px, transparent 1px) 0 0 / 14px 14px; }
+    @media (prefers-color-scheme: dark) { body.theme-polaroid { --paper:#23201c; } }
+    .pcover { max-width:1040px; margin:0 auto; padding:56px 20px 8px; display:grid; justify-items:center; gap:22px; text-align:center; }
+    .pcover h1 { font-family:var(--hand); font-weight:700; font-size:clamp(40px, 7vw, 76px); line-height:1.05; color:var(--ink); max-width:16ch; }
+    .theme-polaroid .print { background:#fdfcf8; padding:14px 14px 0; box-shadow:0 1px 2px rgba(0,0,0,.12), 0 10px 26px rgba(0,0,0,.16); border-radius:2px; position:relative; }
+    .theme-polaroid .print img { aspect-ratio:1 / 1; object-fit:cover; border-radius:0; filter:saturate(.9) contrast(.97) sepia(.07) brightness(1.02); }
+    .theme-polaroid .print figcaption { font-family:var(--hand); font-size:22px; line-height:1.2; color:#34302b; text-align:center; min-height:62px; padding:12px 6px 14px; display:block; }
+    .theme-polaroid .print figcaption:empty { display:block; }
+    .theme-polaroid .print.big { width:min(520px, 86vw); transform:rotate(-2deg); }
+    .theme-polaroid .print.big figcaption { font-size:26px; }
+    .board { display:grid; grid-template-columns:repeat(3, 1fr); gap:34px 26px; padding:10px 6px 20px; }
+    .board .print:nth-child(4n+1) { transform:rotate(-2.2deg); }
+    .board .print:nth-child(4n+2) { transform:rotate(1.6deg) translateY(10px); }
+    .board .print:nth-child(4n+3) { transform:rotate(-0.8deg) translateY(-6px); }
+    .board .print:nth-child(4n) { transform:rotate(2.4deg); }
+    .board .print:nth-child(3n+1)::before { content:""; position:absolute; top:-12px; left:50%; width:84px; height:26px; transform:translateX(-50%) rotate(-3deg); background:rgba(244,232,196,.78); box-shadow:0 1px 2px rgba(0,0,0,.08); }
+    .theme-polaroid .chapter h2, .theme-polaroid .number { font-family:var(--hand); }
+    .theme-polaroid .diary { font-family:var(--hand); font-style:normal; font-size:clamp(22px, 2.6vw, 27px); }
+    .theme-polaroid .intro { font-family:var(--hand); font-size:clamp(24px, 3vw, 30px); text-align:center; margin-left:auto; margin-right:auto; }
+    .theme-polaroid .heart { top:22px; right:22px; }
+    @media (max-width: 640px) {
+      .board { grid-template-columns:repeat(2, 1fr); gap:24px 16px; }
+      .theme-polaroid .print { padding:9px 9px 0; }
+      .theme-polaroid .print figcaption { font-size:18px; min-height:46px; padding:8px 4px 10px; }
+    }
+    @media print { .board .print { break-inside:avoid; } }
     """
 
     static let script = """
@@ -276,6 +329,23 @@ public enum BookRenderer {
             btn.classList.add('on');
             fetch(cfg.guest + '/hearts', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ photo: btn.dataset.photo }) })
               .then(function(r){ return r.json(); }).then(render).catch(function(){});
+          });
+        });
+        var picker = document.getElementById('guest-photos');
+        if (picker) picker.addEventListener('change', function(){
+          var files = Array.prototype.slice.call(picker.files || []).slice(0, 30);
+          var status = document.getElementById('upload-status'); var done = 0, failed = 0;
+          if (!files.length) return;
+          status.textContent = 'Adding ' + files.length + (files.length === 1 ? ' photo…' : ' photos…');
+          files.reduce(function(chain, file, i){
+            return chain.then(function(){
+              var name = 'g' + Date.now().toString(36) + i;
+              return fetch(cfg.guest + '/photos/' + name, { method:'PUT', headers:{'Content-Type': file.type || 'application/octet-stream'}, body:file })
+                .then(function(r){ if (r.ok) done++; else failed++; }).catch(function(){ failed++; });
+            });
+          }, Promise.resolve()).then(function(){
+            status.textContent = done ? ('Thanks! ' + done + (done === 1 ? ' photo' : ' photos') + ' added.' + (failed ? ' ' + failed + ' could not be added.' : '')) : 'Those photos could not be added.';
+            picker.value = '';
           });
         });
         document.getElementById('note-form').addEventListener('submit', function(e){

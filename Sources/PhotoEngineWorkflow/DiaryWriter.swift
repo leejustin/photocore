@@ -274,6 +274,13 @@ public enum TripBookComposer {
 
         let sections = zip(chapters, request.chapters).map { chapter, requested -> BookSection in
             let words = sectionText[chapter.id] ?? fallbackSections[chapter.id]
+            // The same caption twice in a chapter reads like a mistake; repeats stay blank.
+            var usedCaptions = Set<String>()
+            func distinct(_ caption: String) -> String {
+                let key = caption.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
+                guard !key.isEmpty else { return caption }
+                return usedCaptions.insert(key).inserted ? caption : ""
+            }
             return BookSection(
                 id: chapter.id,
                 heading: words?.heading ?? "",
@@ -287,7 +294,7 @@ public enum TripBookComposer {
                         id: facts.id,
                         fileName: facts.fileName,
                         label: words?.label ?? "",
-                        caption: words?.caption ?? "",
+                        caption: distinct(words?.caption ?? ""),
                         instagramCaption: words?.instagram_caption ?? "",
                         altText: words?.alt_text ?? "",
                         isPortrait: facts.isPortraitOrientation

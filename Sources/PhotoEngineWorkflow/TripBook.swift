@@ -84,8 +84,25 @@ public struct TripBook: Codable, Sendable, Equatable {
 public enum BookTheme: String, Codable, Sendable, CaseIterable {
     /// A clean online photobook: the default.
     case book
-    /// Polaroid frames and handwritten captions, opt-in.
-    case scrapbook
+    /// Instant prints pinned to a board, with handwritten captions.
+    case polaroid
+
+    /// Books saved before the Polaroid theme called it "scrapbook".
+    public init(from decoder: Decoder) throws {
+        let raw = try decoder.singleValueContainer().decode(String.self)
+        self = raw == "scrapbook" ? .polaroid : (BookTheme(rawValue: raw) ?? .book)
+    }
+
+    public init?(name: String) {
+        self.init(rawValue: name == "scrapbook" ? "polaroid" : name)
+    }
+
+    public var displayName: String {
+        switch self {
+        case .book: "Book"
+        case .polaroid: "Polaroids"
+        }
+    }
 }
 
 /// Edits the owner made on the page. Kept apart from generated text so that a

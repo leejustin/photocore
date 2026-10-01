@@ -10,6 +10,8 @@ struct TripRunView: View {
     @State private var pendingSetAside: SetAsidePlan?
     @State private var message: String?
     @State private var planning = false
+    @State private var showingPolaroids = false
+    @State private var showingReel = false
 
     private var run: TripRun { queue.run(for: trip) }
 
@@ -32,6 +34,8 @@ struct TripRunView: View {
             if stage == .ready, LaunchOptions.autoSwipe, !run.openMoments.isEmpty { showingSwipe = true }
         }
         .sheet(isPresented: $showingSwipe) { SwipeReviewView(run: run) }
+        .sheet(isPresented: $showingPolaroids) { PolaroidSheet(run: run) }
+        .sheet(isPresented: $showingReel) { ReelSheet(run: run) }
         .alert(setAsideTitle, isPresented: Binding(get: { pendingSetAside != nil }, set: { if !$0 { pendingSetAside = nil } }), presenting: pendingSetAside) { plan in
             Button("Set aside \(plan.eligible.count) photos") {
                 Task {
@@ -126,6 +130,7 @@ struct TripRunView: View {
                     .buttonStyle(.plain)
                 }
                 KeeperGrid(run: run)
+                makeSomething
                 FinishCard(run: run)
                 othersSection
             }
@@ -154,6 +159,29 @@ struct TripRunView: View {
             .padding(.vertical, 12)
             .background(.ultraThinMaterial)
         }
+    }
+
+    /// Free things to make from the keepers, all on this iPhone.
+    private var makeSomething: some View {
+        HStack(spacing: 12) {
+            makeTile("Polaroids", "photo.on.rectangle.angled", "Prints to save or share") { showingPolaroids = true }
+            makeTile("Highlight reel", "film", "A short video of the trip") { showingReel = true }
+        }
+        .disabled(run.keepers.isEmpty)
+    }
+
+    private func makeTile(_ title: String, _ symbol: String, _ detail: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            VStack(alignment: .leading, spacing: 8) {
+                Image(systemName: symbol).font(.title2).foregroundStyle(Color.accentColor)
+                Text(title).font(.headline).foregroundStyle(Color.ink)
+                Text(detail).font(.caption).foregroundStyle(Color.ink.opacity(0.6))
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(14)
+            .background(Color.ink.opacity(0.05), in: .rect(cornerRadius: 16))
+        }
+        .buttonStyle(.plain)
     }
 
     private var summary: some View {

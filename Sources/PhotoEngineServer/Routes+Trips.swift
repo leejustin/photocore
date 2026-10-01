@@ -75,7 +75,7 @@ func registerTripRoutes(_ router: Router<BasicRequestContext>, env: ServerEnviro
     router.post("v2/trips") { request, context in
         let body = try await request.decode(as: CreateTripBody.self, context: context)
         let tone = DiaryTone(rawValue: body.tone ?? "warm") ?? .warm
-        let theme = BookTheme(rawValue: body.theme ?? "book") ?? .book
+        let theme = BookTheme(name: body.theme ?? "book") ?? .book
         let title = body.title.map { String($0.prefix(120)) }
         let context = TripContext(
             note: body.note.map { String($0.prefix(280)) },
@@ -268,7 +268,7 @@ private func bookFile(trips: TripStore, slug: String, relative: String) async th
     headers[.cacheControl] = ext == "jpg" ? "public, max-age=86400" : "no-cache"
     headers[HTTPField.Name("X-Content-Type-Options")!] = "nosniff"
     if ext == "html" {
-        headers[HTTPField.Name("Content-Security-Policy")!] = "default-src 'self'; img-src 'self' data:; style-src 'unsafe-inline'; script-src 'unsafe-inline'; connect-src 'self'; frame-ancestors 'none'"
+        headers[HTTPField.Name("Content-Security-Policy")!] = "default-src 'self'; img-src 'self' data: blob:; style-src 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; script-src 'unsafe-inline'; connect-src 'self'; frame-ancestors 'none'"
     }
     return APIJSON.bytes(data, headers: headers)
 }

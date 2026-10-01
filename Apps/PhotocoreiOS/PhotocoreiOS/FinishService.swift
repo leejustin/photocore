@@ -68,9 +68,9 @@ final class TripFinish {
         if let saved = BookStore.book(for: tripID) { stage = .done(book: saved.book, edit: saved.edit) }
     }
 
-    func finish(tripID: String, title: String?, note: String, events: [String], identifiers: [String], server: FinishServer) async {
+    func finish(tripID: String, title: String?, note: String, events: [String], theme: String, identifiers: [String], server: FinishServer) async {
         do {
-            var body: [String: Any] = ["calendarEvents": events]
+            var body: [String: Any] = ["calendarEvents": events, "theme": theme]
             if let title { body["title"] = title }
             if !note.trimmingCharacters(in: .whitespaces).isEmpty { body["note"] = note }
             let created: Created = try await call(server, "v2/trips", method: "POST", json: body)

@@ -11,7 +11,7 @@ enum BookCommand {
         let folder = URL(fileURLWithPath: folderPath, isDirectory: true).standardizedFileURL
         let output = URL(fileURLWithPath: option(arguments, "--output") ?? "./exports/\(folder.lastPathComponent)-book", isDirectory: true).standardizedFileURL
         let tone = DiaryTone(rawValue: option(arguments, "--tone") ?? "warm") ?? .warm
-        let theme = BookTheme(rawValue: option(arguments, "--theme") ?? "book") ?? .book
+        let theme = BookTheme(name: option(arguments, "--theme") ?? "book") ?? .book
         try FileManager.default.createDirectory(at: output, withIntermediateDirectories: true)
 
         var profile = ScoringProfile.default(for: .trip)

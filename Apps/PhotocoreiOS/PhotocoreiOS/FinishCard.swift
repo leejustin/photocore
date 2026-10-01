@@ -11,6 +11,7 @@ struct FinishCard: View {
     @State private var note = ""
     @State private var events: [String] = []
     @State private var reading: URL?
+    @State private var theme = "book"
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
@@ -62,6 +63,11 @@ struct FinishCard: View {
         case .idle:
             if let server {
                 TripContextPicker(trip: run.trip, note: $note, events: $events)
+                Picker("Style", selection: $theme) {
+                    Text("Book").tag("book")
+                    Text("Polaroids").tag("polaroid")
+                }
+                .pickerStyle(.segmented)
                 Button("Finish \(run.keepers.count) photos") { start(server) }
                 .buttonStyle(PrimaryButtonStyle())
                 .disabled(run.keepers.isEmpty)
@@ -105,7 +111,7 @@ struct FinishCard: View {
     private func start(_ server: FinishServer) {
         let ids = run.keepers.compactMap { run.identifier($0.id) }
         Task {
-            await finish.finish(tripID: run.trip.id, title: run.trip.place, note: note, events: events, identifiers: ids, server: server)
+            await finish.finish(tripID: run.trip.id, title: run.trip.place, note: note, events: events, theme: theme, identifiers: ids, server: server)
         }
     }
 }
