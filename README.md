@@ -18,7 +18,7 @@ Built and tested on branch `feat/consumer-trip-book` (see [the build plan](./out
 | iPhone app (`Apps/PhotocoreiOS`) | Trips found from capture dates, streamed cull, swipe review, Photos album, set aside and restore, finish card |
 | Trip book | Chapters by local day and place, diary and captions, owner edits, guest notes and hearts, Instagram pack |
 | Paid finish server | Trip upload, finish job, preview, public book pages, guest uploads |
-| Not built yet | Payments (StoreKit), accounts, publishing books to object storage, Android, a live Claude run |
+| Not built yet | Payments (StoreKit), accounts, publishing books to object storage, Android, a live Gemini or DeepSeek run |
 
 The original specifications are still useful background:
 
@@ -45,12 +45,14 @@ How it stays safe on a real camera roll:
 ## The trip book
 
 ```bash
-swift run photo-engine book /path/to/trip --tone warm --theme book --output ./exports/trip-book
+swift run photo-engine book /path/to/trip --tone warm --note "Sam's birthday weekend" --output ./exports/trip-book
 ```
 
 This culls the folder, reads scene labels, smart crops and place names for the keepers, writes the diary, renders finished photos, and writes `index.html` plus `instagram/` (1080 x 1350 carousel, 1080 x 1920 stories, `caption.txt`).
 
-The diary is written by Claude when `ANTHROPIC_API_KEY` (or `ANTHROPIC_AUTH_TOKEN`) is set, using `claude-opus-5-5` with structured output and server-side refusal fallbacks. Claude sees only the keepers' facts (place, time of day, scene labels, number of people) and 512-pixel thumbnails, never file names or the whole roll, and is told not to identify people or invent events. Without a key, on refusal, or on an outage, an offline writer produces plain captions from the same facts. Owner edits are stored apart from generated text, so regenerating never overwrites them.
+The diary writer is chosen in this order: `PHOTOCORE_WRITER` if set (`gemini`, `deepseek`, `apple` or `offline`); Gemini (`gemini-3.1-flash-lite`) when `GEMINI_API_KEY` is set; DeepSeek (`deepseek-flash`) when `DEEPSEEK_API_KEY` is set; Apple's model (Private Cloud Compute on iOS 27 and macOS 27, otherwise the on-device model); then the offline writer. `PHOTOCORE_WRITER_MODEL` overrides the hosted model name. Both hosted providers use their OpenAI-compatible chat API, read 512-pixel thumbnails, and cost about a cent per book at current prices. Measured on a real trip, Apple's small on-device model writes plain, label-like captions, so a hosted key is the better choice for paid books.
+
+The writer never invents the trip. It gets a list of facts, each with a source: place names from GPS, landmarks within about 150 m from MapKit (written as "near", never "visited"), sunrise and sunset computed from date and place, short signs read from the photos, scene labels, how many people appear, and anything the owner adds (`--note`, or calendar events in the app). A checker then reads every generated line. Names, numbers, things and event verbs ("arrived", "ate", "flew") must trace back to a fact. Lines that don't are replaced with plain text built from the facts, and the count is recorded in `book.json`. Owner edits are stored apart from generated text, so regenerating never overwrites them.
 
 Local time in the book follows a GPS place's time zone first, then the camera's recorded UTC offset. Cameras often stay on home time while traveling.
 
@@ -71,7 +73,7 @@ Local time in the book follows a GPS place's time zone first, then the camera's 
 Book pages are public to anyone with the unguessable link, so only expose the server where that is intended. Today that means the tailnet setup below. Publishing books to object storage behind a CDN is the planned production path.
 
 ```bash
-PHOTO_ENGINE_TOKEN=dev-token ANTHROPIC_API_KEY=... swift run photocore-server
+PHOTO_ENGINE_TOKEN=dev-token GEMINI_API_KEY=... swift run photocore-server
 Scripts/ios-app.sh -PhotocoreServerURL http://localhost:8787 -PhotocoreServerToken dev-token
 ```
 

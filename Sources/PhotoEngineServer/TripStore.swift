@@ -10,6 +10,7 @@ struct TripRecord: Codable, Sendable {
     var slug: String
     var ownerTokenHash: String
     var title: String?
+    var context: TripContext?
     var tone: DiaryTone
     var theme: BookTheme
     var createdAt: Date
@@ -77,13 +78,14 @@ actor TripStore {
     func bookFolder(_ id: String) -> URL { folder(id).appendingPathComponent("book", isDirectory: true) }
 
     /// Creates a trip and returns it with the owner token, which is shown once.
-    func create(title: String?, tone: DiaryTone, theme: BookTheme) throws -> (TripRecord, String) {
+    func create(title: String?, context: TripContext, tone: DiaryTone, theme: BookTheme) throws -> (TripRecord, String) {
         let token = Self.randomToken(length: 32)
         let record = TripRecord(
             id: UUID().uuidString.lowercased(),
             slug: Self.randomToken(length: 12),
             ownerTokenHash: Self.hash(token),
             title: title,
+            context: context,
             tone: tone,
             theme: theme,
             createdAt: Date()

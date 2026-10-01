@@ -54,6 +54,9 @@ public struct TripBook: Codable, Sendable, Equatable {
     /// Which writer produced the text, for regenerating later ("template", or a model id).
     public var writer: String
     public var theme: BookTheme
+    /// How many generated fields were replaced because they named something
+    /// the facts did not support.
+    public var groundingRejections: Int?
 
     public init(title: String, intro: String, dateRange: String, coverPhotoID: PhotoID?, sections: [BookSection], writer: String, theme: BookTheme) {
         self.title = title
@@ -216,6 +219,9 @@ public enum BookSectioner {
         let formatter = DateIntervalFormatter()
         formatter.dateStyle = .medium
         formatter.timeStyle = .none
+        // The trip's own time zone, not the device's: a Lisbon evening is not
+        // the previous day just because the book was made in California.
+        formatter.timeZone = facts.photos.first(where: { $0.captureDate != nil })?.localTimeZone ?? .current
         return formatter.string(from: first, to: last)
     }
 }

@@ -7,7 +7,7 @@ import PhotoEngineWorkflow
 import Testing
 
 /// Answers every request with a canned response and records the last request.
-final class MockAnthropic: URLProtocol, @unchecked Sendable {
+final class MockProvider: URLProtocol, @unchecked Sendable {
     nonisolated(unsafe) static var response: (Int, Data) = (200, Data())
     nonisolated(unsafe) static var lastRequest: URLRequest?
     nonisolated(unsafe) static var lastBody: Data?
@@ -39,7 +39,7 @@ final class MockAnthropic: URLProtocol, @unchecked Sendable {
 
     static func session() -> URLSession {
         let config = URLSessionConfiguration.ephemeral
-        config.protocolClasses = [MockAnthropic.self]
+        config.protocolClasses = [MockProvider.self]
         return URLSession(configuration: config)
     }
 }
@@ -109,50 +109,107 @@ struct TripBookTests {
         #expect(applied.allPhotos.map(\.caption) == ["First swim"])
     }
 
-    @Test("the Claude request carries facts, images, schema and fallbacks")
-    func claudeRequest() async throws {
-        let facts = Self.facts([(t0, "Alfama"), (t0.addingTimeInterval(60), "Alfama")], tz: 0)
-        let (request, byKey) = TripBookComposer.request(chapters: BookSectioner.chapters(for: facts), facts: facts)
-        let reply = DiaryText(title: "Two days in Alfama", intro: "Sun and sardines.", sections: [.init(id: "s1", heading: "Alfama", diary: "We walked.")],
-                              photos: byKey.keys.sorted().map { .init(key: $0, label: "Beach", caption: "Morning swim", instagram_caption: "Swim #lisbon", alt_text: "A beach.") })
-        let replyText = String(decoding: try JSONEncoder().encode(reply), as: UTF8.self)
-        let envelope: [String: Any] = ["stop_reason": "end_turn", "content": [["type": "thinking", "thinking": ""], ["type": "text", "text": replyText]]]
-        MockAnthropic.response = (200, try JSONSerialization.data(withJSONObject: envelope))
-        let writer = ClaudeDiaryWriter(credential: .apiKey("test-key"), session: MockAnthropic.session())
-        let thumbs = Dictionary(uniqueKeysWithValues: byKey.keys.map { ($0, Data([0xFF, 0xD8])) })
-        let text = try await writer.write(request, thumbnails: thumbs)
-        #expect(text == reply)
-
-        let sent = try #require(MockAnthropic.lastRequest)
-        #expect(sent.value(forHTTPHeaderField: "x-api-key") == "test-key")
-        #expect(sent.value(forHTTPHeaderField: "anthropic-version") == "2023-06-01")
-        #expect(sent.value(forHTTPHeaderField: "anthropic-beta") == "server-side-fallback-2026-07-01")
-        let body = try #require(MockAnthropic.lastBody.flatMap { try JSONSerialization.jsonObject(with: $0) as? [String: Any] })
-        #expect(body["model"] as? String == "claude-opus-5-5")
-        #expect(body["fallbacks"] as? String == "default")
-        let config = try #require(body["output_config"] as? [String: Any])
-        #expect((config["format"] as? [String: Any])?["type"] as? String == "json_schema")
-        #expect(body["thinking"] == nil, "Opus 5.5 rejects a disabled thinking config; omit it")
-        let content = try #require(((body["messages"] as? [[String: Any]])?.first?["content"]) as? [[String: Any]])
-        #expect(content.filter { $0["type"] as? String == "image" }.count == 2)
-        let factsText = content.first?["text"] as? String ?? ""
-        #expect(!factsText.contains("IMG_"), "file names leaked to the model")
+    static func reply(_ text: DiaryText) throws -> Data {
+        let content = String(decoding: try JSONEncoder().encode(text), as: UTF8.self)
+        return try JSONSerialization.data(withJSONObject: ["choices": [["message": ["role": "assistant", "content": content]]]])
     }
 
-    @Test("a refusal or outage falls back to the offline writer")
-    func fallback() async throws {
-        MockAnthropic.response = (200, try JSONSerialization.data(withJSONObject: ["stop_reason": "refusal", "stop_details": ["category": "cyber"], "content": []]))
-        let facts = Self.facts([(t0, "Alfama")], tz: 0)
-        let writer = ClaudeDiaryWriter(credential: .authToken("tok"), session: MockAnthropic.session())
-        let book = await TripBookComposer.compose(facts: facts, writer: writer)
-        #expect(book.writer == "template")
-        #expect(book.allPhotos.count == 1)
-        #expect(MockAnthropic.lastRequest?.value(forHTTPHeaderField: "Authorization") == "Bearer tok")
-        #expect(MockAnthropic.lastRequest?.value(forHTTPHeaderField: "anthropic-beta") == "server-side-fallback-2026-07-01,oauth-2025-04-20")
+    @Test("the DeepSeek and Gemini writer sends facts and images and parses JSON")
+    func hostedWriter() async throws {
+        let facts = Self.facts([(t0, "Alfama"), (t0.addingTimeInterval(60), "Alfama")], tz: 0)
+        let (request, byKey) = TripBookComposer.request(chapters: BookSectioner.chapters(for: facts), facts: facts)
+        let reply = DiaryText(title: "Alfama", intro: "Two photos.", sections: [.init(id: "s1", heading: "Alfama", diary: "Beach and food.")],
+                              photos: byKey.keys.sorted().map { .init(key: $0, label: "Beach", caption: "Beach", instagram_caption: "Beach #beach", alt_text: "A beach.") })
+        MockProvider.response = (200, try Self.reply(reply))
+        for provider in [OpenAICompatibleDiaryWriter.Provider.deepseek, .gemini] {
+            let writer = OpenAICompatibleDiaryWriter(provider: provider, apiKey: "k-\(provider.name)", session: MockProvider.session())
+            let thumbs = Dictionary(uniqueKeysWithValues: byKey.keys.map { ($0, Data([0xFF, 0xD8])) })
+            #expect(try await writer.write(request, thumbnails: thumbs) == reply)
+            let sent = try #require(MockProvider.lastRequest)
+            #expect(sent.url?.absoluteString == provider.baseURL.absoluteString + "/chat/completions")
+            #expect(sent.value(forHTTPHeaderField: "Authorization") == "Bearer k-\(provider.name)")
+            let body = try #require(MockProvider.lastBody.flatMap { try JSONSerialization.jsonObject(with: $0) as? [String: Any] })
+            #expect(body["model"] as? String == provider.model)
+            #expect((body["response_format"] as? [String: Any])?["type"] as? String == "json_object")
+            let messages = try #require(body["messages"] as? [[String: Any]])
+            let user = try #require(messages.last?["content"] as? [[String: Any]])
+            #expect(user.filter { $0["type"] as? String == "image_url" }.count == 2)
+            let sentText = user.first?["text"] as? String ?? ""
+            #expect(!sentText.contains("IMG_"), "file names leaked to the model: \(sentText.components(separatedBy: "IMG_").first?.suffix(120) ?? "")")
+        }
+    }
 
-        MockAnthropic.response = (529, Data("{\"type\":\"error\"}".utf8))
-        let again = await TripBookComposer.compose(facts: facts, writer: ClaudeDiaryWriter(credential: .apiKey("k"), session: MockAnthropic.session()))
-        #expect(again.writer == "template")
+    @Test("a fenced JSON reply still parses")
+    func fencedReply() throws {
+        let text = DiaryText(title: "T", intro: "I", sections: [], photos: [])
+        let inner = String(decoding: try JSONEncoder().encode(text), as: UTF8.self)
+        let data = try JSONSerialization.data(withJSONObject: ["choices": [["message": ["content": "```json\n" + inner + "\n```"]]]])
+        #expect(try OpenAICompatibleDiaryWriter.parse(data) == text)
+    }
+
+    @Test("an outage falls back to the offline writer")
+    func fallback() async throws {
+        MockProvider.response = (529, Data("{}".utf8))
+        let facts = Self.facts([(t0, "Alfama")], tz: 0)
+        let writer = OpenAICompatibleDiaryWriter(provider: .gemini, apiKey: "k", session: MockProvider.session())
+        let book = await TripBookComposer.compose(facts: facts, writer: writer)
+        #expect(book.writer == "offline")
+        #expect(book.allPhotos.count == 1)
+    }
+
+    @Test("invented names, numbers, things and events are replaced with facts")
+    func grounding() async throws {
+        let facts = Self.facts([(t0, "Alfama"), (t0.addingTimeInterval(60), "Alfama")], tz: 0)
+        let (request, byKey) = TripBookComposer.request(chapters: BookSectioner.chapters(for: facts), facts: facts, context: TripContext(note: "Sam's birthday weekend"))
+        let check = GroundingCheck(facts: request.facts)
+        #expect(check.accepts("A beach in Alfama for Sam's birthday."))
+        #expect(check.accepts("Food on the beach, a good evening with friends."))
+        #expect(!check.accepts("Dinner at Cervejaria Ramiro."), "an invented restaurant passed")
+        #expect(!check.accepts("We arrived after a 12 hour flight."), "an invented flight passed")
+        #expect(!check.accepts("The stars came out over the balcony."), "invented objects passed")
+        #expect(!check.accepts("We ate sardines."), "an invented meal passed")
+
+        let invented = DiaryText(
+            title: "Lisbon with Maria", intro: "Beach and food in Alfama.",
+            sections: [.init(id: "s1", heading: "Alfama", diary: "We arrived after a long flight and ate sardines.")],
+            photos: byKey.keys.sorted().map { .init(key: $0, label: "Beach", caption: "Food on the beach", instagram_caption: "#beach", alt_text: "A beach.") }
+        )
+        let (checked, rejected) = TripBookComposer.ground(invented, request: request)
+        #expect(rejected == 2)
+        #expect(!checked.title.contains("Maria"))
+        #expect(!checked.sections[0].diary.contains("sardines"))
+        #expect(checked.photos.allSatisfy { $0.caption == "Food on the beach" })
+    }
+
+    @Test("sun times land near the published values")
+    func sunTimes() throws {
+        // Lisbon, 21 June 2026: sunrise about 05:12 UTC, sunset about 20:05 UTC.
+        let day = ISO8601DateFormatter().date(from: "2026-06-21T12:00:00Z")!
+        let times = try #require(SunTimes.compute(date: day, latitude: 38.72, longitude: -9.14))
+        let utc = Calendar(identifier: .gregorian)
+        var c = utc; c.timeZone = TimeZone(identifier: "UTC")!
+        #expect(abs(c.component(.hour, from: times.sunrise) * 60 + c.component(.minute, from: times.sunrise) - (5 * 60 + 12)) <= 6)
+        #expect(abs(c.component(.hour, from: times.sunset) * 60 + c.component(.minute, from: times.sunset) - (20 * 60 + 5)) <= 6)
+        #expect(SunTimes.phrase(for: times.sunset.addingTimeInterval(600), latitude: 38.72, longitude: -9.14) == "around sunset")
+        #expect(SunTimes.phrase(for: day, latitude: 38.72, longitude: -9.14) == nil)
+        #expect(SunTimes.compute(date: day, latitude: 80, longitude: 0) == nil, "midnight sun has no sunset")
+    }
+
+    @Test("only sign-like text is kept from photos")
+    func signText() {
+        #expect(PhotoTextReader.isSignLike("PASTÉIS DE BELÉM"))
+        #expect(!PhotoTextReader.isSignLike("12:45"))
+        #expect(!PhotoTextReader.isSignLike("ok"))
+        #expect(!PhotoTextReader.isSignLike(String(repeating: "word ", count: 12)))
+    }
+
+    @Test("the writer choice follows configuration")
+    func writerChoice() {
+        #expect(DiaryWriters.make(environment: ["PHOTOCORE_WRITER": "offline"]).name == "offline")
+        #expect(DiaryWriters.make(environment: ["GEMINI_API_KEY": "g", "DEEPSEEK_API_KEY": "d"]).name == "gemini:gemini-3.1-flash-lite")
+        #expect(DiaryWriters.make(environment: ["PHOTOCORE_WRITER": "deepseek", "DEEPSEEK_API_KEY": "d"]).name == "deepseek:deepseek-flash")
+        #expect(DiaryWriters.make(environment: ["PHOTOCORE_WRITER": "gemini", "GEMINI_API_KEY": "g", "PHOTOCORE_WRITER_MODEL": "gemini-x"]).name == "gemini:gemini-x")
+        #expect(DiaryWriters.make(environment: ["PHOTOCORE_WRITER": "deepseek"]).name == "offline", "a missing key must not crash")
     }
 
     @Test("the page escapes text and only shows guest tools when enabled")

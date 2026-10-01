@@ -51,7 +51,11 @@ struct PhotoEngineCommand {
                 do { try await BookCommand.run(arguments: rest) } catch { outcome.error = error }
                 outcome.done.signal()
             }
-            outcome.done.wait()
+            // Keep the main run loop turning: the geocoder and MapKit deliver
+            // their results on the main thread.
+            while outcome.done.wait(timeout: .now()) == .timedOut {
+                RunLoop.main.run(mode: .default, before: Date().addingTimeInterval(0.05))
+            }
             if let error = outcome.error { throw error }
         case "compare-render":
             guard arguments.count >= 2 else { throw PhotoEngineError.invalidArgument("compare-render requires a manifest path") }
@@ -256,7 +260,7 @@ struct PhotoEngineCommand {
           photo-engine run <folder> [--profile everyday|groupEvent|trip|creative] [--cull gentle|balanced|highlights] [--target N | --keep-percent P] [--style natural|warm|vibrant|soft|blackAndWhite] [--intensity 0...1] [--size full|compact] [--base raw|camera] [--output folder]
           photo-engine calibrate <folder> [--sheet out.jpg]
           photo-engine eval <folder> [--profile everyday|groupEvent|trip|creative] [--cull gentle|balanced|highlights] [--target N | --keep-percent P] [--limit N] [--output folder]
-          photo-engine book <folder> [--output folder] [--tone warm|dry|minimal] [--theme book|scrapbook] [--keep-percent P] [--offline]
+          photo-engine book <folder> [--output folder] [--tone warm|dry|minimal] [--theme book|scrapbook] [--keep-percent P] [--note \"what this trip was\"] [--offline]
           photo-engine compare-render <manifest.json> [--count 6] [--sheet out.jpg]
           photo-engine serve [--port 8787]
           photo-engine smoke-test

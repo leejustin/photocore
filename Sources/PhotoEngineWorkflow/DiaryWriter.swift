@@ -10,7 +10,8 @@ public enum DiaryTone: String, Codable, Sendable, CaseIterable {
 }
 
 /// Everything a writer may use. Photos are referred to by short keys ("p1") so
-/// the writer never sees file names or identifiers.
+/// the writer never sees file names or identifiers. `facts` is the only source
+/// of names, places and numbers.
 public struct DiaryRequest: Codable, Sendable {
     public struct Photo: Codable, Sendable {
         public var key: String
@@ -18,6 +19,7 @@ public struct DiaryRequest: Codable, Sendable {
         public var labels: [String]
         public var people: Int
         public var orientation: String
+        public var text: [String]
     }
 
     public struct Chapter: Codable, Sendable {
@@ -25,17 +27,20 @@ public struct DiaryRequest: Codable, Sendable {
         public var place: String?
         public var when: String
         public var day: String
+        public var nearby: [String]
+        public var sun: String?
         public var photos: [Photo]
     }
 
     public var dateRange: String
     public var places: [String]
     public var chapters: [Chapter]
+    public var facts: [GroundFact]
     public var tone: DiaryTone
     public var voiceExamples: [String]
 }
 
-/// What a writer returns. Field names match the JSON schema sent to Claude.
+/// What a writer returns. Field names are the JSON keys every provider is asked for.
 public struct DiaryText: Codable, Sendable, Equatable {
     public struct Section: Codable, Sendable, Equatable {
         public var id: String
@@ -83,38 +88,92 @@ public protocol DiaryWriter: Sendable {
     func write(_ request: DiaryRequest, thumbnails: [String: Data]) async throws -> DiaryText
 }
 
-/// Builds the book: chapters from the facts, text from a writer, and a fallback
-/// to the offline writer if the model is unavailable or declines.
+/// The instructions every model gets, whichever provider runs it.
+public enum DiaryInstructions {
+    public static let system = """
+    You write the words for a shared online photobook of someone's trip: a title, a short intro, a diary entry for each chapter, and captions for each photo.
+
+    Use only the facts you are given. Every name of a place, landmark, business, event or person, every number, and every thing you mention must come from the facts list. Describe what the scene labels say the photos show. Do not invent travel, arrivals, flights, meals, weather, feelings, activities or objects that the facts do not list. If a photo has few facts, keep its caption short and plain. Landmarks marked "near" were close by; say "near", never that someone visited them. Never name or identify a person; say "friends" or "we", or describe what people are doing.
+
+    Keep it light and specific. Diary entries are one to three sentences in first person plural. Captions are one short line. Grid labels are two to four words. Instagram captions are one line plus up to four hashtags. Alt text plainly describes what is visible.
+
+    Match the requested tone: warm is affectionate, dry is understated with a little wit, minimal is sparse and factual. If voice examples are given, match their style without copying them.
+    """
+
+    public static let jsonShape = """
+    Reply with JSON only, in this shape:
+    {"title": string, "intro": string,
+     "sections": [{"id": chapter id, "heading": string, "diary": string}],
+     "photos": [{"key": photo key, "label": string, "caption": string, "instagram_caption": string, "alt_text": string}]}
+    Include one section for every chapter id and one photo entry for every photo key.
+    """
+}
+
+/// Builds the book: chapters and grounded facts, text from a writer, every field
+/// checked against the facts, and the offline writer as the fallback.
 public enum TripBookComposer {
-    public static func request(chapters: [BookSectioner.Chapter], facts: TripFacts, tone: DiaryTone = .warm, voiceExamples: [String] = []) -> (DiaryRequest, [String: PhotoFacts]) {
+    public static func request(
+        chapters: [BookSectioner.Chapter],
+        facts: TripFacts,
+        enrichment: [PhotoID: PhotoEnrichment] = [:],
+        context: TripContext = .empty,
+        tone: DiaryTone = .warm,
+        voiceExamples: [String] = []
+    ) -> (DiaryRequest, [String: PhotoFacts]) {
         var byKey: [String: PhotoFacts] = [:]
+        var grounded: [GroundFact] = []
+        func add(_ source: GroundFact.Source, _ text: String, scope: String? = nil) {
+            grounded.append(GroundFact(id: "f\(grounded.count + 1)", source: source, text: text, scope: scope))
+        }
+        let range = BookSectioner.dateRange(for: facts)
+        if !range.isEmpty { add(.time, "Trip dates: \(range)") }
+        if let note = context.note?.trimmingCharacters(in: .whitespacesAndNewlines), !note.isEmpty { add(.owner, "The owner says: \(note)") }
+        for event in context.calendarEvents { add(.calendar, "On the owner's calendar: \(event)") }
+
         var counter = 0
-        let requestChapters = chapters.map { chapter in
+        let requestChapters = chapters.map { chapter -> DiaryRequest.Chapter in
             var timeFormat = Date.FormatStyle().hour().minute()
             timeFormat.timeZone = chapter.timeZone
-            return DiaryRequest.Chapter(
-                id: chapter.id,
-                place: chapter.place?.display,
-                when: BookSectioner.momentLine(for: chapter.start, timeZone: chapter.timeZone),
-                day: BookSectioner.dayLine(for: chapter.start, timeZone: chapter.timeZone),
-                photos: chapter.photos.map { photo in
-                    counter += 1
-                    let key = "p\(counter)"
-                    byKey[key] = photo
-                    return DiaryRequest.Photo(
-                        key: key,
-                        time: photo.captureDate.map { $0.formatted(timeFormat) } ?? "",
-                        labels: photo.labels.map(\.readable),
-                        people: photo.faceCount,
-                        orientation: photo.isPortraitOrientation ? "portrait" : "landscape"
-                    )
-                }
-            )
+            let when = BookSectioner.momentLine(for: chapter.start, timeZone: chapter.timeZone)
+            let day = BookSectioner.dayLine(for: chapter.start, timeZone: chapter.timeZone)
+            add(.time, "\(day), \(when)", scope: chapter.id)
+            if let place = chapter.place?.display { add(.location, "Place: \(place)", scope: chapter.id) }
+            var nearby: [String] = []
+            for photo in chapter.photos {
+                for name in enrichment[photo.id]?.nearby ?? [] where !nearby.contains(name) { nearby.append(name) }
+            }
+            for name in nearby.prefix(3) { add(.nearby, "Near \(name)", scope: chapter.id) }
+            var sun: String?
+            if let first = chapter.photos.first(where: { $0.latitude != nil }), let date = first.captureDate,
+               let lat = first.latitude, let lon = first.longitude {
+                sun = SunTimes.phrase(for: date, latitude: lat, longitude: lon)
+                if let sun { add(.sun, "Photos taken \(sun)", scope: chapter.id) }
+            }
+            let photos = chapter.photos.map { photo -> DiaryRequest.Photo in
+                counter += 1
+                let key = "p\(counter)"
+                byKey[key] = photo
+                let labels = photo.labels.map(\.readable)
+                if !labels.isEmpty { add(.scene, "Photo \(key) shows: " + labels.joined(separator: ", "), scope: key) }
+                if photo.faceCount > 0 { add(.people, "Photo \(key): \(photo.faceCount) \(photo.faceCount == 1 ? "person" : "people")", scope: key) }
+                let text = enrichment[photo.id]?.text ?? []
+                for line in text { add(.photoText, "Photo \(key) has the words: \(line)", scope: key) }
+                return DiaryRequest.Photo(
+                    key: key,
+                    time: photo.captureDate.map { $0.formatted(timeFormat) } ?? "",
+                    labels: labels,
+                    people: photo.faceCount,
+                    orientation: photo.isPortraitOrientation ? "portrait" : "landscape",
+                    text: text
+                )
+            }
+            return DiaryRequest.Chapter(id: chapter.id, place: chapter.place?.display, when: when, day: day, nearby: Array(nearby.prefix(3)), sun: sun, photos: photos)
         }
         let request = DiaryRequest(
-            dateRange: BookSectioner.dateRange(for: facts),
+            dateRange: range,
             places: facts.places.map(\.display),
             chapters: requestChapters,
+            facts: grounded,
             tone: tone,
             voiceExamples: voiceExamples
         )
@@ -124,13 +183,15 @@ public enum TripBookComposer {
     public static func compose(
         facts: TripFacts,
         writer: any DiaryWriter,
+        enrichment: [PhotoID: PhotoEnrichment] = [:],
+        context: TripContext = .empty,
         thumbnail: (PhotoFacts) -> Data? = { _ in nil },
         tone: DiaryTone = .warm,
         voiceExamples: [String] = [],
         theme: BookTheme = .book
     ) async -> TripBook {
         let chapters = BookSectioner.chapters(for: facts)
-        let (request, byKey) = self.request(chapters: chapters, facts: facts, tone: tone, voiceExamples: voiceExamples)
+        let (request, byKey) = self.request(chapters: chapters, facts: facts, enrichment: enrichment, context: context, tone: tone, voiceExamples: voiceExamples)
         var thumbnails: [String: Data] = [:]
         for (key, photo) in byKey { thumbnails[key] = thumbnail(photo) }
 
@@ -142,7 +203,52 @@ public enum TripBookComposer {
             writerName = TemplateDiaryWriter().name
             text = TemplateDiaryWriter().text(for: request)
         }
-        return assemble(text: text, request: request, byKey: byKey, chapters: chapters, writer: writerName, theme: theme)
+        let (checked, rejected) = ground(text, request: request)
+        var book = assemble(text: checked, request: request, byKey: byKey, chapters: chapters, writer: writerName, theme: theme)
+        book.groundingRejections = rejected
+        return book
+    }
+
+    /// Replaces any field that names something outside the facts with the
+    /// offline writer's version of that field. Returns how many were replaced.
+    public static func ground(_ text: DiaryText, request: DiaryRequest) -> (DiaryText, Int) {
+        let fallback = TemplateDiaryWriter().text(for: request)
+        let extra = request.voiceExamples + request.chapters.flatMap { [$0.when, $0.day] }
+        let check = GroundingCheck(facts: request.facts, extra: extra)
+        var rejected = 0
+        func pick(_ value: String, _ safe: String) -> String {
+            if check.accepts(value), !isLabelList(value) { return value }
+            rejected += 1
+            return safe
+        }
+        let safeSections = Dictionary(fallback.sections.map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a })
+        let safePhotos = Dictionary(fallback.photos.map { ($0.key, $0) }, uniquingKeysWith: { a, _ in a })
+        var out = text
+        out.title = pick(text.title, fallback.title)
+        out.intro = pick(text.intro, fallback.intro)
+        out.sections = text.sections.map { section in
+            guard let safe = safeSections[section.id] else { return section }
+            return DiaryText.Section(id: section.id, heading: pick(section.heading, safe.heading), diary: pick(section.diary, safe.diary))
+        }
+        out.photos = text.photos.map { photo in
+            guard let safe = safePhotos[photo.key] else { return photo }
+            return DiaryText.Photo(
+                key: photo.key,
+                label: pick(photo.label, safe.label),
+                caption: pick(photo.caption, safe.caption),
+                instagram_caption: pick(photo.instagram_caption, safe.instagram_caption),
+                alt_text: pick(photo.alt_text, safe.alt_text)
+            )
+        }
+        return (out, rejected)
+    }
+
+    /// "light, candle, fire, flame, night sky": a model repeating its input
+    /// labels instead of writing a caption.
+    static func isLabelList(_ text: String) -> Bool {
+        let items = text.trimmingCharacters(in: CharacterSet(charactersIn: " .")).split(separator: ",")
+        guard items.count >= 3 else { return false }
+        return items.allSatisfy { $0.split(separator: " ").count <= 3 }
     }
 
     static func assemble(text: DiaryText, request: DiaryRequest, byKey: [String: PhotoFacts], chapters: [BookSectioner.Chapter], writer: String, theme: BookTheme) -> TripBook {
@@ -187,7 +293,7 @@ public enum TripBookComposer {
         )
     }
 
-    /// A 512-pixel JPEG for the model to look at, from the culling thumbnail or the source.
+    /// A 512-pixel JPEG for a model that looks at images.
     public static func thumbnailData(url: URL, maxPixel: Int = 512) -> Data? {
         guard let image = CGImage.photocoreThumbnail(url: url, maxPixel: maxPixel) else { return nil }
         let data = NSMutableData()
@@ -197,11 +303,11 @@ public enum TripBookComposer {
     }
 }
 
-/// The offline writer: plain sentences from the facts alone. Used for the free
-/// tier, when no API key is configured, and whenever the model is unavailable.
+/// The offline writer: plain, true sentences from the facts alone. Used when no
+/// model is available and for any field the grounding check rejects.
 public struct TemplateDiaryWriter: DiaryWriter {
     public init() {}
-    public var name: String { "template" }
+    public var name: String { "offline" }
 
     public func write(_ request: DiaryRequest, thumbnails: [String: Data]) async throws -> DiaryText {
         text(for: request)
@@ -215,18 +321,30 @@ public struct TemplateDiaryWriter: DiaryWriter {
             title = request.dateRange.isEmpty ? "Our trip" : request.dateRange
         }
         let count = request.chapters.reduce(0) { $0 + $1.photos.count }
-        let intro = "\(count) favorite photos" + (request.dateRange.isEmpty ? "." : " from \(request.dateRange).")
+        let days = Set(request.chapters.map(\.day)).count
+        let intro = days > 1 ? "\(days) days, \(count) favorite photos." : "\(count) favorite photos" + (request.dateRange.isEmpty ? "." : " from \(request.dateRange).")
         let sections = request.chapters.map { chapter -> DiaryText.Section in
-            let labels = Self.topLabels(chapter.photos.flatMap(\.labels), limit: 2)
             let heading = chapter.place ?? chapter.when.capitalizedFirst
-            let diary = labels.isEmpty ? "" : "Photos of " + ListFormatter.localizedString(byJoining: labels) + "."
+            var parts: [String] = []
+            if let landmark = chapter.nearby.first { parts.append("Near \(landmark)") }
+            if let sun = chapter.sun { parts.append(sun) }
+            let labels = Self.topLabels(chapter.photos.flatMap(\.labels), limit: 2)
+            if parts.isEmpty, !labels.isEmpty { parts.append(ListFormatter.localizedString(byJoining: labels).capitalizedFirst) }
+            let diary = parts.isEmpty ? "" : parts.joined(separator: ", ").capitalizedFirst + "."
             return DiaryText.Section(id: chapter.id, heading: heading, diary: diary)
         }
         let photos = request.chapters.flatMap { chapter in
             chapter.photos.map { photo -> DiaryText.Photo in
                 let top = Array(photo.labels.prefix(2))
                 let label = top.first?.capitalizedFirst ?? (photo.people > 0 ? "People" : "Scene")
-                let caption = top.isEmpty ? (chapter.place ?? "") : ListFormatter.localizedString(byJoining: top).capitalizedFirst
+                let caption: String
+                if let sign = photo.text.first {
+                    caption = "\u{201C}\(sign)\u{201D}"
+                } else if !top.isEmpty {
+                    caption = ListFormatter.localizedString(byJoining: top).capitalizedFirst
+                } else {
+                    caption = chapter.place ?? ""
+                }
                 let place = chapter.place.map { " · \($0)" } ?? ""
                 let tags = photo.labels.prefix(3).map { "#" + $0.replacingOccurrences(of: " ", with: "") }.joined(separator: " ")
                 let people = photo.people > 0 ? " with \(photo.people) \(photo.people == 1 ? "person" : "people")" : ""
@@ -253,146 +371,121 @@ extension String {
     var capitalizedFirst: String { prefix(1).uppercased() + dropFirst() }
 }
 
-/// Writes the diary with Claude over the Messages API. The model only sees the
-/// shortlist's facts and 512-pixel thumbnails, never the whole roll.
-public struct ClaudeDiaryWriter: DiaryWriter {
-    public enum Credential: Sendable {
-        case apiKey(String)
-        case authToken(String)
+/// Any provider with an OpenAI-compatible chat completions API. DeepSeek and
+/// Gemini both offer one; both accept images and return JSON objects.
+public struct OpenAICompatibleDiaryWriter: DiaryWriter {
+    public struct Provider: Sendable, Equatable {
+        public var name: String
+        public var baseURL: URL
+        public var model: String
+        public var sendsImages: Bool
+
+        /// DeepSeek's fast model; accepts images and JSON output.
+        public static let deepseek = Provider(name: "deepseek", baseURL: URL(string: "https://api.deepseek.com")!, model: "deepseek-flash", sendsImages: true)
+        /// Google's cheapest current Gemini model with image input.
+        public static let gemini = Provider(name: "gemini", baseURL: URL(string: "https://generativelanguage.googleapis.com/v1beta/openai")!, model: "gemini-3.1-flash-lite", sendsImages: true)
     }
 
     public enum WriterError: Error, Equatable {
-        case noCredential
         case http(Int, String)
-        case refused(String?)
         case noText
     }
 
-    public var credential: Credential
-    public var model: String
-    public var endpoint: URL
+    public var provider: Provider
+    public var apiKey: String
     public var session: URLSession
 
-    public init(credential: Credential, model: String = "claude-opus-5-5", endpoint: URL = URL(string: "https://api.anthropic.com/v1/messages")!, session: URLSession = .shared) {
-        self.credential = credential
-        self.model = model
-        self.endpoint = endpoint
+    public init(provider: Provider, apiKey: String, session: URLSession = .shared) {
+        self.provider = provider
+        self.apiKey = apiKey
         self.session = session
     }
 
-    /// Reads `ANTHROPIC_API_KEY`, then `ANTHROPIC_AUTH_TOKEN`.
-    public static func fromEnvironment(_ environment: [String: String] = ProcessInfo.processInfo.environment) -> ClaudeDiaryWriter? {
-        if let key = environment["ANTHROPIC_API_KEY"], !key.isEmpty { return ClaudeDiaryWriter(credential: .apiKey(key)) }
-        if let token = environment["ANTHROPIC_AUTH_TOKEN"], !token.isEmpty { return ClaudeDiaryWriter(credential: .authToken(token)) }
-        return nil
-    }
-
-    public var name: String { model }
-
-    static let system = """
-    You write the words for a shared online photobook of someone's trip: a title, a short intro, a diary entry for each chapter, and captions for each photo.
-
-    Write only from the facts and photos you are given: chapter place names, times of day, scene labels, how many people appear, and the photos themselves. Do not invent events, names, relationships, food, weather or feelings the photos do not show. Never name or identify a person; say "friends", "we" or describe what they are doing. If a place is unknown, describe the scene instead of guessing a location.
-
-    Keep it light and specific. Diary entries are two to four sentences in first person plural. Captions are one short line. Grid labels are two to four words. Instagram captions are one line plus up to four relevant hashtags. Alt text plainly describes what is visible for someone who cannot see the photo.
-
-    Match the requested tone: warm is affectionate and present, dry is understated with a little wit, minimal is sparse and factual. If voice examples are given, match their style without copying them.
-
-    Return one entry in "sections" for every chapter id and one entry in "photos" for every photo key.
-    """
-
-    static var schema: [String: Any] { [
-        "type": "object",
-        "additionalProperties": false,
-        "required": ["title", "intro", "sections", "photos"],
-        "properties": [
-            "title": ["type": "string"],
-            "intro": ["type": "string"],
-            "sections": [
-                "type": "array",
-                "items": [
-                    "type": "object",
-                    "additionalProperties": false,
-                    "required": ["id", "heading", "diary"],
-                    "properties": ["id": ["type": "string"], "heading": ["type": "string"], "diary": ["type": "string"]]
-                ]
-            ],
-            "photos": [
-                "type": "array",
-                "items": [
-                    "type": "object",
-                    "additionalProperties": false,
-                    "required": ["key", "label", "caption", "instagram_caption", "alt_text"],
-                    "properties": [
-                        "key": ["type": "string"], "label": ["type": "string"], "caption": ["type": "string"],
-                        "instagram_caption": ["type": "string"], "alt_text": ["type": "string"]
-                    ]
-                ]
-            ]
-        ]
-    ] }
+    public var name: String { "\(provider.name):\(provider.model)" }
 
     func body(_ request: DiaryRequest, thumbnails: [String: Data]) throws -> Data {
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.sortedKeys]
         let facts = String(decoding: try encoder.encode(request), as: UTF8.self)
         var content: [[String: Any]] = [["type": "text", "text": "Trip facts:\n" + facts]]
-        for chapter in request.chapters {
-            for photo in chapter.photos {
-                guard let data = thumbnails[photo.key] else { continue }
-                content.append(["type": "text", "text": "Photo \(photo.key)"])
-                content.append(["type": "image", "source": ["type": "base64", "media_type": "image/jpeg", "data": data.base64EncodedString()]])
+        if provider.sendsImages {
+            for chapter in request.chapters {
+                for photo in chapter.photos {
+                    guard let data = thumbnails[photo.key] else { continue }
+                    content.append(["type": "text", "text": "Photo \(photo.key)"])
+                    content.append(["type": "image_url", "image_url": ["url": "data:image/jpeg;base64," + data.base64EncodedString()]])
+                }
             }
         }
-        content.append(["type": "text", "text": "Write the book in a \(request.tone.rawValue) tone."])
+        content.append(["type": "text", "text": "Write the book in a \(request.tone.rawValue) tone.\n\n" + DiaryInstructions.jsonShape])
         let body: [String: Any] = [
-            "model": model,
-            "max_tokens": 16_000,
-            "system": Self.system,
-            "fallbacks": "default",
-            "output_config": ["effort": "medium", "format": ["type": "json_schema", "schema": Self.schema]],
-            "messages": [["role": "user", "content": content]]
+            "model": provider.model,
+            "messages": [
+                ["role": "system", "content": DiaryInstructions.system],
+                ["role": "user", "content": content]
+            ],
+            "response_format": ["type": "json_object"],
+            "temperature": 0.6
         ]
-        return try JSONSerialization.data(withJSONObject: body, options: [.sortedKeys])
+        return try JSONSerialization.data(withJSONObject: body, options: [.sortedKeys, .withoutEscapingSlashes])
     }
 
     func urlRequest(body: Data) -> URLRequest {
-        var request = URLRequest(url: endpoint, timeoutInterval: 600)
+        var request = URLRequest(url: provider.baseURL.appendingPathComponent("chat/completions"), timeoutInterval: 180)
         request.httpMethod = "POST"
         request.httpBody = body
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        request.setValue("2023-06-01", forHTTPHeaderField: "anthropic-version")
-        var betas = ["server-side-fallback-2026-07-01"]
-        switch credential {
-        case .apiKey(let key):
-            request.setValue(key, forHTTPHeaderField: "x-api-key")
-        case .authToken(let token):
-            request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
-            betas.append("oauth-2025-04-20")
-        }
-        request.setValue(betas.joined(separator: ","), forHTTPHeaderField: "anthropic-beta")
+        request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
         return request
     }
 
     public func write(_ request: DiaryRequest, thumbnails: [String: Data]) async throws -> DiaryText {
         let (data, response) = try await session.data(for: urlRequest(body: body(request, thumbnails: thumbnails)))
         let status = (response as? HTTPURLResponse)?.statusCode ?? 0
-        guard status == 200 else {
-            throw WriterError.http(status, String(decoding: data.prefix(500), as: UTF8.self))
-        }
+        guard status == 200 else { throw WriterError.http(status, String(decoding: data.prefix(500), as: UTF8.self)) }
         return try Self.parse(data)
     }
 
-    static func parse(_ data: Data) throws -> DiaryText {
-        guard let object = try JSONSerialization.jsonObject(with: data) as? [String: Any] else { throw WriterError.noText }
-        if object["stop_reason"] as? String == "refusal" {
-            let details = object["stop_details"] as? [String: Any]
-            throw WriterError.refused(details?["category"] as? String)
-        }
-        let blocks = object["content"] as? [[String: Any]] ?? []
-        guard let text = blocks.first(where: { $0["type"] as? String == "text" })?["text"] as? String else {
-            throw WriterError.noText
+    public static func parse(_ data: Data) throws -> DiaryText {
+        guard let object = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let choice = (object["choices"] as? [[String: Any]])?.first,
+              let message = choice["message"] as? [String: Any],
+              var text = message["content"] as? String else { throw WriterError.noText }
+        text = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        if text.hasPrefix("```") {
+            text = text.drop(while: { $0 != "\n" }).dropFirst().description
+            if let fence = text.range(of: "```", options: .backwards) { text = String(text[..<fence.lowerBound]) }
         }
         return try JSONDecoder().decode(DiaryText.self, from: Data(text.utf8))
+    }
+}
+
+/// Picks the writer. Order: an explicit choice in `PHOTOCORE_WRITER`; then a
+/// hosted model when its key is configured (Gemini first, it is cheaper per
+/// book and reads images well); then Apple's model (Private Cloud Compute on
+/// OS 27, otherwise on-device); then the offline writer.
+///
+/// Measured on a real trip, Apple's small on-device model mostly repeats scene
+/// labels, so a configured hosted key wins when quality matters.
+public enum DiaryWriters {
+    public static func make(environment: [String: String] = ProcessInfo.processInfo.environment) -> any DiaryWriter {
+        let choice = environment["PHOTOCORE_WRITER"]?.lowercased()
+        func hosted(_ provider: OpenAICompatibleDiaryWriter.Provider, key: String) -> (any DiaryWriter)? {
+            guard let value = environment[key], !value.isEmpty else { return nil }
+            var provider = provider
+            if let model = environment["PHOTOCORE_WRITER_MODEL"], !model.isEmpty { provider.model = model }
+            return OpenAICompatibleDiaryWriter(provider: provider, apiKey: value)
+        }
+        switch choice {
+        case "offline": return TemplateDiaryWriter()
+        case "deepseek": return hosted(.deepseek, key: "DEEPSEEK_API_KEY") ?? TemplateDiaryWriter()
+        case "gemini": return hosted(.gemini, key: "GEMINI_API_KEY") ?? TemplateDiaryWriter()
+        case "apple": return AppleDiaryWriter.makeIfAvailable() ?? TemplateDiaryWriter()
+        default:
+            return hosted(.gemini, key: "GEMINI_API_KEY")
+                ?? hosted(.deepseek, key: "DEEPSEEK_API_KEY")
+                ?? AppleDiaryWriter.makeIfAvailable()
+                ?? TemplateDiaryWriter()
+        }
     }
 }

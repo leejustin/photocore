@@ -29,24 +29,24 @@ enum BookCommand {
         let facts = await TripFactsBuilder.build(keepers: keepers, lookUpPlaces: !arguments.contains("--offline"))
         try facts.save(to: output)
 
-        let writer: any DiaryWriter
-        if !arguments.contains("--offline"), let claude = ClaudeDiaryWriter.fromEnvironment() {
-            writer = claude
-        } else {
-            writer = TemplateDiaryWriter()
-        }
-        print("Writing the diary with \(writer.name)")
+        let writer: any DiaryWriter = arguments.contains("--offline") ? TemplateDiaryWriter() : DiaryWriters.make()
         let byID = Dictionary(uniqueKeysWithValues: keepers.map { ($0.id, $0.asset.url) })
+        print("Reading signs and nearby landmarks")
+        let enrichment = await TripEnricher.enrich(facts: facts, source: { byID[$0.id] }, lookUpNearby: !arguments.contains("--offline"))
+        let context = TripContext(note: option(arguments, "--note"))
+        print("Writing the diary with \(writer.name)")
         let book = await TripBookComposer.compose(
             facts: facts,
             writer: writer,
+            enrichment: enrichment,
+            context: context,
             thumbnail: { byID[$0.id].flatMap { TripBookComposer.thumbnailData(url: $0) } },
             tone: tone,
             theme: theme
         )
         let report = try BookPublisher.publish(book: book, facts: facts, source: { byID[$0.id] }, to: output)
         print("Book: \(report.indexURL.path)")
-        print("\(report.photoCount) finished photos, \(book.sections.count) chapters, written by \(book.writer)")
+        print("\(report.photoCount) finished photos, \(book.sections.count) chapters, written by \(book.writer), \(book.groundingRejections ?? 0) unsupported lines replaced")
         print("Instagram: \(report.carouselCount) carousel, \(report.storyCount) stories in \(output.appendingPathComponent("instagram").path)")
     }
 

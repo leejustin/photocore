@@ -35,6 +35,7 @@ public enum TripFinisher {
     public static func finish(
         folders: Folders,
         title: String?,
+        context: TripContext = .empty,
         tone: DiaryTone,
         theme: BookTheme,
         writer: any DiaryWriter,
@@ -77,10 +78,15 @@ public enum TripFinisher {
         try facts.save(to: folders.book)
         let sources = Dictionary(keepers.map { ($0.id, $0.asset.url) }, uniquingKeysWith: { a, _ in a })
 
+        progress("Reading signs and landmarks", 0, keepers.count)
+        let enrichment = await TripEnricher.enrich(facts: facts, source: { sources[$0.id] }, lookUpNearby: lookUpPlaces)
+
         progress("Writing the diary", 0, 1)
         var book = await TripBookComposer.compose(
             facts: facts,
             writer: writer,
+            enrichment: enrichment,
+            context: context,
             thumbnail: { sources[$0.id].flatMap { TripBookComposer.thumbnailData(url: $0) } },
             tone: tone,
             theme: theme

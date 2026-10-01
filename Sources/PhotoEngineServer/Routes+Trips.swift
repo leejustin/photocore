@@ -9,6 +9,8 @@ import PhotoEngineWorkflow
 
 struct CreateTripBody: Decodable, Sendable {
     var title: String?
+    var note: String?
+    var calendarEvents: [String]?
     var tone: String?
     var theme: String?
 }
@@ -75,7 +77,11 @@ func registerTripRoutes(_ router: Router<BasicRequestContext>, env: ServerEnviro
         let tone = DiaryTone(rawValue: body.tone ?? "warm") ?? .warm
         let theme = BookTheme(rawValue: body.theme ?? "book") ?? .book
         let title = body.title.map { String($0.prefix(120)) }
-        let (record, token) = try await trips.create(title: title, tone: tone, theme: theme)
+        let context = TripContext(
+            note: body.note.map { String($0.prefix(280)) },
+            calendarEvents: (body.calendarEvents ?? []).prefix(5).map { String($0.prefix(120)) }
+        )
+        let (record, token) = try await trips.create(title: title, context: context, tone: tone, theme: theme)
         let dto = TripCreatedDTO(id: record.id, slug: record.slug, ownerToken: token, bookPath: TripPaths.book(record.slug), editPath: TripPaths.book(record.slug) + "#edit=" + token)
         return try APIJSON.response(dto, status: .created)
     }
@@ -114,10 +120,11 @@ func registerTripRoutes(_ router: Router<BasicRequestContext>, env: ServerEnviro
         )
         let jobs = env.jobs
         let stored = try await env.jobs.enqueue(job) {
-            let writer: any DiaryWriter = ClaudeDiaryWriter.fromEnvironment() ?? TemplateDiaryWriter()
+            let writer = DiaryWriters.make()
             let outcome = try await TripFinisher.finish(
                 folders: folders,
                 title: record.title,
+                context: record.context ?? .empty,
                 tone: record.tone,
                 theme: record.theme,
                 writer: writer,

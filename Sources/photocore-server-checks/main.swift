@@ -10,8 +10,7 @@ import PhotoEngineServer
 struct ServerChecks {
     static func main() async throws {
         setenv("PHOTOCORE_OFFLINE", "1", 1)
-        unsetenv("ANTHROPIC_API_KEY")
-        unsetenv("ANTHROPIC_AUTH_TOKEN")
+        setenv("PHOTOCORE_WRITER", "offline", 1)
         try tokenFileIsPrivate()
         let root = FileManager.default.temporaryDirectory.appendingPathComponent("photocore-server-checks-\(UUID().uuidString)", isDirectory: true)
         let source = root.appendingPathComponent("shoot", isDirectory: true)
