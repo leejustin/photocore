@@ -43,3 +43,6 @@ work/
 outputs/screenshots/demo-shoot/
 outputs/screenshots/.ready
 outputs/screenshots/.control
+
+# iOS simulator screenshots show real library photos
+outputs/screenshots/ios/

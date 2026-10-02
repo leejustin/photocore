@@ -1,0 +1,379 @@
+// !$*UTF8*$!
+{
+	archiveVersion = 1;
+	classes = {
+	};
+	objectVersion = 77;
+	objects = {
+
+/* Begin PBXBuildFile section */
+		A1000000000000000000B001 /* PhotoEngineApple in Frameworks */ = {isa = PBXBuildFile; productRef = A1000000000000000000C001 /* PhotoEngineApple */; };
+		A1000000000000000000B002 /* PhotoEngineCore in Frameworks */ = {isa = PBXBuildFile; productRef = A1000000000000000000C002 /* PhotoEngineCore */; };
+		A1000000000000000000B003 /* PhotoEngineWorkflow in Frameworks */ = {isa = PBXBuildFile; productRef = A1000000000000000000C003 /* PhotoEngineWorkflow */; };
+/* End PBXBuildFile section */
+
+/* Begin PBXContainerItemProxy section */
+		A1000000000000000000B101 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = A10000000000000000005001 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = A10000000000000000007001;
+			remoteInfo = PhotocoreiOS;
+		};
+/* End PBXContainerItemProxy section */
+
+/* Begin PBXFileReference section */
+		A1000000000000000000F001 /* Photocore.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Photocore.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		A1000000000000000000F002 /* PhotocoreUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = PhotocoreUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+/* End PBXFileReference section */
+
+/* Begin PBXFileSystemSynchronizedRootGroup section */
+		A1000000000000000000D001 /* PhotocoreiOS */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			path = PhotocoreiOS;
+			sourceTree = "<group>";
+		};
+		A1000000000000000000D002 /* PhotocoreUITests */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			path = PhotocoreUITests;
+			sourceTree = "<group>";
+		};
+/* End PBXFileSystemSynchronizedRootGroup section */
+
+/* Begin PBXFrameworksBuildPhase section */
+		A1000000000000000000E001 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				A1000000000000000000B001 /* PhotoEngineApple in Frameworks */,
+				A1000000000000000000B002 /* PhotoEngineCore in Frameworks */,
+				A1000000000000000000B003 /* PhotoEngineWorkflow in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		A1000000000000000000E005 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXFrameworksBuildPhase section */
+
+/* Begin PBXGroup section */
+		A1000000000000000000A001 = {
+			isa = PBXGroup;
+			children = (
+				A1000000000000000000D001 /* PhotocoreiOS */,
+				A1000000000000000000D002 /* PhotocoreUITests */,
+				A1000000000000000000A002 /* Products */,
+			);
+			sourceTree = "<group>";
+		};
+		A1000000000000000000A002 /* Products */ = {
+			isa = PBXGroup;
+			children = (
+				A1000000000000000000F001 /* Photocore.app */,
+				A1000000000000000000F002 /* PhotocoreUITests.xctest */,
+			);
+			name = Products;
+			sourceTree = "<group>";
+		};
+/* End PBXGroup section */
+
+/* Begin PBXNativeTarget section */
+		A10000000000000000007001 /* PhotocoreiOS */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = A10000000000000000008002 /* Build configuration list for PBXNativeTarget "PhotocoreiOS" */;
+			buildPhases = (
+				A1000000000000000000E002 /* Sources */,
+				A1000000000000000000E001 /* Frameworks */,
+				A1000000000000000000E003 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			fileSystemSynchronizedGroups = (
+				A1000000000000000000D001 /* PhotocoreiOS */,
+			);
+			name = PhotocoreiOS;
+			packageProductDependencies = (
+				A1000000000000000000C001 /* PhotoEngineApple */,
+				A1000000000000000000C002 /* PhotoEngineCore */,
+				A1000000000000000000C003 /* PhotoEngineWorkflow */,
+			);
+			productName = PhotocoreiOS;
+			productReference = A1000000000000000000F001 /* Photocore.app */;
+			productType = "com.apple.product-type.application";
+		};
+		A10000000000000000007002 /* PhotocoreUITests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = A10000000000000000008003 /* Build configuration list for PBXNativeTarget "PhotocoreUITests" */;
+			buildPhases = (
+				A1000000000000000000E004 /* Sources */,
+				A1000000000000000000E005 /* Frameworks */,
+				A1000000000000000000E006 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				A1000000000000000000B102 /* PBXTargetDependency */,
+			);
+			fileSystemSynchronizedGroups = (
+				A1000000000000000000D002 /* PhotocoreUITests */,
+			);
+			name = PhotocoreUITests;
+			productName = PhotocoreUITests;
+			productReference = A1000000000000000000F002 /* PhotocoreUITests.xctest */;
+			productType = "com.apple.product-type.bundle.ui-testing";
+		};
+/* End PBXNativeTarget section */
+
+/* Begin PBXProject section */
+		A10000000000000000005001 /* Project object */ = {
+			isa = PBXProject;
+			attributes = {
+				BuildIndependentTargetsInParallel = 1;
+				LastSwiftUpdateCheck = 2700;
+				LastUpgradeCheck = 2700;
+			};
+			buildConfigurationList = A10000000000000000008001 /* Build configuration list for PBXProject "PhotocoreiOS" */;
+			developmentRegion = en;
+			hasScannedForEncodings = 0;
+			knownRegions = (
+				en,
+				Base,
+			);
+			mainGroup = A1000000000000000000A001;
+			minimizedProjectReferenceProxies = 1;
+			packageReferences = (
+				A10000000000000000009001 /* XCLocalSwiftPackageReference "../.." */,
+			);
+			preferredProjectObjectVersion = 77;
+			productRefGroup = A1000000000000000000A002 /* Products */;
+			projectDirPath = "";
+			projectRoot = "";
+			targets = (
+				A10000000000000000007001 /* PhotocoreiOS */,
+				A10000000000000000007002 /* PhotocoreUITests */,
+			);
+		};
+/* End PBXProject section */
+
+/* Begin PBXResourcesBuildPhase section */
+		A1000000000000000000E003 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		A1000000000000000000E006 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXResourcesBuildPhase section */
+
+/* Begin PBXSourcesBuildPhase section */
+		A1000000000000000000E002 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		A1000000000000000000E004 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXSourcesBuildPhase section */
+
+/* Begin PBXTargetDependency section */
+		A1000000000000000000B102 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = A10000000000000000007001 /* PhotocoreiOS */;
+			targetProxy = A1000000000000000000B101 /* PBXContainerItemProxy */;
+		};
+/* End PBXTargetDependency section */
+
+/* Begin XCBuildConfiguration section */
+		A10000000000000000006001 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				DEBUG_INFORMATION_FORMAT = dwarf;
+				ENABLE_TESTABILITY = YES;
+				GCC_OPTIMIZATION_LEVEL = 0;
+				IPHONEOS_DEPLOYMENT_TARGET = 18.0;
+				ONLY_ACTIVE_ARCH = YES;
+				SDKROOT = iphoneos;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "DEBUG $(inherited)";
+				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
+			};
+			name = Debug;
+		};
+		A10000000000000000006002 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
+				IPHONEOS_DEPLOYMENT_TARGET = 18.0;
+				SDKROOT = iphoneos;
+				SWIFT_COMPILATION_MODE = wholemodule;
+				VALIDATE_PRODUCT = YES;
+			};
+			name = Release;
+		};
+		A10000000000000000006003 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_CFBundleDisplayName = Photocore;
+				INFOPLIST_KEY_NSCalendarsFullAccessUsageDescription = "Photocore can suggest what a trip was from your calendar. Only titles you pick are used.";
+				INFOPLIST_KEY_NSPhotoLibraryAddUsageDescription = "Photocore saves your keepers as an album.";
+				INFOPLIST_KEY_NSPhotoLibraryUsageDescription = "Photocore picks the best photos from your trips. Culling runs on this iPhone.";
+				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
+				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
+				INFOPLIST_KEY_UISupportedInterfaceOrientations = UIInterfaceOrientationPortrait;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				MARKETING_VERSION = 0.1;
+				PRODUCT_BUNDLE_IDENTIFIER = com.photocore.trip;
+				PRODUCT_NAME = Photocore;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_VERSION = 6.0;
+				TARGETED_DEVICE_FAMILY = 1;
+			};
+			name = Debug;
+		};
+		A10000000000000000006004 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_CFBundleDisplayName = Photocore;
+				INFOPLIST_KEY_NSCalendarsFullAccessUsageDescription = "Photocore can suggest what a trip was from your calendar. Only titles you pick are used.";
+				INFOPLIST_KEY_NSPhotoLibraryAddUsageDescription = "Photocore saves your keepers as an album.";
+				INFOPLIST_KEY_NSPhotoLibraryUsageDescription = "Photocore picks the best photos from your trips. Culling runs on this iPhone.";
+				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
+				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
+				INFOPLIST_KEY_UISupportedInterfaceOrientations = UIInterfaceOrientationPortrait;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				MARKETING_VERSION = 0.1;
+				PRODUCT_BUNDLE_IDENTIFIER = com.photocore.trip;
+				PRODUCT_NAME = Photocore;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_VERSION = 6.0;
+				TARGETED_DEVICE_FAMILY = 1;
+			};
+			name = Release;
+		};
+		A10000000000000000006005 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				GENERATE_INFOPLIST_FILE = YES;
+				MARKETING_VERSION = 0.1;
+				PRODUCT_BUNDLE_IDENTIFIER = com.photocore.trip.uitests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_VERSION = 6.0;
+				TARGETED_DEVICE_FAMILY = 1;
+				TEST_TARGET_NAME = PhotocoreiOS;
+			};
+			name = Debug;
+		};
+		A10000000000000000006006 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				GENERATE_INFOPLIST_FILE = YES;
+				MARKETING_VERSION = 0.1;
+				PRODUCT_BUNDLE_IDENTIFIER = com.photocore.trip.uitests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_VERSION = 6.0;
+				TARGETED_DEVICE_FAMILY = 1;
+				TEST_TARGET_NAME = PhotocoreiOS;
+			};
+			name = Release;
+		};
+/* End XCBuildConfiguration section */
+
+/* Begin XCConfigurationList section */
+		A10000000000000000008001 /* Build configuration list for PBXProject "PhotocoreiOS" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				A10000000000000000006001 /* Debug */,
+				A10000000000000000006002 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		A10000000000000000008002 /* Build configuration list for PBXNativeTarget "PhotocoreiOS" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				A10000000000000000006003 /* Debug */,
+				A10000000000000000006004 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		A10000000000000000008003 /* Build configuration list for PBXNativeTarget "PhotocoreUITests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				A10000000000000000006005 /* Debug */,
+				A10000000000000000006006 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+/* End XCConfigurationList section */
+
+/* Begin XCLocalSwiftPackageReference section */
+		A10000000000000000009001 /* XCLocalSwiftPackageReference "../.." */ = {
+			isa = XCLocalSwiftPackageReference;
+			relativePath = ../..;
+		};
+/* End XCLocalSwiftPackageReference section */
+
+/* Begin XCSwiftPackageProductDependency section */
+		A1000000000000000000C001 /* PhotoEngineApple */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = PhotoEngineApple;
+		};
+		A1000000000000000000C002 /* PhotoEngineCore */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = PhotoEngineCore;
+		};
+		A1000000000000000000C003 /* PhotoEngineWorkflow */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = PhotoEngineWorkflow;
+		};
+/* End XCSwiftPackageProductDependency section */
+	};
+	rootObject = A10000000000000000005001 /* Project object */;
+}

@@ -1,3 +1,4 @@
+#if os(macOS)
 import CryptoKit
 import Foundation
 import Network
@@ -592,3 +593,4 @@ private final class HTTPExchange: @unchecked Sendable {
         return HTTPRequest(method: String(parts[0]), path: path, headers: headers, body: body)
     }
 }
+#endif

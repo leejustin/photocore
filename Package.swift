@@ -5,7 +5,8 @@ import PackageDescription
 let package = Package(
     name: "PhotoEngine",
     platforms: [
-        .macOS(.v15)
+        .macOS(.v15),
+        .iOS(.v18)
     ],
     products: [
         .library(name: "PhotoEngineCore", targets: ["PhotoEngineCore"]),
@@ -48,6 +49,7 @@ let package = Package(
             resources: [.copy("openapi.yaml")]
         ),
         .executableTarget(name: "photocore-server", dependencies: ["PhotoEngineServer"]),
-        .executableTarget(name: "photocore-server-checks", dependencies: ["PhotoEngineServer", "PhotoEngineCore"])
+        .executableTarget(name: "photocore-server-checks", dependencies: ["PhotoEngineServer", "PhotoEngineCore"]),
+        .testTarget(name: "PhotoEngineAppleTests", dependencies: ["PhotoEngineApple", "PhotoEngineCore", "PhotoEngineWorkflow"])
     ]
 )

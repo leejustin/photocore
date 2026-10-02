@@ -4,7 +4,10 @@ info:
   version: "2.0.0"
   description: |
     Local curation API. Bind is 127.0.0.1 only. Every route except GET /healthz
-    requires Authorization: Bearer. Clients never choose an output path.
+    the shared-book routes under /b/ and the invite routes under /j/ requires
+    Authorization: Bearer with the server token. Book edits need the book's own
+    owner token instead; invite uploads need the person's own contributor token
+    in X-Photocore-Contributor. Clients never choose an output path.
 servers:
   - url: http://127.0.0.1:8787
 paths:
@@ -172,6 +175,147 @@ paths:
       responses:
         "200":
           description: text/event-stream
+  /v2/trips:
+    post:
+      summary: "Start a trip {title?, note?, calendarEvents?, tone?, theme?, ownerName?}. Returns the owner token once."
+      responses:
+        "201":
+          description: "{id, slug, ownerToken, bookPath, editPath, invitePath}"
+  /v2/trips/{tid}:
+    get:
+      summary: Trip status, photo counts, contributors and the last finish job
+      responses:
+        "200":
+          description: "Trip, with invitePath, inviteOpen and contributors [{name, photos}]"
+  /v2/trips/{tid}/plan:
+    post:
+      summary: "Apply a StoreKit 2 signed transaction {transaction}: Plus, a Trip Pass or an Event Pass. Checked against Apple Root CA G3."
+      responses:
+        "200":
+          description: "{plan, limits, hostedUntil, subscriptionExpires}"
+        "400":
+          description: Forged, foreign or unknown purchase
+        "402":
+          description: Subscription ended, or Plus's 12 books this year are used
+        "409":
+          description: The pass was spent on another book
+  /v2/trips/{tid}/print.pdf:
+    get:
+      summary: The finished book as a print-ready PDF (8 x 8 inch pages with 0.125 inch bleed)
+      responses:
+        "200":
+          description: application/pdf
+  /v2/trips/{tid}/settings:
+    post:
+      summary: "Change {title?, note?, calendarEvents?, tone?, theme?, ownerName?} before a finish"
+      responses:
+        "200":
+          description: "{ok}"
+  /v2/trips/{tid}/invite:
+    post:
+      summary: "Open or close the invite link {open}. Photos already added stay."
+      responses:
+        "200":
+          description: "{open}"
+  /v2/trips/{tid}/photos/{name}:
+    put:
+      summary: Upload one keeper (JPEG or HEIC body, 60 MB max, 400 per trip)
+      responses:
+        "201":
+          description: Stored
+  /v2/trips/{tid}/finish:
+    post:
+      summary: Queue the finish (cull each person's photos, keep the best shot of each moment, facts, diary, photos, page, Instagram pack)
+      responses:
+        "202":
+          description: Job
+        "412":
+          description: No photos from anyone yet
+  /v2/preview:
+    post:
+      summary: Render one photo with the paid finish, for the upsell preview
+      responses:
+        "200":
+          description: image/jpeg
+  /b/{slug}/:
+    get:
+      summary: The shared book page (public by link)
+      security: []
+      responses:
+        "200":
+          description: text/html
+  /b/{slug}/edits:
+    post:
+      summary: "Owner edit {key, value}; Authorization: Bearer <owner token>"
+      security: []
+      responses:
+        "200":
+          description: Applied
+  /b/{slug}/guest:
+    get:
+      summary: Guest notes and hearts
+      security: []
+      responses:
+        "200":
+          description: "{notes, hearts}"
+  /b/{slug}/guest/notes:
+    post:
+      summary: "Add a guest note {name, text}"
+      security: []
+      responses:
+        "201":
+          description: Updated activity
+  /b/{slug}/guest/hearts:
+    post:
+      summary: "Heart a photo {photo}"
+      security: []
+      responses:
+        "200":
+          description: Updated activity
+  /b/{slug}/print-interest:
+    post:
+      summary: Count a visitor who'd want a printed copy
+      security: []
+      responses:
+        "200":
+          description: "{count}"
+  /j/{code}:
+    get:
+      summary: The invite page where people who were there add their photos
+      security: []
+      responses:
+        "200":
+          description: text/html
+  /j/{code}/status:
+    get:
+      summary: Invite status; with X-Photocore-Contributor, also the person's name and photo count
+      security: []
+      responses:
+        "200":
+          description: "{title, open, people, photos, bookPath?, me?, mine?}"
+  /j/{code}/join:
+    post:
+      summary: "Join the trip {name}. Returns the contributor token once (50 people per trip)."
+      security: []
+      responses:
+        "201":
+          description: "{name, token}"
+        "403":
+          description: The owner closed the invite
+  /j/{code}/photos/{name}:
+    put:
+      summary: "Add one photo (JPEG or HEIC; 150 per person, 1,000 per trip); X-Photocore-Contributor required"
+      security: []
+      responses:
+        "201":
+          description: Stored
+  /j/{code}/photos:
+    delete:
+      summary: Remove every photo this person added; X-Photocore-Contributor required
+      security: []
+      responses:
+        "200":
+          description: "{removed}"
 components:
   parameters:
     sid:

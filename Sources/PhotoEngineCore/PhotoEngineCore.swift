@@ -53,6 +53,13 @@ public struct PhotoMetadata: Codable, Sendable, Equatable {
     public var format: PhotoFormat
     /// In-camera or prior XMP rating when present (0...5).
     public var rating: Int?
+    /// Capture location from EXIF GPS, signed degrees. Used for place names in
+    /// the trip book; exports still strip GPS by default.
+    public var latitude: Double?
+    public var longitude: Double?
+    /// The camera's UTC offset at capture, when the file records it. Used to show
+    /// local time of day in the trip book.
+    public var utcOffsetSeconds: Int?
 
     public init(
         pixelWidth: Int,
@@ -64,7 +71,10 @@ public struct PhotoMetadata: Codable, Sendable, Equatable {
         lensModel: String? = nil,
         fileSize: Int64 = 0,
         format: PhotoFormat = .unknown,
-        rating: Int? = nil
+        rating: Int? = nil,
+        latitude: Double? = nil,
+        longitude: Double? = nil,
+        utcOffsetSeconds: Int? = nil
     ) {
         self.pixelWidth = pixelWidth
         self.pixelHeight = pixelHeight
@@ -76,6 +86,9 @@ public struct PhotoMetadata: Codable, Sendable, Equatable {
         self.fileSize = fileSize
         self.format = format
         self.rating = rating
+        self.latitude = latitude
+        self.longitude = longitude
+        self.utcOffsetSeconds = utcOffsetSeconds
     }
 }
 
@@ -1498,12 +1511,25 @@ public enum PhotoSelectionEngine {
             let chosen = remaining.remove(at: bestIndex)
             selected.append(chosen)
             var sameMomentIDs = Set<PhotoID>()
+            let chosenDate = chosen.photo.asset.metadata.captureDate
+            // Hard "same moment" removal needs time corroboration. Venue-homogeneous
+            // shoots (mats, stages, travel days) often sit under the visual near-dup
+            // threshold even across unrelated minutes; soft diversity still applies.
+            let momentWindow = max(profile.burstWindow, profile.maxBurstDuration)
             for candidate in remaining {
                 let similarity: Double
+                var hardSameMoment = false
                 if let distance = visualDistance(candidate.photo.signals, chosen.photo.signals) {
                     // Distances are on Vision's calibrated scale (~0.3 same shot, ~1.0 unrelated).
                     similarity = exp(-distance / max(profile.nearDuplicateVisualDistance, 0.001))
-                    if distance <= profile.nearDuplicateVisualDistance { sameMomentIDs.insert(candidate.id) }
+                    if distance <= profile.nearDuplicateVisualDistance {
+                        if let chosenDate, let candidateDate = candidate.photo.asset.metadata.captureDate {
+                            hardSameMoment = abs(candidateDate.timeIntervalSince(chosenDate)) <= momentWindow
+                        } else {
+                            // No timestamps: require a tighter visual match before hard-removing.
+                            hardSameMoment = distance <= profile.nearDuplicateVisualDistance * 0.65
+                        }
+                    }
                 } else {
                     let hamming = PhotoSimilarity.hammingDistance(
                         candidate.photo.signals.fingerprint.perceptualHash,
@@ -1513,9 +1539,16 @@ public enum PhotoSelectionEngine {
                         candidate.photo.signals.fingerprint.perceptualHash,
                         chosen.photo.signals.fingerprint.perceptualHash
                     )
-                    if hamming <= profile.nearDuplicateHammingDistance { sameMomentIDs.insert(candidate.id) }
+                    if hamming <= profile.nearDuplicateHammingDistance {
+                        if let chosenDate, let candidateDate = candidate.photo.asset.metadata.captureDate {
+                            hardSameMoment = abs(candidateDate.timeIntervalSince(chosenDate)) <= momentWindow
+                        } else {
+                            hardSameMoment = hamming <= max(3, profile.nearDuplicateHammingDistance / 2)
+                        }
+                    }
                 }
                 maximumSimilarity[candidate.id] = max(maximumSimilarity[candidate.id] ?? 0, similarity)
+                if hardSameMoment { sameMomentIDs.insert(candidate.id) }
             }
             if !sameMomentIDs.isEmpty {
                 for candidate in remaining where sameMomentIDs.contains(candidate.id) {

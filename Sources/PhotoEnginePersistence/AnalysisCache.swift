@@ -39,6 +39,7 @@ public final class AnalysisCache: @unchecked Sendable {
             "face-quality-revision-3",
             "subject-crop-v2-min64",
             "thumbnail-1024-vision-on-thumbnail",
+            Self.platformTag,
             ProcessInfo.processInfo.operatingSystemVersionString
         ].joined(separator: "|")
 
@@ -47,6 +48,16 @@ public final class AnalysisCache: @unchecked Sendable {
               file.schemaVersion == 2,
               file.sourceFolder == self.sourceFolder.path else { return }
         self.entries = Dictionary(uniqueKeysWithValues: file.entries.map { ($0.sourcePath, $0) })
+    }
+
+    /// Simulator runs skip the aesthetics model, so their cached signals must not
+    /// be mixed with device runs.
+    private static var platformTag: String {
+        #if targetEnvironment(simulator)
+        "simulator-no-aesthetics"
+        #else
+        "device"
+        #endif
     }
 
     public func signals(for asset: PhotoAsset) -> AnalysisSignals? {

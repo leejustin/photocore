@@ -14,7 +14,10 @@ struct APIMiddleware<Context: RequestContext>: RouterMiddleware {
             }
             return Response(status: .noContent, headers: corsHeaders(origin))
         }
-        if path != "/healthz" {
+        // Shared books and invite links are public by link; book edits check the
+        // owner's own token, invite uploads check each person's own token, and
+        // both have their own size and count limits.
+        if path != "/healthz" && !path.hasPrefix("/b/") && !path.hasPrefix("/j/") {
             let authorization = request.headers[.authorization]
             guard security.acceptsAuthorization(authorization) else {
                 throw APIError.unauthorized()

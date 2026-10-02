@@ -206,6 +206,7 @@ enum ImageMetadataReader {
         let size = (fileAttributes?[.size] as? NSNumber)?.int64Value ?? 0
 
         let captureDate = captureDate(exif: exif, tiff: tiff)
+        let coordinate = coordinate(gps: dictionary.object(forKey: kCGImagePropertyGPSDictionary) as? NSDictionary)
 
         let format = PhotoFormatSupport.format(for: url)
 
@@ -219,8 +220,33 @@ enum ImageMetadataReader {
             lensModel: exif?.object(forKey: kCGImagePropertyExifLensModel) as? String,
             fileSize: size,
             format: format,
-            rating: readRating(from: source)
+            rating: readRating(from: source),
+            latitude: coordinate?.latitude,
+            longitude: coordinate?.longitude,
+            utcOffsetSeconds: utcOffset(exif: exif)
         )
+    }
+
+    /// "+08:00" or "-05:30" from OffsetTimeOriginal, in seconds east of UTC.
+    static func utcOffset(exif: NSDictionary?) -> Int? {
+        guard let text = exif?.object(forKey: kCGImagePropertyExifOffsetTimeOriginal) as? String else { return nil }
+        let trimmed = text.trimmingCharacters(in: .whitespaces)
+        guard trimmed.count >= 6, let sign = trimmed.first, sign == "+" || sign == "-" else { return nil }
+        let parts = trimmed.dropFirst().split(separator: ":")
+        guard parts.count == 2, let hours = Int(parts[0]), let minutes = Int(parts[1]), hours <= 14, minutes < 60 else { return nil }
+        return (sign == "-" ? -1 : 1) * (hours * 3600 + minutes * 60)
+    }
+
+    static func coordinate(gps: NSDictionary?) -> (latitude: Double, longitude: Double)? {
+        guard let gps,
+              let latitude = (gps.object(forKey: kCGImagePropertyGPSLatitude) as? NSNumber)?.doubleValue,
+              let longitude = (gps.object(forKey: kCGImagePropertyGPSLongitude) as? NSNumber)?.doubleValue else { return nil }
+        let south = (gps.object(forKey: kCGImagePropertyGPSLatitudeRef) as? String)?.uppercased() == "S"
+        let west = (gps.object(forKey: kCGImagePropertyGPSLongitudeRef) as? String)?.uppercased() == "W"
+        let lat = south ? -abs(latitude) : latitude
+        let lon = west ? -abs(longitude) : longitude
+        guard (-90...90).contains(lat), (-180...180).contains(lon), !(lat == 0 && lon == 0) else { return nil }
+        return (lat, lon)
     }
 
     private static func readRating(from source: CGImageSource) -> Int? {
@@ -387,12 +413,29 @@ public struct AppleAnalysisEngine: Sendable {
 
         var requests: [VNRequest] = [featureRequest, faceRequest, landmarksRequest]
         var aestheticsRequest: VNCalculateImageAestheticsScoresRequest?
-        if #available(macOS 15.0, *) {
+        if VisionCompute.aestheticsAvailable, #available(macOS 15.0, *) {
             let request = VNCalculateImageAestheticsScoresRequest()
             aestheticsRequest = request
             requests.append(request)
         }
-        try handler.perform(requests)
+        VisionCompute.prepare(requests)
+        VisionCompute.gate.wait()
+        defer { VisionCompute.gate.signal() }
+        do {
+            try handler.perform(requests)
+        } catch {
+            // One optional model (aesthetics, landmarks) can fail on a device or
+            // simulator without its accelerator. Retry each request alone so the
+            // photo still gets whatever signals are available; only a missing
+            // feature print is fatal for grouping, and that is handled upstream.
+            var anySucceeded = false
+            for request in requests {
+                if (try? VNImageRequestHandler(cgImage: image, options: [:]).perform([request])) != nil {
+                    anySucceeded = true
+                }
+            }
+            if !anySucceeded { throw error }
+        }
 
         let featurePrint = try featureRequest.results?.first.map {
             try JSONEncoder().encode(Vision.FeaturePrintObservation($0))
@@ -480,7 +523,8 @@ public enum AppleVisualDistance {
     public static func featurePrintData(for image: CGImage) throws -> Data? {
         let request = VNGenerateImageFeaturePrintRequest()
         request.revision = VNGenerateImageFeaturePrintRequestRevision2
-        try VNImageRequestHandler(cgImage: image, options: [:]).perform([request])
+        VisionCompute.prepare([request])
+        try VisionCompute.shared { try VNImageRequestHandler(cgImage: image, options: [:]).perform([request]) }
         return try request.results?.first.map {
             try JSONEncoder().encode(Vision.FeaturePrintObservation($0))
         }
@@ -668,7 +712,7 @@ public final class ApplePhotoRenderer: @unchecked Sendable {
         guard longEdge.isFinite, longEdge > 0 else { return image }
         let probeScale = min(1, 1024 / longEdge)
         let probe = image.transformed(by: CGAffineTransform(scaleX: probeScale, y: probeScale))
-        let filters = probe.autoAdjustmentFilters(options: [.redEye: false, .crop: false, .level: false])
+        let filters = VisionCompute.shared { probe.autoAdjustmentFilters(options: [.redEye: false, .crop: false, .level: false]) }
         return filters.reduce(image) { current, filter in
             filter.setValue(current, forKey: kCIInputImageKey)
             return filter.outputImage ?? current
@@ -759,7 +803,8 @@ public final class ApplePhotoRenderer: @unchecked Sendable {
         let request = VNDetectHorizonRequest()
         let handler = VNImageRequestHandler(url: url, orientation: CGImagePropertyOrientation(exifOrientation: orientation), options: [:])
         do {
-            try handler.perform([request])
+            VisionCompute.prepare([request])
+            try VisionCompute.shared { try handler.perform([request]) }
             guard let angle = request.results?.first?.angle else { return nil }
             // Vision angle is radians; convert to degrees and invert for our straighten convention.
             return -Double(angle) * 180 / .pi
@@ -1103,6 +1148,10 @@ public final class PhotoPipelineRunner: @unchecked Sendable {
     private let catalog: PhotoCatalog?
     private let catalogInitializationMessage: String?
 
+    /// How many newly analyzed photos are written to the analysis cache at a time.
+    /// Smaller values lose less work when a phone suspends the app mid-cull.
+    public var checkpointInterval: Int = 48
+
     public init(importer: PhotoFolderImporter = PhotoFolderImporter(), analyzer: AppleAnalysisEngine = AppleAnalysisEngine(), renderer: ApplePhotoRenderer = ApplePhotoRenderer(), catalog: PhotoCatalog? = nil) {
         self.importer = importer
         self.analyzer = analyzer
@@ -1189,6 +1238,67 @@ public final class PhotoPipelineRunner: @unchecked Sendable {
             catalog: catalog,
             cacheBytes: result.storageSummary?.cacheBytes ?? 0
         )
+    }
+
+    public struct Decision: Sendable {
+        public var analyzed: [AnalyzedPhoto]
+        public var grouping: PhotoGrouping
+        public var scored: [ScoredPhoto]
+        public var shortlist: Shortlist
+        public var groupingSeconds: Double
+        public var visualDistance: VisualDistanceProvider
+        public var selectionProfile: ScoringProfile
+    }
+
+    /// Everything after analysis: focus ranking, camera sync, grouping, scoring
+    /// with taste memory and key faces, and selection. The Mac runner and the
+    /// phone's streamed cull share it so both decide the same way.
+    public static func decide(
+        rawAnalyzed: [AnalyzedPhoto],
+        profile: ScoringProfile,
+        progress: @escaping @Sendable (PipelineProgress) -> Void = { _ in }
+    ) -> Decision {
+        let focused = PhotoFocusRanking.apply(to: rawAnalyzed)
+        let cameraTimelines = MultiCameraSync.estimateOffsets(assets: focused.map(\.asset))
+        let analyzed = MultiCameraSync.aligningCaptureDates(focused, timelines: cameraTimelines)
+
+        progress(PipelineProgress(stage: .grouping, completed: 0, total: 1, message: "Grouping duplicates and bursts"))
+        let visualDistance = AppleVisualDistance.cachedProvider()
+        let groupingStartedAt = Date()
+        let grouping = PhotoGroupingEngine.group(analyzed, profile: profile, visualDistance: visualDistance)
+        let groupingSeconds = Date().timeIntervalSince(groupingStartedAt)
+        let cameraNote = cameraTimelines.count > 1 ? " across \(cameraTimelines.count) cameras" : ""
+        progress(PipelineProgress(stage: .grouping, completed: 1, total: 1, message: "Found \(grouping.groups.count) groups\(cameraNote)"))
+
+        let taste = TasteMemory.load()
+        let keyFaces = KeyFaceScorer.boosts(for: analyzed)
+        let scored = analyzed.map { photo -> ScoredPhoto in
+            var score = PhotoScoring.score(photo, profile: profile)
+            let tasteDelta = taste.scoreAdjustment(signals: photo.signals)
+            let faceDelta = keyFaces[photo.id]?.amount ?? 0
+            if tasteDelta != 0 || faceDelta != 0 {
+                var reasons = score.reasons
+                if faceDelta > 0, let reason = keyFaces[photo.id]?.reason { reasons.append(reason) }
+                if taste.isReady, abs(tasteDelta) > 0.01 { reasons.append("matches your taste") }
+                score = CompositeScore(
+                    total: min(max(score.total + tasteDelta + faceDelta, 0), 1),
+                    components: score.components,
+                    reasons: reasons
+                )
+            }
+            return ScoredPhoto(photo: photo, score: score)
+        }
+        progress(PipelineProgress(stage: .selecting, completed: 0, total: 1, message: "Building shortlist"))
+        var selectionProfile = profile
+        selectionProfile.targetCount = profile.resolvedTargetCount(for: analyzed.count)
+        if let fraction = taste.preferredKeepFraction, taste.isReady, analyzed.count > 0 {
+            let learned = Int((fraction * Double(analyzed.count)).rounded())
+            selectionProfile.targetCount = min(analyzed.count, max(selectionProfile.targetCount, learned))
+        }
+        selectionProfile.diversityWeight = taste.diversityWeight(base: selectionProfile.diversityWeight)
+        let shortlist = PhotoSelectionEngine.select(scored, grouping: grouping, profile: selectionProfile, visualDistance: visualDistance)
+        progress(PipelineProgress(stage: .selecting, completed: 1, total: 1, message: "Selected \(shortlist.selectedIDs.count) photos"))
+        return Decision(analyzed: analyzed, grouping: grouping, scored: scored, shortlist: shortlist, groupingSeconds: groupingSeconds, visualDistance: visualDistance, selectionProfile: selectionProfile)
     }
 
     public func prunePreviousRuns(in outputDirectory: URL, keeping runDirectory: URL? = nil) throws -> Int {
@@ -1313,10 +1423,18 @@ public final class PhotoPipelineRunner: @unchecked Sendable {
             let workers = min(max(ProcessInfo.processInfo.activeProcessorCount / 2, 1), 4, pendingIndices.count)
             workerCount = workers
             let analysisStartedAt = Date()
-            DispatchQueue.concurrentPerform(iterations: workers) { worker in
-                for position in stride(from: worker, to: pendingIndices.count, by: workers) {
+            // Analyze in checkpointed batches. Each finished batch is written to the
+            // analysis cache, so a phone that suspends or kills the app mid-cull
+            // resumes from the last batch instead of starting over.
+            let batchSize = max(checkpointInterval, workers)
+            var batchStart = 0
+            while batchStart < pendingIndices.count, !accumulator.hasError, !shouldCancel() {
+            let batch = Array(pendingIndices[batchStart..<min(batchStart + batchSize, pendingIndices.count)])
+            batchStart += batch.count
+            DispatchQueue.concurrentPerform(iterations: min(workers, batch.count)) { worker in
+                for position in stride(from: worker, to: batch.count, by: min(workers, batch.count)) {
                     guard !accumulator.hasError, !shouldCancel() else { return }
-                    let index = pendingIndices[position]
+                    let index = batch[position]
                     let item = imported[index]
                     var stopWorker = false
                     autoreleasepool {
@@ -1337,6 +1455,15 @@ public final class PhotoPipelineRunner: @unchecked Sendable {
                     }
                     if stopWorker { return }
                 }
+            }
+            var checkpointed = 0
+            for index in batch {
+                if let signals = accumulator.result(at: index) {
+                    cache.update(asset: imported[index].asset, signals: signals)
+                    checkpointed += 1
+                }
+            }
+            if checkpointed > 0 { try? cache.save() }
             }
             for representative in analysisRepresentatives {
                 guard let signals = accumulator.result(at: representative) else { continue }
@@ -1381,46 +1508,17 @@ public final class PhotoPipelineRunner: @unchecked Sendable {
         cache.retainAssets(imported.map(\.asset))
         try cache.save()
 
-        let focused = PhotoFocusRanking.apply(to: rawAnalyzed)
-        let cameraTimelines = MultiCameraSync.estimateOffsets(assets: focused.map(\.asset))
-        let analyzed = MultiCameraSync.aligningCaptureDates(focused, timelines: cameraTimelines)
-
-        progress(PipelineProgress(stage: .grouping, completed: 0, total: 1, message: "Grouping duplicates and bursts"))
-        let visualDistance = AppleVisualDistance.cachedProvider()
         let groupingStartedAt = Date()
-        let grouping = PhotoGroupingEngine.group(analyzed, profile: profile, visualDistance: visualDistance)
-        groupingSeconds = Date().timeIntervalSince(groupingStartedAt)
-        let cameraNote = cameraTimelines.count > 1 ? " across \(cameraTimelines.count) cameras" : ""
-        progress(PipelineProgress(stage: .grouping, completed: 1, total: 1, message: "Found \(grouping.groups.count) groups\(cameraNote)"))
-
-        let taste = TasteMemory.load()
-        let keyFaces = KeyFaceScorer.boosts(for: analyzed)
-        let scored = analyzed.map { photo -> ScoredPhoto in
-            var score = PhotoScoring.score(photo, profile: profile)
-            let tasteDelta = taste.scoreAdjustment(signals: photo.signals)
-            let faceDelta = keyFaces[photo.id]?.amount ?? 0
-            if tasteDelta != 0 || faceDelta != 0 {
-                var reasons = score.reasons
-                if faceDelta > 0, let reason = keyFaces[photo.id]?.reason { reasons.append(reason) }
-                if taste.isReady, abs(tasteDelta) > 0.01 { reasons.append("matches your taste") }
-                score = CompositeScore(
-                    total: min(max(score.total + tasteDelta + faceDelta, 0), 1),
-                    components: score.components,
-                    reasons: reasons
-                )
-            }
-            return ScoredPhoto(photo: photo, score: score)
-        }
-        progress(PipelineProgress(stage: .selecting, completed: 0, total: 1, message: "Building shortlist"))
-        let selectionStartedAt = Date()
-        var selectionProfile = profile
-        selectionProfile.targetCount = profile.resolvedTargetCount(for: analyzed.count)
-        if let fraction = taste.preferredKeepFraction, taste.isReady, analyzed.count > 0 {
-            let learned = Int((fraction * Double(analyzed.count)).rounded())
-            selectionProfile.targetCount = min(analyzed.count, max(selectionProfile.targetCount, learned))
-        }
-        selectionProfile.diversityWeight = taste.diversityWeight(base: selectionProfile.diversityWeight)
-        var shortlist = PhotoSelectionEngine.select(scored, grouping: grouping, profile: selectionProfile, visualDistance: visualDistance)
+        let decided = Self.decide(rawAnalyzed: rawAnalyzed, profile: profile, progress: progress)
+        let analyzed = decided.analyzed
+        let grouping = decided.grouping
+        let scored = decided.scored
+        var shortlist = decided.shortlist
+        let visualDistance = decided.visualDistance
+        groupingSeconds = decided.groupingSeconds
+        let selectionStartedAt = groupingStartedAt.addingTimeInterval(decided.groupingSeconds)
+        let selectionProfile = decided.selectionProfile
+        _ = visualDistance
         selectionSeconds = Date().timeIntervalSince(selectionStartedAt)
         if let catalog, catalogHealthy {
             do {
@@ -1894,5 +1992,65 @@ private extension CGImagePropertyOrientation {
         case 8: self = .left
         default: self = .up
         }
+    }
+}
+
+
+/// Where Vision runs its models. The iOS simulator has no Neural Engine or
+/// Metal-backed espresso context for several models, so requests are pinned to
+/// the CPU there. Devices and Macs keep Vision's default placement.
+public enum VisionCompute {
+    /// Process-wide cap on concurrent Vision work, shared by every caller:
+    /// the cull's workers, keeper labeling and masks, and Core Image auto
+    /// adjustment (which runs Vision face detection inside). Vision's internal
+    /// queues deadlock when they cannot get threads, so the cap stays at the
+    /// pipeline's own worker count. Run one cull per process at a time: the app
+    /// runs one trip at a time and the server's job queue is serial. Tests that
+    /// touch Vision are serialized for the same reason (`VisionSuites`).
+    public static let gate = DispatchSemaphore(value: permits)
+    static let permits = min(max(ProcessInfo.processInfo.activeProcessorCount / 2, 1), 4)
+    private static let exclusiveLock = NSLock()
+
+    /// Runs `work` with no other Vision request in flight. Used for text
+    /// recognition, whose detector parks on its own serial queue and was present
+    /// in every deadlock sampled on 2026-10-01.
+    /// Runs `work` holding one shared permit. Use for every Vision request and
+    /// for Core Image auto adjustment, which runs Vision face detection inside.
+    public static func shared<T>(_ work: () throws -> T) rethrows -> T {
+        gate.wait()
+        defer { gate.signal() }
+        return try work()
+    }
+
+    public static func exclusive<T>(_ work: () throws -> T) rethrows -> T {
+        exclusiveLock.lock()
+        for _ in 0..<permits { gate.wait() }
+        exclusiveLock.unlock()
+        defer { for _ in 0..<permits { gate.signal() } }
+        return try work()
+    }
+
+    /// The aesthetics model has no usable CPU fallback in the iOS simulator: it
+    /// returns the same near-zero score for every image, which would drag every
+    /// photo below the cut. Scoring already handles a missing aesthetic score.
+    public static var aestheticsAvailable: Bool {
+        #if targetEnvironment(simulator)
+        false
+        #else
+        true
+        #endif
+    }
+
+    public static func prepare(_ requests: [VNRequest]) {
+        #if targetEnvironment(simulator)
+        for request in requests {
+            guard let supported = try? request.supportedComputeStageDevices else { continue }
+            for (stage, devices) in supported {
+                if let cpu = devices.first(where: { if case .cpu = $0 { return true } else { return false } }) {
+                    request.setComputeDevice(cpu, for: stage)
+                }
+            }
+        }
+        #endif
     }
 }
