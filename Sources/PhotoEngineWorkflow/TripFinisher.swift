@@ -65,6 +65,7 @@ public enum TripFinisher {
         options: BookRenderer.Options,
         lookUpPlaces: Bool = true,
         guestKeepPercent: Double = 30,
+        instagram: Bool = true,
         progress: @escaping @Sendable (String, Int, Int) -> Void = { _, _, _ in }
     ) async throws -> Outcome {
         let fm = FileManager.default
@@ -148,7 +149,7 @@ public enum TripFinisher {
 
         progress("Finishing photos", 0, keepers.count)
         let edits = BookEdits.load(from: folders.book)
-        let report = try BookPublisher.publish(book: book, edits: edits, facts: facts, source: { sources[$0.id] }, to: folders.book, options: options)
+        let report = try BookPublisher.publish(book: book, edits: edits, facts: facts, source: { sources[$0.id] }, to: folders.book, options: options, instagram: instagram)
         return Outcome(book: book, report: report, ownerCount: owner.count, guestKept: guestKept, guestDuplicates: guestDuplicates, guestOverBudget: guestOverBudget, keptPerContributor: keptPerContributor)
     }
 

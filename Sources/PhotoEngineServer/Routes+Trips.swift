@@ -14,6 +14,20 @@ struct CreateTripBody: Decodable, Sendable {
     var tone: String?
     var theme: String?
     var ownerName: String?
+    /// The phone's install ID, so each phone gets one free book.
+    var installID: String?
+}
+
+struct PlanBody: Decodable, Sendable {
+    /// A StoreKit 2 signed transaction (JWS).
+    var transaction: String
+}
+
+struct PlanDTO: Encodable, Sendable {
+    var plan: Plan
+    var limits: PlanLimits
+    var hostedUntil: Date?
+    var subscriptionExpires: Date?
 }
 
 struct InviteBody: Decodable, Sendable {
@@ -67,6 +81,12 @@ struct TripDTO: Encodable, Sendable {
     var invitePath: String?
     var inviteOpen: Bool
     var contributors: [ContributorDTO]
+    var plan: Plan
+    var limits: PlanLimits
+    var hostedUntil: Date?
+    /// Whether this trip can be the phone's free book.
+    var freeBookAvailable: Bool
+    var printInterest: Int
 }
 
 struct UploadDTO: Encodable, Sendable {
@@ -102,13 +122,22 @@ struct FinishResult: Codable, Sendable {
 enum TripPaths {
     static func book(_ slug: String) -> String { "/b/\(slug)/" }
     static func invite(_ record: TripRecord) -> String? { record.inviteCode.map { "/j/\($0)" } }
-    static func options(_ record: TripRecord) -> BookRenderer.Options {
-        BookRenderer.Options(
-            editEndpoint: "/b/\(record.slug)/edits",
+    /// What the page offers follows the plan: editing and no footer are paid.
+    static func options(_ record: TripRecord, siteURL: String?) -> BookRenderer.Options {
+        let limits = record.limits
+        return BookRenderer.Options(
+            editEndpoint: limits.editing ? "/b/\(record.slug)/edits" : nil,
             guestEndpoint: "/b/\(record.slug)/guest",
-            invitePath: record.inviteOpen ? invite(record) : nil
+            invitePath: record.inviteOpen ? invite(record) : nil,
+            printInterestEndpoint: "/b/\(record.slug)/print-interest",
+            footer: limits.branded ? BookRenderer.Options.freeFooter : "",
+            footerLink: limits.branded ? siteURL : nil
         )
     }
+}
+
+private func ensureHosted(_ record: TripRecord) throws {
+    guard record.isHosted() else { throw APIError.gone("This book is no longer online.") }
 }
 
 /// The contributor token sent by the invite page.
@@ -116,7 +145,8 @@ private func contributorToken(_ request: Request) -> String? {
     request.headers[HTTPField.Name("X-Photocore-Contributor")!]
 }
 
-func registerTripRoutes(_ router: Router<BasicRequestContext>, env: ServerEnvironment, trips: TripStore) {
+func registerTripRoutes(_ router: Router<BasicRequestContext>, env: ServerEnvironment, trips: TripStore, storeKit: StoreKitVerifier) {
+    let siteURL = env.configuration.siteURL
     // MARK: Owner API (server token)
 
     router.post("v2/trips") { request, context in
@@ -129,7 +159,8 @@ func registerTripRoutes(_ router: Router<BasicRequestContext>, env: ServerEnviro
             note: body.note.map { String($0.prefix(280)) },
             calendarEvents: (body.calendarEvents ?? []).prefix(5).map { String($0.prefix(120)) }
         )
-        let (record, token) = try await trips.create(title: title, context: context, tone: tone, theme: theme, ownerName: ownerName)
+        let installID = body.installID.map { String($0.prefix(64)) }
+        let (record, token) = try await trips.create(title: title, context: context, tone: tone, theme: theme, ownerName: ownerName, installID: installID)
         let dto = TripCreatedDTO(id: record.id, slug: record.slug, ownerToken: token, bookPath: TripPaths.book(record.slug), editPath: TripPaths.book(record.slug) + "#edit=" + token, invitePath: TripPaths.invite(record))
         return try APIJSON.response(dto, status: .created)
     }
@@ -147,8 +178,47 @@ func registerTripRoutes(_ router: Router<BasicRequestContext>, env: ServerEnviro
             id: record.id, slug: record.slug, ownerPhotos: owner, guestPhotos: guests,
             finishedAt: record.finishedAt, lastJobID: record.lastJobID, writer: record.bookWriter,
             bookPath: TripPaths.book(record.slug), invitePath: TripPaths.invite(record),
-            inviteOpen: record.inviteOpen, contributors: people
+            inviteOpen: record.inviteOpen, contributors: people,
+            plan: record.currentPlan, limits: record.limits, hostedUntil: record.hostedUntil,
+            freeBookAvailable: await trips.freeBookAvailable(record), printInterest: record.printInterest ?? 0
         ))
+    }
+
+    /// Puts a verified App Store purchase on the trip: Plus, a Trip Pass or an Event Pass.
+    router.post("v2/trips/{tid}/plan") { request, context in
+        let tid = try context.parameters.require("tid")
+        guard await trips.record(id: tid) != nil else { throw APIError.notFound("No trip \(tid)") }
+        let body = try await request.decode(as: PlanBody.self, context: context)
+        let transaction: SignedTransaction
+        do {
+            transaction = try storeKit.verify(body.transaction)
+        } catch let error as StoreKitError {
+            throw error == .expired ? APIError.paymentRequired(error.description) : APIError.invalid(error.description)
+        }
+        let record = try await trips.apply(transaction, to: tid)
+        // Re-render a finished book so its page matches the plan at once.
+        if record.finishedAt != nil, let book = try? TripBook.load(from: await trips.bookFolder(tid)) {
+            let edits = BookEdits.load(from: await trips.bookFolder(tid))
+            try? Data(BookRenderer.html(edits.applied(to: book), options: TripPaths.options(record, siteURL: siteURL)).utf8)
+                .write(to: await trips.bookFolder(tid).appendingPathComponent("index.html"), options: .atomic)
+        }
+        return try APIJSON.response(PlanDTO(plan: record.currentPlan, limits: record.limits, hostedUntil: record.hostedUntil, subscriptionExpires: record.subscriptionExpires))
+    }
+
+    /// The finished book as a print-ready PDF (8 x 8 inch pages with bleed).
+    router.get("v2/trips/{tid}/print.pdf") { _, context in
+        let tid = try context.parameters.require("tid")
+        guard let record = await trips.record(id: tid), record.finishedAt != nil else { throw APIError.notFound("Finish the book first.") }
+        let folder = await trips.bookFolder(tid)
+        let book = BookEdits.load(from: folder).applied(to: try TripBook.load(from: folder))
+        let output = await trips.folder(tid).appendingPathComponent("work/print.pdf")
+        try FileManager.default.createDirectory(at: output.deletingLastPathComponent(), withIntermediateDirectories: true)
+        _ = try BookPrinter.pdf(book: book, folder: folder, to: output, options: .init(footer: record.limits.branded ? "Made with Photocore" : nil))
+        var headers = HTTPFields()
+        headers[.contentType] = "application/pdf"
+        headers[.contentDisposition] = "attachment; filename=\"book.pdf\""
+        headers[.cacheControl] = "no-store"
+        return APIJSON.bytes(try Data(contentsOf: output), headers: headers)
     }
 
     /// Updates what the owner chose after inviting people: title, note, tone,
@@ -157,6 +227,9 @@ func registerTripRoutes(_ router: Router<BasicRequestContext>, env: ServerEnviro
         let tid = try context.parameters.require("tid")
         guard await trips.record(id: tid) != nil else { throw APIError.notFound("No trip \(tid)") }
         let body = try await request.decode(as: CreateTripBody.self, context: context)
+        if let theme = body.theme.flatMap({ BookTheme(name: $0) }), let record = await trips.record(id: tid), !record.limits.allows(theme) {
+            throw APIError.paymentRequired("\(theme.displayName) is part of Plus and the passes.")
+        }
         try await trips.update(tid) { record in
             if let title = body.title { record.title = String(title.prefix(120)) }
             if let tone = body.tone.flatMap(DiaryTone.init(rawValue:)) { record.tone = tone }
@@ -201,6 +274,10 @@ func registerTripRoutes(_ router: Router<BasicRequestContext>, env: ServerEnviro
         guard total > 0 else {
             throw APIError.precondition("Add some photos before finishing.")
         }
+        try ensureHosted(record)
+        if record.currentPlan == .free { try await trips.claimFreeBook(tid) }
+        let limits = record.limits
+        let theme = limits.allows(record.theme) ? record.theme : .book
         var contributors = [TripFinisher.Contributor(name: nil, folder: await trips.guestFolder(tid))]
         for person in await trips.contributors(tid) {
             contributors.append(TripFinisher.Contributor(name: person.name, folder: await trips.contributorFolder(tid, person.id)))
@@ -220,17 +297,20 @@ func registerTripRoutes(_ router: Router<BasicRequestContext>, env: ServerEnviro
                 title: record.title,
                 context: record.context ?? .empty,
                 tone: record.tone,
-                theme: record.theme,
+                theme: theme,
                 ownerName: record.ownerName,
                 writer: writer,
-                options: TripPaths.options(record),
-                lookUpPlaces: ProcessInfo.processInfo.environment["PHOTOCORE_OFFLINE"] != "1"
+                options: TripPaths.options(record, siteURL: siteURL),
+                lookUpPlaces: ProcessInfo.processInfo.environment["PHOTOCORE_OFFLINE"] != "1",
+                instagram: limits.instagram
             ) { stage, done, total in
                 Task { await jobs.noteProgress(id: job.id, stage: "finish", completed: done, total: total, message: stage) }
             }
             try await trips.update(tid) {
+                let first = $0.finishedAt ?? Date()
                 $0.finishedAt = Date()
                 $0.bookWriter = outcome.book.writer
+                $0.hostedUntil = PlanPolicy.hostedUntil(plan: $0.currentPlan, firstFinished: first, subscriptionExpires: $0.subscriptionExpires)
             }
             return try APIJSON.data(FinishResult(
                 bookPath: TripPaths.book(record.slug),
@@ -294,15 +374,23 @@ func registerTripRoutes(_ router: Router<BasicRequestContext>, env: ServerEnviro
         guard let record = await trips.record(slug: slug) else { throw APIError.notFound("No book.") }
         let bearer = request.headers[.authorization].flatMap { $0.hasPrefix("Bearer ") ? String($0.dropFirst(7)) : nil }
         guard await trips.isOwner(record, token: bearer) else { throw APIError.unauthorized("Only the book's owner can edit it.") }
+        guard record.limits.editing else { throw APIError.paymentRequired("Editing the words is part of Plus and the passes.") }
         let body = try await request.decode(as: EditBody.self, context: context)
         do {
-            try TripFinisher.applyEdit(key: body.key, value: body.value, bookFolder: await trips.bookFolder(record.id), options: TripPaths.options(record))
+            try TripFinisher.applyEdit(key: body.key, value: body.value, bookFolder: await trips.bookFolder(record.id), options: TripPaths.options(record, siteURL: siteURL))
         } catch TripFinisher.EditError.notEditable {
             throw APIError.invalid("That part of the book can't be edited.")
         } catch TripFinisher.EditError.tooLong {
             throw APIError.invalid("Keep it under \(BookEdits.maximumLength) characters.")
         }
         return try APIJSON.response(["ok": true])
+    }
+
+    router.post("b/{slug}/print-interest") { _, context in
+        let slug = try context.parameters.require("slug")
+        guard let record = await trips.record(slug: slug) else { throw APIError.notFound("No book.") }
+        try ensureHosted(record)
+        return try APIJSON.response(["count": try await trips.notePrintInterest(record.id)])
     }
 
     // A literal route: the POST routes below put "guest" in the router tree,
@@ -378,6 +466,9 @@ func registerTripRoutes(_ router: Router<BasicRequestContext>, env: ServerEnviro
         let body = try await request.decode(as: JoinBody.self, context: context)
         let name = body.name.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !name.isEmpty, name.count <= TripLimits.nameLength else { throw APIError.invalid("Add a name under \(TripLimits.nameLength) characters.") }
+        guard await trips.contributors(record.id).count < record.limits.friends else {
+            throw APIError.conflict("This book is full: it has room for \(record.limits.friends) people. Ask the person who invited you to make room.")
+        }
         let (person, token) = try await trips.join(record.id, name: name)
         return try APIJSON.response(JoinedDTO(name: person.name, token: token), status: .created)
     }
@@ -389,6 +480,9 @@ func registerTripRoutes(_ router: Router<BasicRequestContext>, env: ServerEnviro
         guard record.inviteOpen else { throw APIError.forbidden("This trip isn't taking photos any more.") }
         guard let person = await trips.contributor(record.id, token: contributorToken(request)) else {
             throw APIError.unauthorized("Join the trip before adding photos.")
+        }
+        guard await trips.contributedCount(record.id) < record.limits.friendPhotos else {
+            throw APIError.conflict("This book has all the photos it can take for now.")
         }
         let buffer = try await request.body.collect(upTo: TripLimits.uploadBytes)
         let url = try await trips.store(photo: Data(buffer: buffer), name: name, id: record.id, contributor: person)
@@ -409,6 +503,7 @@ func registerTripRoutes(_ router: Router<BasicRequestContext>, env: ServerEnviro
 
 private func bookFile(trips: TripStore, slug: String, relative: String) async throws -> Response {
     guard let record = await trips.record(slug: slug) else { throw APIError.notFound("No book.") }
+    try ensureHosted(record)
     let parts = relative.split(separator: "/")
     guard !parts.isEmpty, parts.allSatisfy({ $0 != ".." && $0 != "." && !$0.hasPrefix(".") }) else { throw APIError.notFound("Not found.") }
     let allowed = ["html", "jpg", "txt"]

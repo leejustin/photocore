@@ -1,4 +1,11 @@
+import PhotoEngineWorkflow
 import SwiftUI
+
+/// Why the plans sheet is showing.
+struct PlansPrompt: Identifiable {
+    var reason: String?
+    var id: String { reason ?? "" }
+}
 
 /// The upsell: one keeper shown before and after the paid finish, then upload,
 /// finish and share. Appears after the free cull.
@@ -12,6 +19,8 @@ struct FinishCard: View {
     @State private var events: [String] = []
     @State private var reading: URL?
     @State private var theme = "book"
+    @State private var plans: PlansPrompt?
+    @State private var printFile: URL?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
@@ -28,6 +37,18 @@ struct FinishCard: View {
         .overlay(RoundedRectangle(cornerRadius: 20).stroke(Color.accentColor.opacity(0.35), lineWidth: 1.5))
         .sheet(isPresented: $showingSettings, onDismiss: { server = FinishServer.saved }) { ServerSettingsView() }
         .sheet(item: $reading) { SafariView(url: $0).ignoresSafeArea() }
+        .sheet(item: $plans) { prompt in
+            PlansSheet(reason: prompt.reason) { jws in
+                guard let server else { return "Connect a Photocore server first." }
+                return await finish.applyPlan(jws: jws, tripID: run.trip.id, title: run.trip.place, server: server)
+            }
+        }
+        .onChange(of: theme) { _, picked in
+            if let style = BookTheme(name: picked), !finish.limits.allows(style) {
+                theme = "book"
+                plans = PlansPrompt(reason: "\(style.displayName) is part of Plus and the passes.")
+            }
+        }
         .onAppear { finish.restore(tripID: run.trip.id) }
         .task(id: server) {
             guard let server, let first = run.keepers.first, let identifier = run.identifier(first.id) else { return }
@@ -68,11 +89,12 @@ struct FinishCard: View {
                     Text("Snapshots").tag("snapshot")
                 }
                 .pickerStyle(.segmented)
-                GroupInvite(finish: finish, server: server, tripTitle: run.trip.title) { invite(server) }
+                planLine
+                GroupInvite(finish: finish, server: server, tripTitle: run.trip.title, onInvite: { invite(server) }, onUpgrade: { plans = PlansPrompt(reason: $0) })
                 Button(finish.people.isEmpty ? "Finish \(run.keepers.count) photos" : "Finish with everyone\u{2019}s photos") { start(server) }
                 .buttonStyle(PrimaryButtonStyle())
                 .disabled(run.keepers.isEmpty && finish.friendsPhotos == 0)
-                Text("Only your keepers are uploaded. Test build: no charge.")
+                Text("Only your keepers are uploaded.")
                     .font(.footnote).foregroundStyle(Color.ink.opacity(0.55))
             } else {
                 Button("Connect a Photocore server") { showingSettings = true }
@@ -97,16 +119,19 @@ struct FinishCard: View {
                     Label("Share", systemImage: "square.and.arrow.up")
                 }
                 .buttonStyle(.bordered)
-                Button { reading = edit } label: { Label("Edit words", systemImage: "pencil") }
+                Button {
+                    if finish.limits.editing { reading = edit } else { plans = PlansPrompt(reason: "Editing the words is part of Plus and the passes.") }
+                } label: { Label("Edit words", systemImage: finish.limits.editing ? "pencil" : "lock") }
                     .buttonStyle(.bordered)
             }
+            printRow
             if let server, finish.remote?.invitePath != nil {
                 let new = finish.friendsPhotos - (finish.photosAtLastFinish ?? 0)
                 if new > 0 {
                     Button("Update the book with ^[\(new) new photo](inflect: true)") { start(server) }
                         .buttonStyle(PrimaryButtonStyle())
                 }
-                GroupInvite(finish: finish, server: server, tripTitle: run.trip.title) { invite(server) }
+                GroupInvite(finish: finish, server: server, tripTitle: run.trip.title, onInvite: { invite(server) }, onUpgrade: { plans = PlansPrompt(reason: $0) })
                 if finish.inviteOpen {
                     Button("Stop taking photos") { Task { await finish.setInvite(open: false, server: server) } }
                         .font(.footnote)
@@ -114,10 +139,57 @@ struct FinishCard: View {
             }
             Text("Anyone with the book link can see it and leave notes. Only people with the invite link can add photos.")
                 .font(.footnote).foregroundStyle(Color.ink.opacity(0.55))
+        case .needsPlan(let message):
+            Text(message).font(.subheadline).foregroundStyle(Color.ink)
+            Button("See plans") { plans = PlansPrompt(reason: message) }
+                .buttonStyle(PrimaryButtonStyle())
+            Button("Back") { finish.reset() }
+                .font(.footnote)
         case .failed(let message):
             Text(message).font(.subheadline).foregroundStyle(.red)
             Button("Try again") { if let server { start(server) } }
                 .buttonStyle(.bordered)
+        }
+    }
+
+    /// What this book's plan covers, and a way to more.
+    @ViewBuilder private var planLine: some View {
+        HStack(alignment: .firstTextBaseline) {
+            Image(systemName: finish.plan == .free ? "gift" : "checkmark.seal")
+                .foregroundStyle(Color.accentColor)
+            Text(planText).font(.footnote).foregroundStyle(Color.ink.opacity(0.7))
+            Spacer()
+            if finish.plan == .free {
+                Button("Plans") { plans = PlansPrompt(reason: nil) }.font(.footnote.weight(.semibold))
+            }
+        }
+    }
+
+    private var planText: String {
+        switch finish.plan {
+        case .free:
+            return finish.freeBookAvailable || Store.shared.plus != nil
+                ? "Your first book is free, with up to \(finish.limits.friends) friends."
+                : "Your free book is made. Plus or a Trip Pass covers this one."
+        case .plus: return "Plus: up to \(finish.limits.friends) friends, both styles, no footer."
+        case .tripPass: return "Trip Pass: this book is yours for good."
+        case .eventPass: return "Event Pass: up to \(finish.limits.friends) guests, kept for good."
+        }
+    }
+
+    /// The print-ready PDF, for Lulu, Blurb or any photo-book printer.
+    @ViewBuilder private var printRow: some View {
+        if let printFile {
+            ShareLink(item: printFile) { Label("Share the print file", systemImage: "printer") }
+                .font(.subheadline)
+        } else if let server {
+            Button {
+                Task { printFile = await finish.printFile(server: server) }
+            } label: {
+                if finish.printing { ProgressView() } else { Label("Get a print-ready PDF", systemImage: "printer") }
+            }
+            .font(.subheadline)
+            .disabled(finish.printing)
         }
     }
 

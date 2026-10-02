@@ -19,7 +19,8 @@ Built and tested on branch `feat/consumer-trip-book` (see [the build plan](./out
 | iPhone app (`Apps/PhotocoreiOS`) | Trips found from capture dates, streamed cull, swipe review, Photos album, set aside and restore, finish card |
 | Trip book | Book and Snapshots styles, chapters by local day and place, diary and captions, photo credits, owner edits, guest notes and hearts, Instagram pack |
 | Paid finish server | Trip upload, finish job, preview, public book pages, invite links and group curation |
-| Not built yet | Payments (StoreKit), accounts, publishing books to object storage, Android, a live Gemini or DeepSeek run |
+| Plans | Free first book per phone, Plus, Trip Pass and Event Pass with StoreKit 2; the server checks every signed purchase and enforces the caps |
+| Not built yet | Print ordering (needs a print partner), App Store Server Notifications for refunds, publishing books to object storage, Android, a live Gemini or DeepSeek run |
 
 The original specifications are still useful background:
 
@@ -69,7 +70,10 @@ Local time in the book follows a GPS place's time zone first, then the camera's 
 | `PUT /v2/trips/{id}/photos/{name}` | Server token | Upload a keeper (JPEG or HEIC, 60 MB, 400 per trip) |
 | `POST /v2/trips/{id}/finish` | Server token | Queue the finish job |
 | `POST /v2/preview` | Server token | Render one photo with the paid edit, for the upsell |
-| `GET /b/{slug}/` | Public link | The book page, photos and Instagram files |
+| `POST /v2/trips/{id}/plan` | Server token | Apply an App Store purchase (Plus, Trip Pass, Event Pass), checked against Apple's root certificate |
+| `GET /v2/trips/{id}/print.pdf` | Server token | The book as a print-ready PDF for Lulu, Blurb or any photo-book printer |
+| `GET /b/{slug}/` | Public link | The book page, photos and Instagram files; 410 once its hosting ends |
+| `POST /b/{slug}/print-interest` | Public link | Counts visitors who'd want a printed copy |
 | `POST /b/{slug}/edits` | Owner token | Edit the title, intro, headings, diary or a caption |
 | `/b/{slug}/guest/...` | Public link | Notes and hearts, with count and size limits |
 | `GET /j/{code}` | Invite link | The page where friends join and add photos |

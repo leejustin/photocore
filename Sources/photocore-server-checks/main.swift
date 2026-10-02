@@ -1,4 +1,5 @@
 import CoreGraphics
+import CryptoKit
 import Foundation
 import ImageIO
 import UniformTypeIdentifiers
@@ -27,7 +28,8 @@ struct ServerChecks {
             security: WorkerSecurity(token: token, allowedRoots: [root], allowedOrigins: [], outputRoot: output),
             catalogURL: root.appendingPathComponent("catalog.sqlite"),
             mediaCacheDirectory: cache,
-            tokenWasGenerated: false
+            tokenWasGenerated: false,
+            storeKitTestRoot: TestStore.fixtures.appendingPathComponent("root.der")
         )
         let portBox = PortBox()
         let application = try PhotocoreApplication.make(configuration: configuration) { portBox.set($0) }
@@ -39,9 +41,10 @@ struct ServerChecks {
             let port = await portBox.wait()
             try await exercise(port: port, token: token, source: source)
             try await exerciseTrips(port: port, token: token, source: source)
+            try await exercisePlans(port: port, token: token, source: source)
             group.cancelAll()
         }
-        print("All 10 server checks passed")
+        print("All 11 server checks passed")
     }
 
     private static func tokenFileIsPrivate() throws {
@@ -113,9 +116,11 @@ struct ServerChecks {
 
     private static func exerciseTrips(port: Int, token: String, source: URL) async throws {
         let base = URL(string: "http://127.0.0.1:\(port)")!
-        let created = try await postJSON(base.appendingPathComponent("v2/trips"), token: token, body: ["title": "Test trip", "tone": "dry"])
+        let created = try await postJSON(base.appendingPathComponent("v2/trips"), token: token, body: ["title": "Test trip", "tone": "dry", "installID": "check-phone-1"])
         try expect(created.status == 201, "create trip returned \(created.status) \(text(created.body))")
         let trip = try decode(TripWire.self, from: created.body)
+        firstTripID = trip.id
+        firstTripSlug = trip.slug
 
         let early = try await data(base.appendingPathComponent("v2/trips/\(trip.id)/finish"), method: "POST", token: token)
         try expect(early.status == 412, "finishing an empty trip returned \(early.status)")
@@ -144,12 +149,22 @@ struct ServerChecks {
         }
         let photo = try await data(base.appendingPathComponent("b/\(trip.slug)/\(photoPath)"))
         try expect(photo.status == 200 && photo.body.starts(with: [0xFF, 0xD8]), "book photo returned \(photo.status)")
-        let caption = try await data(base.appendingPathComponent("b/\(trip.slug)/instagram/caption.txt"))
-        try expect(caption.status == 200, "Instagram caption returned \(caption.status)")
         for hidden in ["b/\(trip.slug)/trip.json", "b/\(trip.slug)/book.json", "b/\(trip.slug)/edits.json", "b/\(trip.slug)/..%2Ftrip.json", "b/nosuchbook/"] {
             let probe = try await data(base.appendingPathComponent(hidden))
             try expect(probe.status == 404, "\(hidden) returned \(probe.status)")
         }
+
+        // The free book: branded, no Instagram set, not editable until upgraded.
+        try expect(html.contains(BookRendererFooter.free) && !html.contains("data-key=\"title\" contenteditable"), "the free book isn't branded")
+        let freeInstagram = try await data(base.appendingPathComponent("b/\(trip.slug)/instagram/caption.txt"))
+        try expect(freeInstagram.status == 404, "a free book has an Instagram set: \(freeInstagram.status)")
+        let freeEdit = try await send(base.appendingPathComponent("b/\(trip.slug)/edits"), method: "POST", token: trip.ownerToken, json: ["key": "title", "value": "x"], headers: [:])
+        try expect(freeEdit.status == 402, "editing a free book returned \(freeEdit.status)")
+        let plus = try TestStore.jws(product: "com.photocore.trip.plus.yearly", transaction: "plus-1", original: "plus-original", expires: Date().addingTimeInterval(30 * 86_400))
+        let upgraded = try await postJSON(base.appendingPathComponent("v2/trips/\(trip.id)/plan"), token: token, body: ["transaction": plus])
+        try expect(upgraded.status == 200 && text(upgraded.body).contains("\"plan\":\"plus\""), "applying Plus returned \(upgraded.status) \(text(upgraded.body))")
+        let plusPage = text(try await data(base.appendingPathComponent("b/\(trip.slug)/")).body)
+        try expect(!plusPage.contains(BookRendererFooter.free), "a Plus book still carries the free footer")
 
         let anonymousEdit = try await send(base.appendingPathComponent("b/\(trip.slug)/edits"), method: "POST", json: ["key": "title", "value": "Hacked"], headers: [:])
         try expect(anonymousEdit.status == 401, "an edit without the owner token returned \(anonymousEdit.status)")
@@ -200,6 +215,8 @@ struct ServerChecks {
         try expect(second.state == "succeeded", "refinish with a guest photo ended \(second.state) \(second.errorMessage ?? "")")
         let kept = text(try await data(base.appendingPathComponent("b/\(trip.slug)/")).body)
         try expect(kept.contains("Our &lt;b&gt;Lisbon&lt;/b&gt;"), "refinishing lost the owner's edit")
+        let caption = try await data(base.appendingPathComponent("b/\(trip.slug)/instagram/caption.txt"))
+        try expect(caption.status == 200, "a Plus book's Instagram caption returned \(caption.status)")
 
         // Sam takes their photos back; then the owner closes the invite.
         let removed = try await data(base.appendingPathComponent(invite + "/photos"), method: "DELETE", headers: ["X-Photocore-Contributor": sam.token])
@@ -229,6 +246,10 @@ struct ServerChecks {
             let up = try await raw(base.appendingPathComponent(groupInvite + "/photos/shot"), method: "PUT", token: nil, body: bytes, headers: ["X-Photocore-Contributor": people[name]!.token])
             try expect(up.status == 201, "\(name)'s upload returned \(up.status) \(text(up.body))")
         }
+        let freeStyle = try await postJSON(base.appendingPathComponent("v2/trips/\(group.id)/settings"), token: token, body: ["theme": "snapshot"])
+        try expect(freeStyle.status == 402, "choosing Snapshots on the free plan returned \(freeStyle.status)")
+        let pass = try await postJSON(base.appendingPathComponent("v2/trips/\(group.id)/plan"), token: token, body: ["transaction": try TestStore.jws(product: "com.photocore.trip.pass.trip", transaction: "pass-1")])
+        try expect(pass.status == 200 && text(pass.body).contains("tripPass"), "applying a Trip Pass returned \(pass.status) \(text(pass.body))")
         let restyle = try await postJSON(base.appendingPathComponent("v2/trips/\(group.id)/settings"), token: token, body: ["theme": "snapshot"])
         try expect(restyle.status == 200, "changing the style returned \(restyle.status)")
         let groupFinish = try await data(base.appendingPathComponent("v2/trips/\(group.id)/finish"), method: "POST", token: token)
@@ -247,6 +268,93 @@ struct ServerChecks {
         try expect(preview.status == 200 && preview.body.starts(with: [0xFF, 0xD8]), "preview returned \(preview.status)")
         print("✓ trips: create, upload, finish, public book, owner edits, guest notes, invite join and upload, refinish keeps edits, remove and close, group finish with repeats and credits, preview")
     }
+
+    /// The plans: forged, foreign and expired purchases are refused; a pass is
+    /// spent once; Plus covers twelve books a year; each phone gets one free
+    /// book; free books take five friends; print files and print interest work.
+    private static func exercisePlans(port: Int, token: String, source: URL) async throws {
+        let base = URL(string: "http://127.0.0.1:\(port)")!
+        func newTrip(_ title: String, phone: String) async throws -> TripWire {
+            try decode(TripWire.self, from: try await postJSON(base.appendingPathComponent("v2/trips"), token: token, body: ["title": title, "installID": phone]).body)
+        }
+        func apply(_ jws: String, to trip: TripWire) async throws -> HTTPResult {
+            try await postJSON(base.appendingPathComponent("v2/trips/\(trip.id)/plan"), token: token, body: ["transaction": jws])
+        }
+        let files = try FileManager.default.contentsOfDirectory(atPath: source.path).filter { $0.hasSuffix(".jpg") }.sorted()
+        let trip = try await newTrip("Second trip", phone: "check-phone-1")
+
+        let good = try TestStore.jws(product: "com.photocore.trip.pass.trip", transaction: "pass-2")
+        var parts = good.split(separator: ".").map(String.init)
+        parts[1] = try TestStore.encode(["transactionId": "pass-2", "originalTransactionId": "pass-2", "bundleId": "com.photocore.trip", "productId": "com.photocore.trip.pass.event", "purchaseDate": 0, "environment": "Sandbox"])
+        let forged = try await apply(parts.joined(separator: "."), to: trip)
+        try expect(forged.status == 400, "a forged purchase returned \(forged.status)")
+        let foreign = try await apply(try TestStore.jws(product: "com.photocore.trip.pass.trip", transaction: "x", bundle: "com.example.other"), to: trip)
+        try expect(foreign.status == 400, "another app's purchase returned \(foreign.status)")
+        let unknown = try await apply(try TestStore.jws(product: "com.photocore.trip.coins", transaction: "y"), to: trip)
+        try expect(unknown.status == 400, "an unknown product returned \(unknown.status)")
+        let xcode = try await apply(try TestStore.jws(product: "com.photocore.trip.pass.trip", transaction: "z", environment: "Xcode"), to: trip)
+        try expect(xcode.status == 400, "an Xcode test purchase was accepted on a production setup: \(xcode.status)")
+        let expired = try await apply(try TestStore.jws(product: "com.photocore.trip.plus.monthly", transaction: "old", original: "old-original", expires: Date().addingTimeInterval(-86_400)), to: trip)
+        try expect(expired.status == 402, "an expired subscription returned \(expired.status)")
+        let reused = try await apply(try TestStore.jws(product: "com.photocore.trip.pass.trip", transaction: "pass-1"), to: trip)
+        try expect(reused.status == 409, "a pass spent on another book returned \(reused.status)")
+
+        // One free book per phone: the first finishes, the second is asked to upgrade.
+        let bytes = try Data(contentsOf: source.appendingPathComponent(files[0]))
+        let freeOne = try await newTrip("Free one", phone: "check-phone-4")
+        let freeTwo = try await newTrip("Free two", phone: "check-phone-4")
+        for book in [freeOne, freeTwo] {
+            let up = try await raw(base.appendingPathComponent("v2/trips/\(book.id)/photos/one"), method: "PUT", token: token, body: bytes)
+            try expect(up.status == 201, "upload returned \(up.status)")
+        }
+        let firstFree = try await data(base.appendingPathComponent("v2/trips/\(freeOne.id)/finish"), method: "POST", token: token)
+        try expect(firstFree.status == 202, "a phone's first free book returned \(firstFree.status)")
+        let firstJob = try await wait(base: base, token: token, id: try decode(JobWire.self, from: firstFree.body).id)
+        try expect(firstJob.state == "succeeded", "the free book ended \(firstJob.state)")
+        let secondFree = try await data(base.appendingPathComponent("v2/trips/\(freeTwo.id)/finish"), method: "POST", token: token)
+        try expect(secondFree.status == 402, "a second free book on one phone returned \(secondFree.status)")
+        let status = try decode(PlanStatusWire.self, from: try await data(base.appendingPathComponent("v2/trips/\(freeTwo.id)"), token: token).body)
+        try expect(!status.freeBookAvailable && status.plan == "free", "the trip claims a free book is available: \(status)")
+        let refinish = try await data(base.appendingPathComponent("v2/trips/\(freeOne.id)/finish"), method: "POST", token: token)
+        try expect(refinish.status == 202, "refinishing the free book itself returned \(refinish.status)")
+        _ = try await wait(base: base, token: token, id: try decode(JobWire.self, from: refinish.body).id)
+
+        // A new phone's free book takes five friends, not six.
+        let other = try await newTrip("Free trip", phone: "check-phone-2")
+        guard let invite = other.invitePath else { throw CheckFailure("no invite") }
+        for i in 1...5 {
+            let joined = try await send(base.appendingPathComponent(invite + "/join"), method: "POST", json: ["name": "Friend \(i)"], headers: [:])
+            try expect(joined.status == 201, "friend \(i) joining returned \(joined.status)")
+        }
+        let sixth = try await send(base.appendingPathComponent(invite + "/join"), method: "POST", json: ["name": "Friend 6"], headers: [:])
+        try expect(sixth.status == 409, "a sixth friend on a free book returned \(sixth.status)")
+        let eventPass = try await apply(try TestStore.jws(product: "com.photocore.trip.pass.event", transaction: "event-1"), to: other)
+        try expect(eventPass.status == 200, "an Event Pass returned \(eventPass.status)")
+        let roomNow = try await send(base.appendingPathComponent(invite + "/join"), method: "POST", json: ["name": "Friend 6"], headers: [:])
+        try expect(roomNow.status == 201, "a sixth friend after the Event Pass returned \(roomNow.status)")
+
+        // Plus covers twelve books a year: one was used by the first trip.
+        let subscription = try TestStore.jws(product: "com.photocore.trip.plus.yearly", transaction: "plus-2", original: "plus-original", expires: Date().addingTimeInterval(30 * 86_400))
+        for i in 2...12 {
+            let book = try await newTrip("Plus book \(i)", phone: "check-phone-3")
+            let applied = try await apply(subscription, to: book)
+            try expect(applied.status == 200, "Plus book \(i) returned \(applied.status) \(text(applied.body))")
+        }
+        let thirteenth = try await apply(subscription, to: try await newTrip("Plus book 13", phone: "check-phone-3"))
+        try expect(thirteenth.status == 402, "a thirteenth Plus book in a year returned \(thirteenth.status)")
+
+        // Print: the owner's PDF and visitors' interest.
+        let printed = try await data(base.appendingPathComponent("v2/trips/\(Self.firstTripID)/print.pdf"), token: token)
+        try expect(printed.status == 200 && printed.body.starts(with: Array("%PDF".utf8)) && printed.body.count > 10_000, "the print PDF returned \(printed.status) with \(printed.body.count) bytes")
+        let want = try await data(base.appendingPathComponent("b/\(Self.firstTripSlug)/print-interest"), method: "POST")
+        try expect(want.status == 200, "print interest returned \(want.status)")
+        let counted = try decode(PlanStatusWire.self, from: try await data(base.appendingPathComponent("v2/trips/\(Self.firstTripID)"), token: token).body)
+        try expect(counted.printInterest == 1, "print interest counted \(counted.printInterest)")
+        print("✓ plans: forged, foreign, unknown, Xcode and expired purchases refused; passes spent once; one free book per phone; five friends free; Event Pass room; twelve Plus books a year; print PDF and interest")
+    }
+
+    nonisolated(unsafe) static var firstTripID = ""
+    nonisolated(unsafe) static var firstTripSlug = ""
 
     private static func raw(_ url: URL, method: String, token: String?, body: Data, headers: [String: String] = [:]) async throws -> HTTPResult {
         var request = URLRequest(url: url)
@@ -365,6 +473,46 @@ private struct TripStatusWire: Decodable {
     struct Person: Decodable { var name: String; var photos: Int }
     var inviteOpen: Bool
     var contributors: [Person]
+}
+
+private struct PlanStatusWire: Decodable {
+    var plan: String
+    var freeBookAvailable: Bool
+    var printInterest: Int
+}
+
+private enum BookRendererFooter {
+    static let free = "Made free with Photocore"
+}
+
+/// Signs fake App Store transactions with the test-only chain in
+/// Tests/Fixtures/StoreKit, which the checks' server trusts.
+enum TestStore {
+    static let fixtures = URL(fileURLWithPath: #filePath)
+        .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+        .appendingPathComponent("Tests/Fixtures/StoreKit", isDirectory: true)
+
+    static func encode(_ object: [String: Any]) throws -> String {
+        base64URL(try JSONSerialization.data(withJSONObject: object, options: [.sortedKeys]))
+    }
+
+    static func base64URL(_ data: Data) -> String {
+        data.base64EncodedString().replacingOccurrences(of: "+", with: "-").replacingOccurrences(of: "/", with: "_").replacingOccurrences(of: "=", with: "")
+    }
+
+    static func jws(product: String, transaction: String, original: String? = nil, expires: Date? = nil, bundle: String = "com.photocore.trip", environment: String = "Sandbox") throws -> String {
+        let chain = try ["leaf", "intermediate", "root"].map { try Data(contentsOf: fixtures.appendingPathComponent("\($0).der")).base64EncodedString() }
+        let header = try encode(["alg": "ES256", "x5c": chain])
+        var payload: [String: Any] = [
+            "transactionId": transaction, "originalTransactionId": original ?? transaction, "bundleId": bundle,
+            "productId": product, "purchaseDate": Date().timeIntervalSince1970 * 1000, "environment": environment
+        ]
+        if let expires { payload["expiresDate"] = expires.timeIntervalSince1970 * 1000 }
+        let body = try encode(payload)
+        let key = try P256.Signing.PrivateKey(pemRepresentation: String(contentsOf: fixtures.appendingPathComponent("leaf-key.pem"), encoding: .utf8))
+        let signature = try key.signature(for: Data((header + "." + body).utf8))
+        return header + "." + body + "." + base64URL(signature.rawRepresentation)
+    }
 }
 
 private struct JoinedWire: Decodable {

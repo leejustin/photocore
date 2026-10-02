@@ -13,14 +13,23 @@ public enum BookRenderer {
         /// The trip's invite page, where people who were there add their photos;
         /// nil when the owner has closed it.
         public var invitePath: String?
+        /// Where "I'd love a printed copy" taps are counted, or nil to hide it.
+        public var printInterestEndpoint: String?
+        /// Empty for no footer. Free books carry a Photocore footer.
         public var footer: String
+        public var footerLink: String?
 
-        public init(editEndpoint: String? = nil, guestEndpoint: String? = nil, invitePath: String? = nil, footer: String = "Made with Photocore") {
+        public init(editEndpoint: String? = nil, guestEndpoint: String? = nil, invitePath: String? = nil, printInterestEndpoint: String? = nil, footer: String = "Made with Photocore", footerLink: String? = nil) {
             self.editEndpoint = editEndpoint
             self.guestEndpoint = guestEndpoint
             self.invitePath = invitePath
+            self.printInterestEndpoint = printInterestEndpoint
             self.footer = footer
+            self.footerLink = footerLink
         }
+
+        /// The footer free books carry: the growth loop's last page.
+        public static let freeFooter = "Made free with Photocore. Make a book of your own trip."
     }
 
     public static func photoPath(_ photo: BookPhoto) -> String {
@@ -148,10 +157,22 @@ public enum BookRenderer {
             }
             body += "</section>"
         }
-        body += "</main><footer><p>\(text(options.footer))</p></footer>"
+        if options.printInterestEndpoint != nil {
+            body += """
+            <section class="printcopy"><h2>Want it on paper?</h2>
+            <p class="hint">Printed copies are coming. Tap if you'd want one, so the book's owner knows.</p>
+            <button type="button" id="print-interest">I'd love a printed copy</button>
+            <p id="print-thanks" class="hint" hidden>Thanks! Noted.</p></section>
+            """
+        }
+        body += "</main>"
+        if !options.footer.isEmpty {
+            let words = text(options.footer)
+            body += "<footer><p>" + (options.footerLink.map { "<a href=\"\(attr($0))\">\(words)</a>" } ?? words) + "</p></footer>"
+        }
 
         let config = """
-        window.PHOTOCORE = { edit: \(jsString(options.editEndpoint)), guest: \(jsString(options.guestEndpoint)) };
+        window.PHOTOCORE = { edit: \(jsString(options.editEndpoint)), guest: \(jsString(options.guestEndpoint)), print: \(jsString(options.printInterestEndpoint)) };
         """
         return """
         <!doctype html>
@@ -250,6 +271,11 @@ public enum BookRenderer {
     .upload { display:inline-block; font-weight:600; padding:10px 20px; border-radius:999px; border:1.5px solid var(--accent); color:var(--accent); cursor:pointer; }
     .upload { text-decoration:none; }
     .guestbook button { justify-self:start; font:inherit; font-weight:600; padding:10px 20px; border:0; border-radius:999px; background:var(--accent); color:#fff; cursor:pointer; }
+    footer a { color:inherit; }
+    .printcopy { margin-top:72px; text-align:center; }
+    .printcopy h2 { font-size:26px; }
+    .printcopy button { font:inherit; font-weight:600; padding:11px 22px; border-radius:999px; border:1.5px solid var(--accent); background:none; color:var(--accent); cursor:pointer; }
+    .printcopy button:disabled { opacity:.55; cursor:default; }
     footer { text-align:center; color:var(--faint); font-size:13px; letter-spacing:.04em; padding:56px 20px 64px; }
     .lightbox { position:fixed; inset:0; background:rgba(0,0,0,.94); display:flex; align-items:center; justify-content:center; z-index:10; cursor:zoom-out; }
     .lightbox img { max-width:96vw; max-height:92vh; border-radius:4px; }
@@ -272,7 +298,7 @@ public enum BookRenderer {
       .guestbook { padding:22px; margin-top:64px; }
     }
     @media print {
-      .chapters, .heart, .guestbook, footer { display:none; }
+      .chapters, .heart, .guestbook, .printcopy, footer { display:none; }
       body { background:#fff; color:#000; }
       .cover { height:100vh; page-break-after:always; }
       .chapter { page-break-before:always; padding-top:0; }
@@ -359,6 +385,18 @@ public enum BookRenderer {
             .then(function(r){ return r.json(); }).then(function(d){ document.getElementById('note-text').value=''; render(d); }).catch(function(){});
         });
       }
+      var want = document.getElementById('print-interest');
+      if (want && cfg.print) {
+        var key = 'photocore-print-' + location.pathname, done = false;
+        try { done = localStorage.getItem(key) === '1'; } catch (e) {}
+        function thanks(){ want.disabled = true; document.getElementById('print-thanks').hidden = false; }
+        if (done) thanks();
+        want.addEventListener('click', function(){
+          fetch(cfg.print, { method:'POST' }).catch(function(){});
+          try { localStorage.setItem(key, '1'); } catch (e) {}
+          thanks();
+        });
+      }
     })();
     """
 }
@@ -383,7 +421,8 @@ public enum BookPublisher {
         to folder: URL,
         options: BookRenderer.Options = BookRenderer.Options(),
         maxPixel: Int = 2048,
-        settings: SubjectEditSettings = .natural
+        settings: SubjectEditSettings = .natural,
+        instagram includeInstagram: Bool = true
     ) throws -> Report {
         let fm = FileManager.default
         let photos = folder.appendingPathComponent("photos", isDirectory: true)
@@ -407,6 +446,10 @@ public enum BookPublisher {
         try edits.save(to: folder)
         let index = folder.appendingPathComponent("index.html")
         try Data(BookRenderer.html(finalBook, options: options).utf8).write(to: index, options: .atomic)
+        guard includeInstagram else {
+            try? fm.removeItem(at: instagram)
+            return Report(folder: folder, indexURL: index, photoCount: rendered, carouselCount: 0, storyCount: 0)
+        }
         let pack = try InstagramPack.build(book: finalBook, facts: facts, source: source, to: instagram, settings: settings)
         return Report(folder: folder, indexURL: index, photoCount: rendered, carouselCount: pack.carousel, storyCount: pack.stories)
     }

@@ -187,6 +187,24 @@ paths:
       responses:
         "200":
           description: "Trip, with invitePath, inviteOpen and contributors [{name, photos}]"
+  /v2/trips/{tid}/plan:
+    post:
+      summary: "Apply a StoreKit 2 signed transaction {transaction}: Plus, a Trip Pass or an Event Pass. Checked against Apple Root CA G3."
+      responses:
+        "200":
+          description: "{plan, limits, hostedUntil, subscriptionExpires}"
+        "400":
+          description: Forged, foreign or unknown purchase
+        "402":
+          description: Subscription ended, or Plus's 12 books this year are used
+        "409":
+          description: The pass was spent on another book
+  /v2/trips/{tid}/print.pdf:
+    get:
+      summary: The finished book as a print-ready PDF (8 x 8 inch pages with 0.125 inch bleed)
+      responses:
+        "200":
+          description: application/pdf
   /v2/trips/{tid}/settings:
     post:
       summary: "Change {title?, note?, calendarEvents?, tone?, theme?, ownerName?} before a finish"
@@ -254,6 +272,13 @@ paths:
       responses:
         "200":
           description: Updated activity
+  /b/{slug}/print-interest:
+    post:
+      summary: Count a visitor who'd want a printed copy
+      security: []
+      responses:
+        "200":
+          description: "{count}"
   /j/{code}:
     get:
       summary: The invite page where people who were there add their photos

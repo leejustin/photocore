@@ -9,13 +9,18 @@ struct FinishedBook: Codable, Equatable {
     var finishedAt: Date
 }
 
+/// Finished books per trip. Each edit link carries the owner token, so they
+/// live in the Keychain; anything an older build left in UserDefaults moves over once.
 enum BookStore {
     private static let key = "PhotocoreFinishedBooks"
 
     static func all() -> [String: FinishedBook] {
-        guard let data = UserDefaults.standard.data(forKey: key),
-              let books = try? JSONDecoder().decode([String: FinishedBook].self, from: data) else { return [:] }
-        return books
+        if let data = Keychain.data(key), let books = try? JSONDecoder().decode([String: FinishedBook].self, from: data) { return books }
+        if let legacy = UserDefaults.standard.data(forKey: key), let books = try? JSONDecoder().decode([String: FinishedBook].self, from: legacy) {
+            if Keychain.set(legacy, for: key) { UserDefaults.standard.removeObject(forKey: key) }
+            return books
+        }
+        return [:]
     }
 
     static func book(for tripID: String) -> FinishedBook? { all()[tripID] }
@@ -23,7 +28,7 @@ enum BookStore {
     static func save(_ book: FinishedBook, for tripID: String) {
         var books = all()
         books[tripID] = book
-        if let data = try? JSONEncoder().encode(books) { UserDefaults.standard.set(data, forKey: key) }
+        if let data = try? JSONEncoder().encode(books) { Keychain.set(data, for: key) }
     }
 }
 

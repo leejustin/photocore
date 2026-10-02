@@ -22,8 +22,34 @@ struct TripRecord: Codable, Sendable {
     /// The secret in the invite link that lets people who were there add photos.
     var inviteCode: String?
     var inviteClosed: Bool?
+    /// What the owner paid for; nil is the free plan.
+    var plan: Plan?
+    /// The pass spent on this book, or the Plus subscription's original transaction.
+    var planTransactionID: String?
+    var subscriptionExpires: Date?
+    /// When the book stops being served; nil for never.
+    var hostedUntil: Date?
+    /// SHA-256 of the phone's install ID, for the one free book per phone.
+    var installHash: String?
+    /// Visitors who tapped "I'd love a printed copy".
+    var printInterest: Int?
 
     var inviteOpen: Bool { inviteCode != nil && inviteClosed != true }
+    var currentPlan: Plan { plan ?? .free }
+    var limits: PlanLimits { currentPlan.limits }
+
+    func isHosted(at date: Date = Date()) -> Bool { hostedUntil.map { date < $0 } ?? true }
+}
+
+/// Which purchases and free books have been spent, so a pass covers one book,
+/// Plus covers twelve a year and each phone gets one free book.
+struct EntitlementLedger: Codable, Sendable {
+    /// Pass transaction ID to the trip it was spent on.
+    var passes: [String: String] = [:]
+    /// Plus original transaction ID to trip IDs and when each was started.
+    var plusBooks: [String: [String: Date]] = [:]
+    /// Install hash to the trip that used the free book.
+    var freeBooks: [String: String] = [:]
 }
 
 /// Someone who joined through the invite link. Their token lets them add and
@@ -55,7 +81,8 @@ enum TripLimits {
     static let notes = 500
     static let noteLength = 500
     static let nameLength = 40
-    static let contributors = 50
+    /// The most any plan allows; each plan's own limit is lower or equal.
+    static let contributors = 100
     static let photosPerContributor = 150
     static let contributedPhotos = 1_000
 }
@@ -70,6 +97,7 @@ actor TripStore {
     private var guest: [String: GuestActivity] = [:]
     private var invites: [String: String] = [:]
     private var people: [String: [Contributor]] = [:]
+    private var ledger = EntitlementLedger()
 
     init(root: URL) {
         self.root = root
@@ -83,6 +111,92 @@ actor TripStore {
             slugs[record.slug] = record.id
             if let code = record.inviteCode { invites[code] = record.id }
         }
+        let decoder2 = JSONDecoder()
+        decoder2.dateDecodingStrategy = .iso8601
+        if let data = try? Data(contentsOf: root.appendingPathComponent("entitlements.json")),
+           let saved = try? decoder2.decode(EntitlementLedger.self, from: data) {
+            ledger = saved
+        }
+    }
+
+    private func saveLedger() throws {
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .iso8601
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        try encoder.encode(ledger).write(to: root.appendingPathComponent("entitlements.json"), options: .atomic)
+    }
+
+    // MARK: Plans
+
+    /// Puts a verified purchase on a trip. A pass is spent on this trip only;
+    /// Plus counts the trip toward its twelve books a year. A book never moves
+    /// to a lower plan.
+    func apply(_ transaction: SignedTransaction, to id: String, now: Date = Date()) throws -> TripRecord {
+        guard var record = records[id], let product = PlanProduct(rawValue: transaction.productId) else {
+            throw APIError.notFound("No trip \(id)")
+        }
+        if product.isPass {
+            if let spent = ledger.passes[transaction.transactionId], spent != id {
+                throw APIError.conflict("That pass was already used for another book.")
+            }
+        } else {
+            guard let expires = transaction.expires, expires > now else { throw APIError.paymentRequired(StoreKitError.expired.description) }
+            var books = ledger.plusBooks[transaction.originalTransactionId] ?? [:]
+            if books[id] == nil, PlanPolicy.plusBooksUsed(Array(books.values), now: now) >= PlanPolicy.plusBooksPerYear {
+                throw APIError.paymentRequired("Plus covers \(PlanPolicy.plusBooksPerYear) books a year, and this year's are used. A Trip Pass covers this one.")
+            }
+            books[id] = books[id] ?? now
+            ledger.plusBooks[transaction.originalTransactionId] = books
+        }
+        if product.plan.rank < record.currentPlan.rank { return record }
+        if product.isPass {
+            // Free a pass this trip held before, if it moves to a better one.
+            if let previous = record.planTransactionID, ledger.passes[previous] == id, previous != transaction.transactionId {
+                ledger.passes[previous] = nil
+            }
+            ledger.passes[transaction.transactionId] = id
+            record.planTransactionID = transaction.transactionId
+            record.subscriptionExpires = nil
+        } else {
+            record.planTransactionID = transaction.originalTransactionId
+            record.subscriptionExpires = transaction.expires
+        }
+        record.plan = product.plan
+        if let finished = record.finishedAt {
+            record.hostedUntil = PlanPolicy.hostedUntil(plan: product.plan, firstFinished: finished, subscriptionExpires: record.subscriptionExpires)
+        }
+        // A free book that becomes paid gives the phone its free book back.
+        if let hash = record.installHash, ledger.freeBooks[hash] == id { ledger.freeBooks[hash] = nil }
+        try saveLedger()
+        try save(record)
+        return record
+    }
+
+    /// Whether this trip's phone can still make its free book with this trip.
+    func freeBookAvailable(_ record: TripRecord) -> Bool {
+        guard let hash = record.installHash else { return false }
+        return ledger.freeBooks[hash].map { $0 == record.id } ?? true
+    }
+
+    /// Spends the phone's free book on this trip, or refuses if it went elsewhere.
+    func claimFreeBook(_ id: String) throws {
+        guard let record = records[id] else { throw APIError.notFound("No trip \(id)") }
+        guard record.currentPlan == .free else { return }
+        guard let hash = record.installHash else {
+            throw APIError.paymentRequired("Update the app to make your free book.")
+        }
+        if let used = ledger.freeBooks[hash], used != id {
+            throw APIError.paymentRequired("Your free book is already made. Plus or a Trip Pass covers this one.")
+        }
+        ledger.freeBooks[hash] = id
+        try saveLedger()
+    }
+
+    func notePrintInterest(_ id: String) throws -> Int {
+        guard var record = records[id] else { return 0 }
+        record.printInterest = (record.printInterest ?? 0) + 1
+        try save(record)
+        return record.printInterest ?? 0
     }
 
     static func randomToken(length: Int) -> String {
@@ -104,7 +218,7 @@ actor TripStore {
     }
 
     /// Creates a trip and returns it with the owner token, which is shown once.
-    func create(title: String?, context: TripContext, tone: DiaryTone, theme: BookTheme, ownerName: String? = nil) throws -> (TripRecord, String) {
+    func create(title: String?, context: TripContext, tone: DiaryTone, theme: BookTheme, ownerName: String? = nil, installID: String? = nil) throws -> (TripRecord, String) {
         let token = Self.randomToken(length: 32)
         let record = TripRecord(
             id: UUID().uuidString.lowercased(),
@@ -116,7 +230,8 @@ actor TripStore {
             theme: theme,
             createdAt: Date(),
             ownerName: ownerName,
-            inviteCode: Self.randomToken(length: 14)
+            inviteCode: Self.randomToken(length: 14),
+            installHash: installID.flatMap { $0.isEmpty ? nil : Self.hash("install:" + $0) }
         )
         for url in [ownerFolder(record.id), guestFolder(record.id), bookFolder(record.id)] {
             try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)

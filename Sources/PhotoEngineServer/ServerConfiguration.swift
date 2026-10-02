@@ -8,13 +8,25 @@ public struct ServerConfiguration: Sendable {
     public var catalogURL: URL
     public var mediaCacheDirectory: URL
     public var tokenWasGenerated: Bool
+    /// The app whose App Store purchases unlock plans.
+    public var bundleID: String
+    /// An extra trusted root for signed purchases; only for tests and local development.
+    public var storeKitTestRoot: URL?
+    /// Accept purchases made with Xcode's StoreKit testing; only for local development.
+    public var allowXcodePurchases: Bool
+    /// Where the free-book footer links, if anywhere.
+    public var siteURL: String?
 
-    public init(port: Int, security: WorkerSecurity, catalogURL: URL, mediaCacheDirectory: URL, tokenWasGenerated: Bool) {
+    public init(port: Int, security: WorkerSecurity, catalogURL: URL, mediaCacheDirectory: URL, tokenWasGenerated: Bool, bundleID: String = "com.photocore.trip", storeKitTestRoot: URL? = nil, allowXcodePurchases: Bool = false, siteURL: String? = nil) {
         self.port = port
         self.security = security
         self.catalogURL = catalogURL
         self.mediaCacheDirectory = mediaCacheDirectory
         self.tokenWasGenerated = tokenWasGenerated
+        self.bundleID = bundleID
+        self.storeKitTestRoot = storeKitTestRoot
+        self.allowXcodePurchases = allowXcodePurchases
+        self.siteURL = siteURL
     }
 
     public static func fromEnvironment(_ environment: [String: String] = ProcessInfo.processInfo.environment) throws -> ServerConfiguration {
@@ -36,7 +48,11 @@ public struct ServerConfiguration: Sendable {
             security: security,
             catalogURL: PhotoCatalog.defaultURL(),
             mediaCacheDirectory: cache,
-            tokenWasGenerated: generated
+            tokenWasGenerated: generated,
+            bundleID: environment["PHOTOCORE_BUNDLE_ID"] ?? "com.photocore.trip",
+            storeKitTestRoot: environment["PHOTOCORE_STOREKIT_TEST_ROOT"].map { URL(fileURLWithPath: $0) },
+            allowXcodePurchases: environment["PHOTOCORE_STOREKIT_XCODE"] == "1",
+            siteURL: environment["PHOTOCORE_SITE_URL"]
         )
     }
 

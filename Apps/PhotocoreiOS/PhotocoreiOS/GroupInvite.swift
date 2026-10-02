@@ -8,6 +8,8 @@ struct GroupInvite: View {
     let tripTitle: String
     /// Creates the trip on the server so the link exists.
     let onInvite: () -> Void
+    /// Opens the plans, with the reason.
+    let onUpgrade: (String) -> Void
     @State private var ownerName = OwnerName.saved
 
     var body: some View {
@@ -20,6 +22,7 @@ struct GroupInvite: View {
                 }
                 .buttonStyle(SecondaryButtonStyle())
                 people
+                capacity
                 if !finish.inviteOpen {
                     Text("The link is closed, so no one can add more.")
                         .font(.footnote).foregroundStyle(Color.ink.opacity(0.55))
@@ -51,6 +54,25 @@ struct GroupInvite: View {
             while !Task.isCancelled {
                 if finish.remote != nil { await finish.refreshPeople(server: server) }
                 try? await Task.sleep(for: .seconds(10))
+            }
+        }
+    }
+
+    /// How much room the plan leaves, and a way to more when it runs low.
+    @ViewBuilder private var capacity: some View {
+        let joined = finish.people.count
+        let room = finish.limits.friends
+        if joined >= room - 1 {
+            HStack {
+                Text(joined >= room ? "The book is full: \(room) of \(room) friends." : "Room for one more friend.")
+                    .font(.footnote).foregroundStyle(Color.ink.opacity(0.7))
+                Spacer()
+                if finish.plan == .free || finish.plan == .plus || finish.plan == .tripPass {
+                    Button("More room") {
+                        onUpgrade(finish.plan == .free ? "The free book takes \(room) friends. Plus and the Trip Pass take 25; the Event Pass takes 100." : "The Event Pass takes up to 100 guests.")
+                    }
+                    .font(.footnote.weight(.semibold))
+                }
             }
         }
     }

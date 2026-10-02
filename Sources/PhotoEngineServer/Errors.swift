@@ -40,6 +40,16 @@ struct APIError: Error, HTTPResponseError, Sendable {
         APIError(status: .preconditionFailed, code: "precondition_failed", message: message)
     }
 
+    /// The plan doesn't cover this; the client should offer an upgrade.
+    static func paymentRequired(_ message: String) -> APIError {
+        APIError(status: HTTPResponse.Status(code: 402, reasonPhrase: "Payment Required"), code: "payment_required", message: message)
+    }
+
+    /// The book's hosting has ended.
+    static func gone(_ message: String) -> APIError {
+        APIError(status: .gone, code: "gone", message: message)
+    }
+
     static func busy(_ message: String) -> APIError {
         APIError(status: .serviceUnavailable, code: "busy", message: message)
     }

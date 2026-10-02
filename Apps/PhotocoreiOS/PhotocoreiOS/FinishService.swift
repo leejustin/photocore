@@ -1,5 +1,6 @@
 import Foundation
 import Observation
+import PhotoEngineWorkflow
 import Photos
 import UIKit
 
@@ -34,19 +35,26 @@ struct RemoteTrip: Codable, Equatable {
     var keepersUploaded = false
 }
 
+/// Server trips per local trip. They hold the owner token, so they live in the
+/// Keychain; anything an older build left in UserDefaults moves over once.
 enum RemoteTripStore {
     private static let key = "PhotocoreRemoteTrips"
 
-    static func trip(for tripID: String) -> RemoteTrip? {
-        guard let data = UserDefaults.standard.data(forKey: key),
-              let trips = try? JSONDecoder().decode([String: RemoteTrip].self, from: data) else { return nil }
-        return trips[tripID]
+    private static func all() -> [String: RemoteTrip] {
+        if let data = Keychain.data(key), let trips = try? JSONDecoder().decode([String: RemoteTrip].self, from: data) { return trips }
+        if let legacy = UserDefaults.standard.data(forKey: key), let trips = try? JSONDecoder().decode([String: RemoteTrip].self, from: legacy) {
+            if Keychain.set(legacy, for: key) { UserDefaults.standard.removeObject(forKey: key) }
+            return trips
+        }
+        return [:]
     }
 
+    static func trip(for tripID: String) -> RemoteTrip? { all()[tripID] }
+
     static func save(_ trip: RemoteTrip, for tripID: String) {
-        var trips = (UserDefaults.standard.data(forKey: key).flatMap { try? JSONDecoder().decode([String: RemoteTrip].self, from: $0) }) ?? [:]
+        var trips = all()
         trips[tripID] = trip
-        if let data = try? JSONEncoder().encode(trips) { UserDefaults.standard.set(data, forKey: key) }
+        if let data = try? JSONEncoder().encode(trips) { Keychain.set(data, for: key) }
     }
 }
 
@@ -73,6 +81,8 @@ final class TripFinish {
         case uploading(done: Int, total: Int)
         case finishing(String)
         case done(book: URL, edit: URL)
+        /// The plan doesn't cover this; the card offers the plans.
+        case needsPlan(String)
         case failed(String)
     }
 
@@ -87,6 +97,11 @@ final class TripFinish {
     private(set) var inviteError: String?
     /// Friends' photos when the book was last made, to tell when there's more.
     private(set) var photosAtLastFinish: Int?
+    private(set) var plan: Plan = .free
+    private(set) var limits: PlanLimits = Plan.free.limits
+    /// Whether this trip can still be this phone's free book.
+    private(set) var freeBookAvailable = true
+    private(set) var printing = false
 
     var friendsPhotos: Int { people.reduce(0) { $0 + $1.photos } }
 
@@ -117,6 +132,11 @@ final class TripFinish {
         after = UIImage(data: body)
     }
 
+    /// Leaves the plan prompt without changing anything.
+    func reset() {
+        if case .needsPlan = stage { stage = .idle }
+    }
+
     /// A book finished earlier for this trip, so the card opens on the link.
     func restore(tripID: String) {
         remote = RemoteTripStore.trip(for: tripID)
@@ -130,6 +150,38 @@ final class TripFinish {
         return body
     }
 
+    /// Hands a signed App Store transaction to the server for this book.
+    /// Returns nil on success, or the reason it didn't apply.
+    func applyPlan(jws: String, tripID: String, title: String?, server: FinishServer) async -> String? {
+        do {
+            var body = settings(title: title, note: "", events: [], theme: "book")
+            body["installID"] = InstallIdentity.id.uuidString
+            let trip = try await ensureRemote(tripID: tripID, body: body, server: server)
+            let applied: PlanStatus = try await call(server, "v2/trips/\(trip.id)/plan", method: "POST", json: ["transaction": jws])
+            plan = applied.plan
+            limits = applied.limits
+            if PlanProductFromJWS.isPass(jws) { await Store.shared.spent(jws: jws) }
+            if case .needsPlan = stage { stage = .idle }
+            return nil
+        } catch {
+            return (error as? FinishError)?.message ?? error.localizedDescription
+        }
+    }
+
+    /// Fetches the print-ready PDF of the finished book into a temporary file.
+    func printFile(server: FinishServer) async -> URL? {
+        guard let remote else { return nil }
+        printing = true
+        defer { printing = false }
+        var request = URLRequest(url: server.baseURL.appendingPathComponent("v2/trips/\(remote.id)/print.pdf"))
+        request.setValue("Bearer \(server.token)", forHTTPHeaderField: "Authorization")
+        guard let (data, response) = try? await URLSession.shared.data(for: request),
+              (response as? HTTPURLResponse)?.statusCode == 200 else { return nil }
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("Photocore book.pdf")
+        try? data.write(to: url, options: .atomic)
+        return url
+    }
+
     /// Creates the trip on the server so friends can start adding photos
     /// before the owner finishes.
     func invite(tripID: String, title: String?, note: String, events: [String], theme: String, server: FinishServer) async {
@@ -138,7 +190,10 @@ final class TripFinish {
         inviteError = nil
         defer { inviting = false }
         do {
-            _ = try await ensureRemote(tripID: tripID, body: settings(title: title, note: note, events: events, theme: theme), server: server)
+            var body = settings(title: title, note: note, events: events, theme: theme)
+            body["installID"] = InstallIdentity.id.uuidString
+            _ = try await ensureRemote(tripID: tripID, body: body, server: server)
+            await refreshPeople(server: server)
         } catch {
             inviteError = (error as? FinishError)?.message ?? error.localizedDescription
         }
@@ -158,6 +213,9 @@ final class TripFinish {
         guard let remote, let status: Status = try? await call(server, "v2/trips/\(remote.id)") else { return }
         people = status.contributors.filter { $0.photos > 0 }
         inviteOpen = status.inviteOpen
+        if let plan = status.plan { self.plan = plan }
+        if let limits = status.limits { self.limits = limits }
+        freeBookAvailable = status.freeBookAvailable ?? true
     }
 
     func setInvite(open: Bool, server: FinishServer) async {
@@ -168,8 +226,23 @@ final class TripFinish {
 
     func finish(tripID: String, title: String?, note: String, events: [String], theme: String, identifiers: [String], server: FinishServer) async {
         do {
-            let body = settings(title: title, note: note, events: events, theme: theme)
+            var body = settings(title: title, note: note, events: events, theme: theme)
+            body["installID"] = InstallIdentity.id.uuidString
             var trip = try await ensureRemote(tripID: tripID, body: body, server: server)
+            await refreshPeople(server: server)
+            // A Plus subscriber's books are covered without asking.
+            if plan == .free, let plus = Store.shared.plus {
+                _ = await applyPlan(jws: plus, tripID: tripID, title: title, server: server)
+            }
+            // Ask before uploading anything the plan won't cover.
+            if plan == .free && !freeBookAvailable {
+                stage = .needsPlan("Your free book is already made. Plus or a Trip Pass covers this one.")
+                return
+            }
+            if let style = BookTheme(name: theme), !limits.allows(style) {
+                stage = .needsPlan("\(style.displayName) is part of Plus and the passes.")
+                return
+            }
             let _: [String: Bool] = try await call(server, "v2/trips/\(trip.id)/settings", method: "POST", json: body)
             if !trip.keepersUploaded {
                 for (index, identifier) in identifiers.enumerated() {
@@ -210,13 +283,27 @@ final class TripFinish {
                     stage = .finishing(current.message ?? "Working")
                 }
             }
+        } catch FinishError.payment(let message) {
+            stage = .needsPlan(message)
         } catch {
             stage = .failed((error as? FinishError)?.message ?? error.localizedDescription)
         }
     }
 
+    private struct PlanStatus: Decodable { var plan: Plan; var limits: PlanLimits }
+    private struct ServerError: Decodable {
+        struct Payload: Decodable { var message: String }
+        var error: Payload
+    }
+
     private struct Created: Decodable { var id: String; var slug: String; var ownerToken: String; var bookPath: String; var invitePath: String? }
-    private struct Status: Decodable { var inviteOpen: Bool; var contributors: [Person] }
+    private struct Status: Decodable {
+        var inviteOpen: Bool
+        var contributors: [Person]
+        var plan: Plan?
+        var limits: PlanLimits?
+        var freeBookAvailable: Bool?
+    }
     private struct Job: Decodable {
         struct Failure: Decodable { var message: String }
         var id: String
@@ -227,7 +314,13 @@ final class TripFinish {
 
     enum FinishError: Error {
         case server(String)
-        var message: String { if case .server(let text) = self { text } else { "" } }
+        /// The server said the plan doesn't cover this (HTTP 402).
+        case payment(String)
+        var message: String {
+            switch self {
+            case .server(let text), .payment(let text): text
+            }
+        }
     }
 
     private func call<T: Decodable>(_ server: FinishServer, _ path: String, method: String = "GET", json: [String: Any]? = nil) async throws -> T {
@@ -240,7 +333,11 @@ final class TripFinish {
         }
         let (data, response) = try await URLSession.shared.data(for: request)
         let status = (response as? HTTPURLResponse)?.statusCode ?? 0
-        guard (200..<300).contains(status) else { throw FinishError.server("The Photocore server answered \(status).") }
+        guard (200..<300).contains(status) else {
+            let reason = (try? JSONDecoder().decode(ServerError.self, from: data))?.error.message
+            if status == 402 { throw FinishError.payment(reason ?? "This needs Plus or a pass.") }
+            throw FinishError.server(reason ?? "The Photocore server answered \(status).")
+        }
         let decoder = JSONDecoder()
         decoder.dateDecodingStrategy = .iso8601
         return try decoder.decode(T.self, from: data)
@@ -269,5 +366,20 @@ final class TripFinish {
                   kCGImageSourceThumbnailMaxPixelSize: maxPixel
               ] as CFDictionary) else { return nil }
         return UIImage(cgImage: image).jpegData(compressionQuality: 0.88)
+    }
+}
+
+/// Reads the product from a signed transaction's payload, to know whether a
+/// purchase was a pass (spent on one book) without trusting it for anything else.
+enum PlanProductFromJWS {
+    static func isPass(_ jws: String) -> Bool {
+        let parts = jws.split(separator: ".")
+        guard parts.count == 3 else { return false }
+        var base = String(parts[1]).replacingOccurrences(of: "-", with: "+").replacingOccurrences(of: "_", with: "/")
+        while base.count % 4 != 0 { base += "=" }
+        guard let data = Data(base64Encoded: base),
+              let payload = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let id = payload["productId"] as? String else { return false }
+        return PlanProduct(rawValue: id)?.isPass ?? false
     }
 }

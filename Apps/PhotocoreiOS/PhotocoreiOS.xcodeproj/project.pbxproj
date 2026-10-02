@@ -12,14 +12,30 @@
 		A1000000000000000000B003 /* PhotoEngineWorkflow in Frameworks */ = {isa = PBXBuildFile; productRef = A1000000000000000000C003 /* PhotoEngineWorkflow */; };
 /* End PBXBuildFile section */
 
+/* Begin PBXContainerItemProxy section */
+		A1000000000000000000B101 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = A10000000000000000005001 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = A10000000000000000007001;
+			remoteInfo = PhotocoreiOS;
+		};
+/* End PBXContainerItemProxy section */
+
 /* Begin PBXFileReference section */
 		A1000000000000000000F001 /* Photocore.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Photocore.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		A1000000000000000000F002 /* PhotocoreUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = PhotocoreUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
 		A1000000000000000000D001 /* PhotocoreiOS */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
 			path = PhotocoreiOS;
+			sourceTree = "<group>";
+		};
+		A1000000000000000000D002 /* PhotocoreUITests */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			path = PhotocoreUITests;
 			sourceTree = "<group>";
 		};
 /* End PBXFileSystemSynchronizedRootGroup section */
@@ -35,6 +51,13 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		A1000000000000000000E005 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXFrameworksBuildPhase section */
 
 /* Begin PBXGroup section */
@@ -42,6 +65,7 @@
 			isa = PBXGroup;
 			children = (
 				A1000000000000000000D001 /* PhotocoreiOS */,
+				A1000000000000000000D002 /* PhotocoreUITests */,
 				A1000000000000000000A002 /* Products */,
 			);
 			sourceTree = "<group>";
@@ -50,6 +74,7 @@
 			isa = PBXGroup;
 			children = (
 				A1000000000000000000F001 /* Photocore.app */,
+				A1000000000000000000F002 /* PhotocoreUITests.xctest */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -82,6 +107,27 @@
 			productReference = A1000000000000000000F001 /* Photocore.app */;
 			productType = "com.apple.product-type.application";
 		};
+		A10000000000000000007002 /* PhotocoreUITests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = A10000000000000000008003 /* Build configuration list for PBXNativeTarget "PhotocoreUITests" */;
+			buildPhases = (
+				A1000000000000000000E004 /* Sources */,
+				A1000000000000000000E005 /* Frameworks */,
+				A1000000000000000000E006 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				A1000000000000000000B102 /* PBXTargetDependency */,
+			);
+			fileSystemSynchronizedGroups = (
+				A1000000000000000000D002 /* PhotocoreUITests */,
+			);
+			name = PhotocoreUITests;
+			productName = PhotocoreUITests;
+			productReference = A1000000000000000000F002 /* PhotocoreUITests.xctest */;
+			productType = "com.apple.product-type.bundle.ui-testing";
+		};
 /* End PBXNativeTarget section */
 
 /* Begin PBXProject section */
@@ -110,12 +156,20 @@
 			projectRoot = "";
 			targets = (
 				A10000000000000000007001 /* PhotocoreiOS */,
+				A10000000000000000007002 /* PhotocoreUITests */,
 			);
 		};
 /* End PBXProject section */
 
 /* Begin PBXResourcesBuildPhase section */
 		A1000000000000000000E003 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		A1000000000000000000E006 /* Resources */ = {
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
@@ -132,7 +186,22 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		A1000000000000000000E004 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXSourcesBuildPhase section */
+
+/* Begin PBXTargetDependency section */
+		A1000000000000000000B102 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = A10000000000000000007001 /* PhotocoreiOS */;
+			targetProxy = A1000000000000000000B101 /* PBXContainerItemProxy */;
+		};
+/* End PBXTargetDependency section */
 
 /* Begin XCBuildConfiguration section */
 		A10000000000000000006001 /* Debug */ = {
@@ -222,6 +291,36 @@
 			};
 			name = Release;
 		};
+		A10000000000000000006005 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				GENERATE_INFOPLIST_FILE = YES;
+				MARKETING_VERSION = 0.1;
+				PRODUCT_BUNDLE_IDENTIFIER = com.photocore.trip.uitests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_VERSION = 6.0;
+				TARGETED_DEVICE_FAMILY = 1;
+				TEST_TARGET_NAME = PhotocoreiOS;
+			};
+			name = Debug;
+		};
+		A10000000000000000006006 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				GENERATE_INFOPLIST_FILE = YES;
+				MARKETING_VERSION = 0.1;
+				PRODUCT_BUNDLE_IDENTIFIER = com.photocore.trip.uitests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_VERSION = 6.0;
+				TARGETED_DEVICE_FAMILY = 1;
+				TEST_TARGET_NAME = PhotocoreiOS;
+			};
+			name = Release;
+		};
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
@@ -239,6 +338,15 @@
 			buildConfigurations = (
 				A10000000000000000006003 /* Debug */,
 				A10000000000000000006004 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		A10000000000000000008003 /* Build configuration list for PBXNativeTarget "PhotocoreUITests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				A10000000000000000006005 /* Debug */,
+				A10000000000000000006006 /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;

@@ -7,6 +7,7 @@ struct PhotocoreApp: App {
 
     init() {
         TripQueue.removeLegacyWorkingCopies()
+        Store.shared.start()
     }
 
     @AppStorage("PhotocoreWelcomed") private var welcomed = false
