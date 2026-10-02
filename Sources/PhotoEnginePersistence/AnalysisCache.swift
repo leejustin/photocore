@@ -34,9 +34,10 @@ public final class AnalysisCache: @unchecked Sendable {
             .appendingPathComponent("analysis-v2.plist")
         self.entries = [:]
         self.analyzerVersion = [
-            "apple-analysis-0.5.0",
+            "apple-analysis-0.6.0",
             "feature-print-revision-2",
             "face-quality-revision-3",
+            "face-detect-once-revision-3-floor-50-2",
             "subject-crop-v2-min64",
             "thumbnail-1024-vision-on-thumbnail",
             Self.platformTag,

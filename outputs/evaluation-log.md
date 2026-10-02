@@ -82,3 +82,20 @@ Also found: the aesthetics model returns one constant near-zero score for every 
 Cause: several culls at once, each with worker threads parked on the gate, starve Vision's internal queues of threads. Production never does this: the app culls one trip at a time and the server's job queue is serial. Every Vision caller, including Core Image auto adjustment (which uses Vision face detection), now goes through the gate, and text recognition runs exclusively.
 
 Subject-aware finish on seven Pycon frames: masks on 3 of 7 (the lion dance, a portrait on a swing, a café table); none on the four landscapes and sunsets, which is correct. A 1.2% background blur melted framing tree trunks and looked fake, so the default finish has no blur and the portrait preset uses 0.3%.
+
+## 2026-10-01 — Face signals detect once
+
+Follow-up to "Vision face signals are not deterministic". `AppleAnalysisEngine` now runs `VNDetectFaceRectanglesRequest` (revision 3) once, drops faces below confidence 0.5 or 2% of the frame tall, and passes the rest as `inputFaceObservations` to the capture quality and landmarks requests. Analyzer version is now `apple-analysis-0.6.0`, so earlier cache entries are ignored.
+
+Same 28 Pycon night photos, `FaceDeterminismTests` with `PHOTOCORE_DET_DIR` (every other pass runs in parallel):
+
+| Code | Runs | Photos whose face count or face quality differed |
+| --- | --- | --- |
+| Before | 6 | 10 / 28 |
+| After | 8 | 0 / 28 |
+
+The rectangles detector gave the same faces on every run (9 photos with faces; confidence 0.61–0.72, smallest face 3.6% of frame height), so the floors drop nothing on this set. The noise came from the separate detectors inside the capture quality and landmarks requests. The new drawn-face test failed 4 of 4 runs before the change and passes after.
+
+`swift run photo-engine eval <copy> --profile trip --keep-percent 20` on four fresh copies (0 cache hits): every run kept the same 6 (DSC02770, 02774, 02796, 02803, 02805, 02809), with 0 review, 20 alternates and 2 hidden. Face counts, face quality, scores and buckets were identical for all 28 photos across the four runs.
+
+iOS simulator: capture quality returned 0, 1 or an arbitrary value for the same drawn face on repeated runs, whichever detector fed it (the Mac gave 0.51 every time). Like aesthetics, it is now skipped in the simulator (`VisionCompute.faceCaptureQualityAvailable`). Faces are still counted there and quality reads as unknown (0.35). `Scripts/ios-engine-test.sh` passes 65/65, twice.

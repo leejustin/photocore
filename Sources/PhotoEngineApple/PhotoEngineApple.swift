@@ -406,35 +406,43 @@ public struct AppleAnalysisEngine: Sendable {
     private func visionSignals(image: CGImage) throws -> (featurePrint: Data?, faces: [FaceSignal], faceQuality: Double, aestheticScore: Double?, aestheticUtility: Bool?, subjectFaceCount: Int) {
         let featureRequest = VNGenerateImageFeaturePrintRequest()
         featureRequest.revision = VNGenerateImageFeaturePrintRequestRevision2
+        let detectRequest = VNDetectFaceRectanglesRequest()
+        detectRequest.revision = VNDetectFaceRectanglesRequestRevision3
         let faceRequest = VNDetectFaceCaptureQualityRequest()
         faceRequest.revision = VNDetectFaceCaptureQualityRequestRevision3
         let landmarksRequest = VNDetectFaceLandmarksRequest()
         let handler = VNImageRequestHandler(cgImage: image, options: [:])
 
-        var requests: [VNRequest] = [featureRequest, faceRequest, landmarksRequest]
+        var requests: [VNRequest] = [featureRequest, detectRequest]
         var aestheticsRequest: VNCalculateImageAestheticsScoresRequest?
         if VisionCompute.aestheticsAvailable, #available(macOS 15.0, *) {
             let request = VNCalculateImageAestheticsScoresRequest()
             aestheticsRequest = request
             requests.append(request)
         }
-        VisionCompute.prepare(requests)
+        VisionCompute.prepare(requests + [faceRequest, landmarksRequest])
         VisionCompute.gate.wait()
         defer { VisionCompute.gate.signal() }
-        do {
-            try handler.perform(requests)
-        } catch {
-            // One optional model (aesthetics, landmarks) can fail on a device or
-            // simulator without its accelerator. Retry each request alone so the
-            // photo still gets whatever signals are available; only a missing
-            // feature print is fatal for grouping, and that is handled upstream.
-            var anySucceeded = false
-            for request in requests {
-                if (try? VNImageRequestHandler(cgImage: image, options: [:]).perform([request])) != nil {
-                    anySucceeded = true
-                }
+        try Self.perform(requests, on: handler, image: image)
+
+        // Detect faces once and hand the same faces to quality and landmarks.
+        // Each of those requests otherwise runs its own detector, and on
+        // borderline faces (masks, small or dim faces) the detector disagrees
+        // with itself from run to run. Faces below the floors are dropped
+        // before they can reach either request.
+        let detected = (detectRequest.results ?? [])
+            .filter { Self.isStableFace($0) }
+            .sorted { ($0.boundingBox.minX, $0.boundingBox.minY) < ($1.boundingBox.minX, $1.boundingBox.minY) }
+        if !detected.isEmpty {
+            var faceRequests: [VNRequest] = [landmarksRequest]
+            if VisionCompute.faceCaptureQualityAvailable {
+                faceRequest.inputFaceObservations = detected
+                faceRequests.append(faceRequest)
             }
-            if !anySucceeded { throw error }
+            landmarksRequest.inputFaceObservations = detected
+            // Quality and landmarks are optional: a failure leaves the faces
+            // counted with unknown quality rather than failing the photo.
+            try? Self.perform(faceRequests, on: handler, image: image)
         }
 
         let featurePrint = try featureRequest.results?.first.map {
@@ -443,18 +451,17 @@ public struct AppleAnalysisEngine: Sendable {
 
         let qualityObservations = faceRequest.results ?? []
         let landmarkObservations = landmarksRequest.results ?? []
-        let faceSignals: [FaceSignal] = qualityObservations.enumerated().map { index, observation in
-            let landmark = landmarkObservations.first {
-                $0.boundingBox.intersects(observation.boundingBox)
-            } ?? (index < landmarkObservations.count ? landmarkObservations[index] : nil)
+        let faceSignals: [FaceSignal] = detected.map { face in
+            let quality = Self.matching(face, in: qualityObservations)
+            let landmark = Self.matching(face, in: landmarkObservations)
             return FaceSignal(
                 boundingBox: CGRectCodable(
-                    x: observation.boundingBox.origin.x,
-                    y: observation.boundingBox.origin.y,
-                    width: observation.boundingBox.size.width,
-                    height: observation.boundingBox.size.height
+                    x: face.boundingBox.origin.x,
+                    y: face.boundingBox.origin.y,
+                    width: face.boundingBox.size.width,
+                    height: face.boundingBox.size.height
                 ),
-                captureQuality: observation.faceCaptureQuality.map(Double.init),
+                captureQuality: quality?.faceCaptureQuality.map(Double.init),
                 eyeOpenness: landmark.flatMap(Self.eyeOpenness(for:))
             )
         }
@@ -489,6 +496,50 @@ public struct AppleAnalysisEngine: Sendable {
         }
         let aestheticUtility = aestheticsRequest?.results?.first?.isUtility
         return (featurePrint, faceSignals, min(max(faceQuality, 0), 1), aestheticScore, aestheticUtility, qualifying.count)
+    }
+
+    /// Floors below which a detected face is ignored, so a barely-there face
+    /// cannot swing face count or quality. On 28 Pycon night photos every
+    /// revision-3 detection had confidence 0.61 or more and was at least 3.6%
+    /// of the frame tall; see the 2026-10-01 entries in
+    /// outputs/evaluation-log.md.
+    static let minimumFaceConfidence: Float = 0.5
+    static let minimumFaceHeight: CGFloat = 0.02
+
+    private static func isStableFace(_ face: VNFaceObservation) -> Bool {
+        face.confidence >= minimumFaceConfidence && face.boundingBox.height >= minimumFaceHeight
+    }
+
+    /// The result observation for an input face, by UUID when Vision keeps
+    /// it and otherwise by the closest box.
+    private static func matching(_ face: VNFaceObservation, in results: [VNFaceObservation]) -> VNFaceObservation? {
+        if let same = results.first(where: { $0.uuid == face.uuid }) { return same }
+        return results
+            .filter { $0.boundingBox.intersects(face.boundingBox) }
+            .min { distance($0.boundingBox, face.boundingBox) < distance($1.boundingBox, face.boundingBox) }
+    }
+
+    private static func distance(_ a: CGRect, _ b: CGRect) -> CGFloat {
+        abs(a.midX - b.midX) + abs(a.midY - b.midY) + abs(a.width - b.width) + abs(a.height - b.height)
+    }
+
+    /// Runs `requests` together. If one optional model (aesthetics,
+    /// landmarks) fails on a device or simulator without its accelerator,
+    /// retries each request alone so the photo still gets whatever signals are
+    /// available; only a missing feature print is fatal for grouping, and that
+    /// is handled upstream.
+    private static func perform(_ requests: [VNRequest], on handler: VNImageRequestHandler, image: CGImage) throws {
+        do {
+            try handler.perform(requests)
+        } catch {
+            var anySucceeded = false
+            for request in requests {
+                if (try? VNImageRequestHandler(cgImage: image, options: [:]).perform([request])) != nil {
+                    anySucceeded = true
+                }
+            }
+            if !anySucceeded { throw error }
+        }
     }
 
     private static func eyeOpenness(for observation: VNFaceObservation) -> Double? {
@@ -2034,6 +2085,17 @@ public enum VisionCompute {
     /// returns the same near-zero score for every image, which would drag every
     /// photo below the cut. Scoring already handles a missing aesthetic score.
     public static var aestheticsAvailable: Bool {
+        #if targetEnvironment(simulator)
+        false
+        #else
+        true
+        #endif
+    }
+
+    /// Same story for face capture quality: in the iOS simulator it returns
+    /// 0, 1 or an arbitrary value for the same face on repeated runs, whichever
+    /// detector feeds it. Faces are still counted; quality reads as unknown.
+    public static var faceCaptureQualityAvailable: Bool {
         #if targetEnvironment(simulator)
         false
         #else
