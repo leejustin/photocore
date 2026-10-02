@@ -13,6 +13,37 @@ struct CreateTripBody: Decodable, Sendable {
     var calendarEvents: [String]?
     var tone: String?
     var theme: String?
+    var ownerName: String?
+}
+
+struct InviteBody: Decodable, Sendable {
+    var open: Bool
+}
+
+struct JoinBody: Decodable, Sendable {
+    var name: String
+}
+
+struct JoinedDTO: Encodable, Sendable {
+    var name: String
+    var token: String
+}
+
+struct ContributorDTO: Encodable, Sendable {
+    var name: String
+    var photos: Int
+}
+
+/// What the invite page shows. `me` and `mine` are present only for the person
+/// whose token came with the request.
+struct InviteStatusDTO: Encodable, Sendable {
+    var title: String?
+    var open: Bool
+    var people: Int
+    var photos: Int
+    var bookPath: String?
+    var me: String?
+    var mine: Int?
 }
 
 struct TripCreatedDTO: Encodable, Sendable {
@@ -21,6 +52,7 @@ struct TripCreatedDTO: Encodable, Sendable {
     var ownerToken: String
     var bookPath: String
     var editPath: String
+    var invitePath: String?
 }
 
 struct TripDTO: Encodable, Sendable {
@@ -32,6 +64,9 @@ struct TripDTO: Encodable, Sendable {
     var lastJobID: String?
     var writer: String?
     var bookPath: String
+    var invitePath: String?
+    var inviteOpen: Bool
+    var contributors: [ContributorDTO]
 }
 
 struct UploadDTO: Encodable, Sendable {
@@ -60,13 +95,25 @@ struct FinishResult: Codable, Sendable {
     var writer: String
     var guestKept: Int
     var guestDuplicates: Int
+    var guestOverBudget: Int?
+    var contributors: [String: Int]?
 }
 
 enum TripPaths {
     static func book(_ slug: String) -> String { "/b/\(slug)/" }
-    static func options(_ slug: String) -> BookRenderer.Options {
-        BookRenderer.Options(editEndpoint: "/b/\(slug)/edits", guestEndpoint: "/b/\(slug)/guest")
+    static func invite(_ record: TripRecord) -> String? { record.inviteCode.map { "/j/\($0)" } }
+    static func options(_ record: TripRecord) -> BookRenderer.Options {
+        BookRenderer.Options(
+            editEndpoint: "/b/\(record.slug)/edits",
+            guestEndpoint: "/b/\(record.slug)/guest",
+            invitePath: record.inviteOpen ? invite(record) : nil
+        )
     }
+}
+
+/// The contributor token sent by the invite page.
+private func contributorToken(_ request: Request) -> String? {
+    request.headers[HTTPField.Name("X-Photocore-Contributor")!]
 }
 
 func registerTripRoutes(_ router: Router<BasicRequestContext>, env: ServerEnvironment, trips: TripStore) {
@@ -77,21 +124,63 @@ func registerTripRoutes(_ router: Router<BasicRequestContext>, env: ServerEnviro
         let tone = DiaryTone(rawValue: body.tone ?? "warm") ?? .warm
         let theme = BookTheme(name: body.theme ?? "book") ?? .book
         let title = body.title.map { String($0.prefix(120)) }
+        let ownerName = body.ownerName.map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }.flatMap { $0.isEmpty ? nil : String($0.prefix(TripLimits.nameLength)) }
         let context = TripContext(
             note: body.note.map { String($0.prefix(280)) },
             calendarEvents: (body.calendarEvents ?? []).prefix(5).map { String($0.prefix(120)) }
         )
-        let (record, token) = try await trips.create(title: title, context: context, tone: tone, theme: theme)
-        let dto = TripCreatedDTO(id: record.id, slug: record.slug, ownerToken: token, bookPath: TripPaths.book(record.slug), editPath: TripPaths.book(record.slug) + "#edit=" + token)
+        let (record, token) = try await trips.create(title: title, context: context, tone: tone, theme: theme, ownerName: ownerName)
+        let dto = TripCreatedDTO(id: record.id, slug: record.slug, ownerToken: token, bookPath: TripPaths.book(record.slug), editPath: TripPaths.book(record.slug) + "#edit=" + token, invitePath: TripPaths.invite(record))
         return try APIJSON.response(dto, status: .created)
     }
 
     router.get("v2/trips/{tid}") { _, context in
         let tid = try context.parameters.require("tid")
         guard let record = await trips.record(id: tid) else { throw APIError.notFound("No trip \(tid)") }
-        let owner = (try? FileManager.default.contentsOfDirectory(atPath: await trips.ownerFolder(tid).path).count) ?? 0
-        let guests = (try? FileManager.default.contentsOfDirectory(atPath: await trips.guestFolder(tid).path).count) ?? 0
-        return try APIJSON.response(TripDTO(id: record.id, slug: record.slug, ownerPhotos: owner, guestPhotos: guests, finishedAt: record.finishedAt, lastJobID: record.lastJobID, writer: record.bookWriter, bookPath: TripPaths.book(record.slug)))
+        let owner = await trips.photoCount(await trips.ownerFolder(tid))
+        let guests = await trips.photoCount(await trips.guestFolder(tid)) + (await trips.contributedCount(tid))
+        var people: [ContributorDTO] = []
+        for person in await trips.contributors(tid) {
+            people.append(ContributorDTO(name: person.name, photos: await trips.photoCount(await trips.contributorFolder(tid, person.id))))
+        }
+        return try APIJSON.response(TripDTO(
+            id: record.id, slug: record.slug, ownerPhotos: owner, guestPhotos: guests,
+            finishedAt: record.finishedAt, lastJobID: record.lastJobID, writer: record.bookWriter,
+            bookPath: TripPaths.book(record.slug), invitePath: TripPaths.invite(record),
+            inviteOpen: record.inviteOpen, contributors: people
+        ))
+    }
+
+    /// Updates what the owner chose after inviting people: title, note, tone,
+    /// style and name. Only fields that are present change.
+    router.post("v2/trips/{tid}/settings") { request, context in
+        let tid = try context.parameters.require("tid")
+        guard await trips.record(id: tid) != nil else { throw APIError.notFound("No trip \(tid)") }
+        let body = try await request.decode(as: CreateTripBody.self, context: context)
+        try await trips.update(tid) { record in
+            if let title = body.title { record.title = String(title.prefix(120)) }
+            if let tone = body.tone.flatMap(DiaryTone.init(rawValue:)) { record.tone = tone }
+            if let theme = body.theme.flatMap({ BookTheme(name: $0) }) { record.theme = theme }
+            if let name = body.ownerName?.trimmingCharacters(in: .whitespacesAndNewlines) {
+                record.ownerName = name.isEmpty ? nil : String(name.prefix(TripLimits.nameLength))
+            }
+            if body.note != nil || body.calendarEvents != nil {
+                var context = record.context ?? .empty
+                if let note = body.note { context.note = note.isEmpty ? nil : String(note.prefix(280)) }
+                if let events = body.calendarEvents { context.calendarEvents = events.prefix(5).map { String($0.prefix(120)) } }
+                record.context = context
+            }
+        }
+        return try APIJSON.response(["ok": true])
+    }
+
+    /// Opens or closes the invite link. Photos already added stay.
+    router.post("v2/trips/{tid}/invite") { request, context in
+        let tid = try context.parameters.require("tid")
+        guard await trips.record(id: tid)?.inviteCode != nil else { throw APIError.notFound("No invite for trip \(tid)") }
+        let body = try await request.decode(as: InviteBody.self, context: context)
+        try await trips.update(tid) { $0.inviteClosed = !body.open }
+        return try APIJSON.response(["open": body.open])
     }
 
     router.put("v2/trips/{tid}/photos/{name}") { request, context in
@@ -108,13 +197,18 @@ func registerTripRoutes(_ router: Router<BasicRequestContext>, env: ServerEnviro
         let tid = try context.parameters.require("tid")
         guard let record = await trips.record(id: tid) else { throw APIError.notFound("No trip \(tid)") }
         let ownerFolder = await trips.ownerFolder(tid)
-        guard ((try? FileManager.default.contentsOfDirectory(atPath: ownerFolder.path).count) ?? 0) > 0 else {
-            throw APIError.precondition("Upload the trip's keepers before finishing.")
+        let total = await trips.photoCount(ownerFolder) + (await trips.photoCount(await trips.guestFolder(tid))) + (await trips.contributedCount(tid))
+        guard total > 0 else {
+            throw APIError.precondition("Add some photos before finishing.")
+        }
+        var contributors = [TripFinisher.Contributor(name: nil, folder: await trips.guestFolder(tid))]
+        for person in await trips.contributors(tid) {
+            contributors.append(TripFinisher.Contributor(name: person.name, folder: await trips.contributorFolder(tid, person.id)))
         }
         let job = JobRecord(id: UUID().uuidString, kind: "finish-trip", sessionID: nil, state: "queued", request: Data("{\"trip\":\"\(tid)\"}".utf8), createdAt: Date())
         let folders = TripFinisher.Folders(
             owner: ownerFolder,
-            guests: await trips.guestFolder(tid),
+            contributors: contributors,
             book: await trips.bookFolder(tid),
             work: await trips.folder(tid).appendingPathComponent("work", isDirectory: true)
         )
@@ -127,8 +221,9 @@ func registerTripRoutes(_ router: Router<BasicRequestContext>, env: ServerEnviro
                 context: record.context ?? .empty,
                 tone: record.tone,
                 theme: record.theme,
+                ownerName: record.ownerName,
                 writer: writer,
-                options: TripPaths.options(record.slug),
+                options: TripPaths.options(record),
                 lookUpPlaces: ProcessInfo.processInfo.environment["PHOTOCORE_OFFLINE"] != "1"
             ) { stage, done, total in
                 Task { await jobs.noteProgress(id: job.id, stage: "finish", completed: done, total: total, message: stage) }
@@ -143,7 +238,9 @@ func registerTripRoutes(_ router: Router<BasicRequestContext>, env: ServerEnviro
                 chapters: outcome.book.sections.count,
                 writer: outcome.book.writer,
                 guestKept: outcome.guestKept,
-                guestDuplicates: outcome.guestDuplicates
+                guestDuplicates: outcome.guestDuplicates,
+                guestOverBudget: outcome.guestOverBudget,
+                contributors: outcome.keptPerContributor
             ))
         }
         try await trips.update(tid) { $0.lastJobID = stored.id }
@@ -199,7 +296,7 @@ func registerTripRoutes(_ router: Router<BasicRequestContext>, env: ServerEnviro
         guard await trips.isOwner(record, token: bearer) else { throw APIError.unauthorized("Only the book's owner can edit it.") }
         let body = try await request.decode(as: EditBody.self, context: context)
         do {
-            try TripFinisher.applyEdit(key: body.key, value: body.value, bookFolder: await trips.bookFolder(record.id), options: TripPaths.options(slug))
+            try TripFinisher.applyEdit(key: body.key, value: body.value, bookFolder: await trips.bookFolder(record.id), options: TripPaths.options(record))
         } catch TripFinisher.EditError.notEditable {
             throw APIError.invalid("That part of the book can't be edited.")
         } catch TripFinisher.EditError.tooLong {
@@ -242,14 +339,71 @@ func registerTripRoutes(_ router: Router<BasicRequestContext>, env: ServerEnviro
         return try APIJSON.response(activity, status: .created)
     }
 
-    router.put("b/{slug}/guest/photos/{name}") { request, context in
-        let slug = try context.parameters.require("slug")
+    // MARK: Invite link (no server token; each person gets their own token)
+
+    router.get("j/{code}") { _, context in
+        let code = try context.parameters.require("code")
+        guard let record = await trips.record(invite: code) else { throw APIError.notFound("This invite link doesn't work.") }
+        var headers = HTTPFields()
+        headers[.contentType] = "text/html; charset=utf-8"
+        headers[.cacheControl] = "no-store"
+        headers[HTTPField.Name("X-Content-Type-Options")!] = "nosniff"
+        headers[HTTPField.Name("Referrer-Policy")!] = "no-referrer"
+        headers[HTTPField.Name("Content-Security-Policy")!] = "default-src 'self'; img-src 'self' data:; style-src 'unsafe-inline'; script-src 'unsafe-inline'; connect-src 'self'; frame-ancestors 'none'"
+        return APIJSON.bytes(Data(InvitePage.html(code: code, title: record.title, ownerName: record.ownerName).utf8), headers: headers)
+    }
+
+    router.get("j/{code}/status") { request, context in
+        let code = try context.parameters.require("code")
+        guard let record = await trips.record(invite: code) else { throw APIError.notFound("This invite link doesn't work.") }
+        let person = await trips.contributor(record.id, token: contributorToken(request))
+        var mine: Int?
+        if let person { mine = await trips.photoCount(await trips.contributorFolder(record.id, person.id)) }
+        let status = InviteStatusDTO(
+            title: record.title,
+            open: record.inviteOpen,
+            people: await trips.contributors(record.id).count,
+            photos: await trips.contributedCount(record.id),
+            bookPath: record.finishedAt == nil ? nil : TripPaths.book(record.slug),
+            me: person?.name,
+            mine: mine
+        )
+        return try APIJSON.response(status)
+    }
+
+    router.post("j/{code}/join") { request, context in
+        let code = try context.parameters.require("code")
+        guard let record = await trips.record(invite: code) else { throw APIError.notFound("This invite link doesn't work.") }
+        guard record.inviteOpen else { throw APIError.forbidden("This trip isn't taking photos any more.") }
+        let body = try await request.decode(as: JoinBody.self, context: context)
+        let name = body.name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !name.isEmpty, name.count <= TripLimits.nameLength else { throw APIError.invalid("Add a name under \(TripLimits.nameLength) characters.") }
+        let (person, token) = try await trips.join(record.id, name: name)
+        return try APIJSON.response(JoinedDTO(name: person.name, token: token), status: .created)
+    }
+
+    router.put("j/{code}/photos/{name}") { request, context in
+        let code = try context.parameters.require("code")
         let name = try context.parameters.require("name")
-        guard let record = await trips.record(slug: slug) else { throw APIError.notFound("No book.") }
+        guard let record = await trips.record(invite: code) else { throw APIError.notFound("This invite link doesn't work.") }
+        guard record.inviteOpen else { throw APIError.forbidden("This trip isn't taking photos any more.") }
+        guard let person = await trips.contributor(record.id, token: contributorToken(request)) else {
+            throw APIError.unauthorized("Join the trip before adding photos.")
+        }
         let buffer = try await request.body.collect(upTo: TripLimits.uploadBytes)
-        let url = try await trips.store(photo: Data(buffer: buffer), name: name, id: record.id, guest: true)
-        let count = (try? FileManager.default.contentsOfDirectory(atPath: await trips.guestFolder(record.id).path).count) ?? 0
+        let url = try await trips.store(photo: Data(buffer: buffer), name: name, id: record.id, contributor: person)
+        let count = await trips.photoCount(await trips.contributorFolder(record.id, person.id))
         return try APIJSON.response(UploadDTO(stored: url.lastPathComponent, count: count), status: .created)
+    }
+
+    router.delete("j/{code}/photos") { request, context in
+        let code = try context.parameters.require("code")
+        guard let record = await trips.record(invite: code) else { throw APIError.notFound("This invite link doesn't work.") }
+        guard let person = await trips.contributor(record.id, token: contributorToken(request)) else {
+            throw APIError.unauthorized("Only the person who added these photos can remove them.")
+        }
+        let removed = try await trips.removePhotos(record.id, contributor: person)
+        return try APIJSON.response(["removed": removed])
     }
 }
 

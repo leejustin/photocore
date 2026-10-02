@@ -10,11 +10,15 @@ public enum BookRenderer {
         public var editEndpoint: String?
         /// Where guest notes and reactions are POSTed, or nil to hide them.
         public var guestEndpoint: String?
+        /// The trip's invite page, where people who were there add their photos;
+        /// nil when the owner has closed it.
+        public var invitePath: String?
         public var footer: String
 
-        public init(editEndpoint: String? = nil, guestEndpoint: String? = nil, footer: String = "Made with Photocore") {
+        public init(editEndpoint: String? = nil, guestEndpoint: String? = nil, invitePath: String? = nil, footer: String = "Made with Photocore") {
             self.editEndpoint = editEndpoint
             self.guestEndpoint = guestEndpoint
+            self.invitePath = invitePath
             self.footer = footer
         }
     }
@@ -56,12 +60,14 @@ public enum BookRenderer {
     public static func html(_ book: TripBook, options: Options = Options()) -> String {
         let cover = book.allPhotos.first { $0.id == book.coverPhotoID } ?? book.allPhotos.first
         var body = ""
-        if book.theme == .polaroid {
+        if book.theme == .snapshot {
             body += "<header class=\"pcover\">"
             if let cover {
                 body += "<figure class=\"print big\"><img src=\"\(attr(photoPath(cover)))\" alt=\"\(attr(cover.altText))\"><figcaption>\(text(book.dateRange))</figcaption></figure>"
             }
-            body += "<h1 \(editable("title"))>\(text(book.title))</h1></header>"
+            body += "<h1 \(editable("title"))>\(text(book.title))</h1>"
+            if let line = book.creditLine { body += "<p class=\"byline\">\(text(line))</p>" }
+            body += "</header>"
         } else {
             body += "<header class=\"cover\">"
             if let cover {
@@ -69,7 +75,9 @@ public enum BookRenderer {
             }
             body += "<div class=\"cover-shade\"></div><div class=\"cover-text\">"
             body += "<p class=\"kicker\">\(text(book.dateRange))</p>"
-            body += "<h1 \(editable("title"))>\(text(book.title))</h1></div></header>"
+            body += "<h1 \(editable("title"))>\(text(book.title))</h1>"
+            if let line = book.creditLine { body += "<p class=\"byline\">\(text(line))</p>" }
+            body += "</div></header>"
         }
         body += "<main>"
         body += "<p class=\"intro\" \(editable("intro"))>\(text(book.intro))</p>"
@@ -90,12 +98,13 @@ public enum BookRenderer {
             if !section.diary.isEmpty {
                 body += "<blockquote class=\"diary\" \(editable("section.\(section.id).diary"))>\(text(section.diary))</blockquote>"
             }
-            if book.theme == .polaroid {
+            if book.theme == .snapshot {
                 body += "<div class=\"board\">"
                 for photo in photos {
                     body += "<figure class=\"print\">"
                     body += "<img loading=\"lazy\" decoding=\"async\" src=\"\(attr(photoPath(photo)))\" alt=\"\(attr(photo.altText))\">"
                     body += "<figcaption \(editable("photo.\(photo.id.description).caption"))>\(text(photo.caption))</figcaption>"
+                    if book.contributors != nil, let credit = photo.credit { body += "<p class=\"credit\">\(text(credit))</p>" }
                     if options.guestEndpoint != nil {
                         body += "<button class=\"heart\" data-photo=\"\(attr(photo.id.description))\" aria-label=\"Love this photo\">\u{2661}<span></span></button>"
                     }
@@ -112,6 +121,7 @@ public enum BookRenderer {
                     body += "<figure>"
                     body += "<img loading=\"lazy\" decoding=\"async\" src=\"\(attr(photoPath(photo)))\" alt=\"\(attr(photo.altText))\">"
                     body += "<figcaption \(editable("photo.\(photo.id.description).caption"))>\(text(photo.caption))</figcaption>"
+                    if book.contributors != nil, let credit = photo.credit { body += "<p class=\"credit\">\(text(credit))</p>" }
                     if options.guestEndpoint != nil {
                         body += "<button class=\"heart\" data-photo=\"\(attr(photo.id.description))\" aria-label=\"Love this photo\">\u{2661}<span></span></button>"
                     }
@@ -128,11 +138,15 @@ public enum BookRenderer {
             <form id="note-form"><input id="note-name" maxlength="40" placeholder="Your name" required>
             <textarea id="note-text" maxlength="500" rows="3" placeholder="A memory from the trip" required></textarea>
             <button type="submit">Add note</button></form>
-            <div class="addphotos"><h3>Were you there too?</h3>
-            <p class="hint">Add your photos from the trip. The owner's next update picks the best ones and leaves out repeats.</p>
-            <label class="upload">Add your photos<input id="guest-photos" type="file" accept="image/jpeg,image/heic" multiple></label>
-            <p id="upload-status" class="hint" aria-live="polite"></p></div></section>
             """
+            if let invite = options.invitePath {
+                body += """
+                <div class="addphotos"><h3>Were you there too?</h3>
+                <p class="hint">Add your photos from the trip. The next update picks the best shot of each moment from everyone's photos.</p>
+                <a class="upload" href="\(attr(invite))">Add your photos</a></div>
+                """
+            }
+            body += "</section>"
         }
         body += "</main><footer><p>\(text(options.footer))</p></footer>"
 
@@ -151,7 +165,7 @@ public enum BookRenderer {
         <meta property="og:description" content="\(attr(book.intro))">
         \(cover.map { "<meta property=\"og:image\" content=\"\(attr(photoPath($0)))\">" } ?? "")
         <meta name="twitter:card" content="summary_large_image">
-        \(book.theme == .polaroid ? "<link rel=\"stylesheet\" href=\"https://fonts.googleapis.com/css2?family=Caveat:wght@500;700&display=swap\">" : "")
+        \(book.theme == .snapshot ? "<link rel=\"stylesheet\" href=\"https://fonts.googleapis.com/css2?family=Caveat:wght@500;700&display=swap\">" : "")
         <style>\(css)</style></head>
         <body class="theme-\(book.theme.rawValue)">\(body)
         <script>\(config)\(script)</script></body></html>
@@ -216,6 +230,9 @@ public enum BookRenderer {
     .row.pair:not(.wide):not(.tall) img { aspect-ratio:1 / 1; object-fit:cover; }
     figcaption { font-size:14px; color:var(--muted); padding:8px 2px 0; }
     figcaption:empty { display:none; }
+    .credit { font-size:12px; color:var(--muted); margin:2px 2px 0; letter-spacing:.02em; }
+    .credit::before { content:"by "; }
+    .byline { margin:14px 0 0; font-size:15px; opacity:.88; }
     [data-key][contenteditable="true"] { outline:1px dashed var(--accent); outline-offset:6px; border-radius:4px; cursor:text; }
     .heart { position:absolute; top:12px; right:12px; border:0; border-radius:999px; padding:6px 11px; background:rgba(20,18,16,.42); backdrop-filter:blur(8px); -webkit-backdrop-filter:blur(8px); color:#fff; font-size:15px; cursor:pointer; }
     .heart.on { background:var(--accent); }
@@ -231,7 +248,7 @@ public enum BookRenderer {
     .addphotos { margin-top:28px; padding-top:22px; border-top:1px solid var(--line); }
     .addphotos h3 { font-family:var(--serif); font-size:22px; margin:0; }
     .upload { display:inline-block; font-weight:600; padding:10px 20px; border-radius:999px; border:1.5px solid var(--accent); color:var(--accent); cursor:pointer; }
-    .upload input { display:none; }
+    .upload { text-decoration:none; }
     .guestbook button { justify-self:start; font:inherit; font-weight:600; padding:10px 20px; border:0; border-radius:999px; background:var(--accent); color:#fff; cursor:pointer; }
     footer { text-align:center; color:var(--faint); font-size:13px; letter-spacing:.04em; padding:56px 20px 64px; }
     .lightbox { position:fixed; inset:0; background:rgba(0,0,0,.94); display:flex; align-items:center; justify-content:center; z-index:10; cursor:zoom-out; }
@@ -250,6 +267,7 @@ public enum BookRenderer {
       .row.hero { margin-left:-16px; margin-right:-16px; }
       .row.hero img { border-radius:0; }
       .row.hero figcaption { padding-left:16px; padding-right:16px; }
+      .row.hero .credit { padding-left:16px; }
       .row.pair.wide { grid-template-columns:1fr; }
       .guestbook { padding:22px; margin-top:64px; }
     }
@@ -260,32 +278,35 @@ public enum BookRenderer {
       .chapter { page-break-before:always; padding-top:0; }
       .row { break-inside:avoid; }
     }
-    /* Polaroid theme: instant prints pinned to a board. Apple devices use their
+    /* Snapshots theme: instant prints pinned to a board. Apple devices use their
        built-in handwriting fonts; others load Caveat. */
-    body.theme-polaroid { --paper:#efe8dc; --hand:"Bradley Hand","Noteworthy","Caveat","Segoe Print",cursive; background:var(--paper) radial-gradient(rgba(0,0,0,.035) 1px, transparent 1px) 0 0 / 14px 14px; }
-    @media (prefers-color-scheme: dark) { body.theme-polaroid { --paper:#23201c; } }
+    body.theme-snapshot { --paper:#efe8dc; --hand:"Bradley Hand","Noteworthy","Caveat","Segoe Print",cursive; background:var(--paper) radial-gradient(rgba(0,0,0,.035) 1px, transparent 1px) 0 0 / 14px 14px; }
+    @media (prefers-color-scheme: dark) { body.theme-snapshot { --paper:#23201c; } }
     .pcover { max-width:1040px; margin:0 auto; padding:56px 20px 8px; display:grid; justify-items:center; gap:22px; text-align:center; }
     .pcover h1 { font-family:var(--hand); font-weight:700; font-size:clamp(40px, 7vw, 76px); line-height:1.05; color:var(--ink); max-width:16ch; }
-    .theme-polaroid .print { background:#fdfcf8; padding:14px 14px 0; box-shadow:0 1px 2px rgba(0,0,0,.12), 0 10px 26px rgba(0,0,0,.16); border-radius:2px; position:relative; }
-    .theme-polaroid .print img { aspect-ratio:1 / 1; object-fit:cover; border-radius:0; filter:saturate(.9) contrast(.97) sepia(.07) brightness(1.02); }
-    .theme-polaroid .print figcaption { font-family:var(--hand); font-size:22px; line-height:1.2; color:#34302b; text-align:center; min-height:62px; padding:12px 6px 14px; display:block; }
-    .theme-polaroid .print figcaption:empty { display:block; }
-    .theme-polaroid .print.big { width:min(520px, 86vw); transform:rotate(-2deg); }
-    .theme-polaroid .print.big figcaption { font-size:26px; }
+    .theme-snapshot .print { background:#fdfcf8; padding:14px 14px 0; box-shadow:0 1px 2px rgba(0,0,0,.12), 0 10px 26px rgba(0,0,0,.16); border-radius:2px; position:relative; }
+    .theme-snapshot .print img { aspect-ratio:1 / 1; object-fit:cover; border-radius:0; filter:saturate(.9) contrast(.97) sepia(.07) brightness(1.02); }
+    .theme-snapshot .print figcaption { font-family:var(--hand); font-size:22px; line-height:1.2; color:#34302b; text-align:center; min-height:62px; padding:12px 6px 14px; display:block; }
+    .theme-snapshot .print figcaption:empty { display:block; }
+    .theme-snapshot .print.big { width:min(520px, 86vw); transform:rotate(-2deg); }
+    .theme-snapshot .print.big figcaption { font-size:26px; }
     .board { display:grid; grid-template-columns:repeat(3, 1fr); gap:34px 26px; padding:10px 6px 20px; }
     .board .print:nth-child(4n+1) { transform:rotate(-2.2deg); }
     .board .print:nth-child(4n+2) { transform:rotate(1.6deg) translateY(10px); }
     .board .print:nth-child(4n+3) { transform:rotate(-0.8deg) translateY(-6px); }
     .board .print:nth-child(4n) { transform:rotate(2.4deg); }
     .board .print:nth-child(3n+1)::before { content:""; position:absolute; top:-12px; left:50%; width:84px; height:26px; transform:translateX(-50%) rotate(-3deg); background:rgba(244,232,196,.78); box-shadow:0 1px 2px rgba(0,0,0,.08); }
-    .theme-polaroid .chapter h2, .theme-polaroid .number { font-family:var(--hand); }
-    .theme-polaroid .diary { font-family:var(--hand); font-style:normal; font-size:clamp(22px, 2.6vw, 27px); }
-    .theme-polaroid .intro { font-family:var(--hand); font-size:clamp(24px, 3vw, 30px); text-align:center; margin-left:auto; margin-right:auto; }
-    .theme-polaroid .heart { top:22px; right:22px; }
+    .theme-snapshot .chapter h2, .theme-snapshot .number { font-family:var(--hand); }
+    .theme-snapshot .diary { font-family:var(--hand); font-style:normal; font-size:clamp(22px, 2.6vw, 27px); }
+    .theme-snapshot .intro { font-family:var(--hand); font-size:clamp(24px, 3vw, 30px); text-align:center; margin-left:auto; margin-right:auto; }
+    .theme-snapshot .heart { top:22px; right:22px; }
+    .theme-snapshot .print .credit { text-align:right; margin:0; padding:0 8px 10px; font-family:var(--hand); font-size:15px; color:#6b645b; }
+    .theme-snapshot .print figcaption:has(+ .credit) { min-height:48px; padding-bottom:2px; }
+    .pcover .byline { font-family:var(--hand); font-size:22px; color:var(--muted); margin:0; }
     @media (max-width: 640px) {
       .board { grid-template-columns:repeat(2, 1fr); gap:24px 16px; }
-      .theme-polaroid .print { padding:9px 9px 0; }
-      .theme-polaroid .print figcaption { font-size:18px; min-height:46px; padding:8px 4px 10px; }
+      .theme-snapshot .print { padding:9px 9px 0; }
+      .theme-snapshot .print figcaption { font-size:18px; min-height:46px; padding:8px 4px 10px; }
     }
     @media print { .board .print { break-inside:avoid; } }
     """
@@ -329,23 +350,6 @@ public enum BookRenderer {
             btn.classList.add('on');
             fetch(cfg.guest + '/hearts', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ photo: btn.dataset.photo }) })
               .then(function(r){ return r.json(); }).then(render).catch(function(){});
-          });
-        });
-        var picker = document.getElementById('guest-photos');
-        if (picker) picker.addEventListener('change', function(){
-          var files = Array.prototype.slice.call(picker.files || []).slice(0, 30);
-          var status = document.getElementById('upload-status'); var done = 0, failed = 0;
-          if (!files.length) return;
-          status.textContent = 'Adding ' + files.length + (files.length === 1 ? ' photo…' : ' photos…');
-          files.reduce(function(chain, file, i){
-            return chain.then(function(){
-              var name = 'g' + Date.now().toString(36) + i;
-              return fetch(cfg.guest + '/photos/' + name, { method:'PUT', headers:{'Content-Type': file.type || 'application/octet-stream'}, body:file })
-                .then(function(r){ if (r.ok) done++; else failed++; }).catch(function(){ failed++; });
-            });
-          }, Promise.resolve()).then(function(){
-            status.textContent = done ? ('Thanks! ' + done + (done === 1 ? ' photo' : ' photos') + ' added.' + (failed ? ' ' + failed + ' could not be added.' : '')) : 'Those photos could not be added.';
-            picker.value = '';
           });
         });
         document.getElementById('note-form').addEventListener('submit', function(e){

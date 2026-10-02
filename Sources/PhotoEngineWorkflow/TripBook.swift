@@ -12,8 +12,10 @@ public struct BookPhoto: Codable, Sendable, Equatable, Identifiable {
     public var instagramCaption: String
     public var altText: String
     public var isPortrait: Bool
+    /// Who took it, on a book several people added photos to.
+    public var credit: String?
 
-    public init(id: PhotoID, fileName: String, label: String = "", caption: String = "", instagramCaption: String = "", altText: String = "", isPortrait: Bool = false) {
+    public init(id: PhotoID, fileName: String, label: String = "", caption: String = "", instagramCaption: String = "", altText: String = "", isPortrait: Bool = false, credit: String? = nil) {
         self.id = id
         self.fileName = fileName
         self.label = label
@@ -21,6 +23,7 @@ public struct BookPhoto: Codable, Sendable, Equatable, Identifiable {
         self.instagramCaption = instagramCaption
         self.altText = altText
         self.isPortrait = isPortrait
+        self.credit = credit
     }
 }
 
@@ -57,6 +60,9 @@ public struct TripBook: Codable, Sendable, Equatable {
     /// How many generated fields were replaced because they named something
     /// the facts did not support.
     public var groundingRejections: Int?
+    /// Everyone whose photos are in the book, most photos first. Empty or nil
+    /// for a book with one photographer.
+    public var contributors: [String]?
 
     public init(title: String, intro: String, dateRange: String, coverPhotoID: PhotoID?, sections: [BookSection], writer: String, theme: BookTheme) {
         self.title = title
@@ -69,6 +75,29 @@ public struct TripBook: Codable, Sendable, Equatable {
     }
 
     public var allPhotos: [BookPhoto] { sections.flatMap(\.photos) }
+
+    /// Credits each photo and lists the photographers, most photos first. Does
+    /// nothing unless at least two people's photos are in the book.
+    public mutating func credit(_ credits: [PhotoID: String]) {
+        var counts: [String: Int] = [:]
+        for photo in allPhotos { if let name = credits[photo.id] { counts[name, default: 0] += 1 } }
+        guard counts.count >= 2 || (counts.count == 1 && counts.values.reduce(0, +) < allPhotos.count) else {
+            contributors = nil
+            return
+        }
+        for s in sections.indices {
+            for p in sections[s].photos.indices { sections[s].photos[p].credit = credits[sections[s].photos[p].id] }
+        }
+        contributors = counts.sorted { $0.value != $1.value ? $0.value > $1.value : $0.key < $1.key }.map(\.key)
+    }
+
+    /// "Photos by Ana, Sam and Priya", or "With photos by Sam" when some photos
+    /// are the owner's and the owner gave no name. Nil for one photographer.
+    public var creditLine: String? {
+        guard let names = contributors, !names.isEmpty else { return nil }
+        let everyPhotoCredited = allPhotos.allSatisfy { $0.credit != nil }
+        return (everyPhotoCredited ? "Photos by " : "With photos by ") + names.formatted(.list(type: .and))
+    }
 
     public func save(to folder: URL) throws {
         let encoder = JSONEncoder()
@@ -85,22 +114,22 @@ public enum BookTheme: String, Codable, Sendable, CaseIterable {
     /// A clean online photobook: the default.
     case book
     /// Instant prints pinned to a board, with handwritten captions.
-    case polaroid
+    case snapshot
 
-    /// Books saved before the Polaroid theme called it "scrapbook".
+    /// Books saved before the Snapshots theme called it "scrapbook".
     public init(from decoder: Decoder) throws {
         let raw = try decoder.singleValueContainer().decode(String.self)
-        self = raw == "scrapbook" ? .polaroid : (BookTheme(rawValue: raw) ?? .book)
+        self = raw == "scrapbook" ? .snapshot : (BookTheme(rawValue: raw) ?? .book)
     }
 
     public init?(name: String) {
-        self.init(rawValue: name == "scrapbook" ? "polaroid" : name)
+        self.init(rawValue: name == "scrapbook" ? "snapshot" : name)
     }
 
     public var displayName: String {
         switch self {
         case .book: "Book"
-        case .polaroid: "Polaroids"
+        case .snapshot: "Snapshots"
         }
     }
 }

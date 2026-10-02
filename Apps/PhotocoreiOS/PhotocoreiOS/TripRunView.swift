@@ -10,7 +10,7 @@ struct TripRunView: View {
     @State private var pendingSetAside: SetAsidePlan?
     @State private var message: String?
     @State private var planning = false
-    @State private var showingPolaroids = false
+    @State private var showingSnapshots = false
     @State private var showingReel = false
 
     private var run: TripRun { queue.run(for: trip) }
@@ -34,7 +34,7 @@ struct TripRunView: View {
             if stage == .ready, LaunchOptions.autoSwipe, !run.openMoments.isEmpty { showingSwipe = true }
         }
         .sheet(isPresented: $showingSwipe) { SwipeReviewView(run: run) }
-        .sheet(isPresented: $showingPolaroids) { PolaroidSheet(run: run) }
+        .sheet(isPresented: $showingSnapshots) { SnapshotSheet(run: run) }
         .sheet(isPresented: $showingReel) { ReelSheet(run: run) }
         .alert(setAsideTitle, isPresented: Binding(get: { pendingSetAside != nil }, set: { if !$0 { pendingSetAside = nil } }), presenting: pendingSetAside) { plan in
             Button("Set aside \(plan.eligible.count) photos") {
@@ -164,7 +164,7 @@ struct TripRunView: View {
     /// Free things to make from the keepers, all on this iPhone.
     private var makeSomething: some View {
         HStack(spacing: 12) {
-            makeTile("Polaroids", "photo.on.rectangle.angled", "Prints to save or share") { showingPolaroids = true }
+            makeTile("Snapshots", "photo.on.rectangle.angled", "Prints to save or share") { showingSnapshots = true }
             makeTile("Highlight reel", "film", "A short video of the trip") { showingReel = true }
         }
         .disabled(run.keepers.isEmpty)

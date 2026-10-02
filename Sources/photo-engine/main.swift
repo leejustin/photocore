@@ -260,7 +260,7 @@ struct PhotoEngineCommand {
           photo-engine run <folder> [--profile everyday|groupEvent|trip|creative] [--cull gentle|balanced|highlights] [--target N | --keep-percent P] [--style natural|warm|vibrant|soft|blackAndWhite] [--intensity 0...1] [--size full|compact] [--base raw|camera] [--output folder]
           photo-engine calibrate <folder> [--sheet out.jpg]
           photo-engine eval <folder> [--profile everyday|groupEvent|trip|creative] [--cull gentle|balanced|highlights] [--target N | --keep-percent P] [--limit N] [--output folder]
-          photo-engine book <folder> [--output folder] [--tone warm|dry|minimal] [--theme book|polaroid] [--keep-percent P] [--note \"what this trip was\"] [--offline]
+          photo-engine book <folder> [--output folder] [--tone warm|dry|minimal] [--theme book|snapshot] [--keep-percent P] [--note \"what this trip was\"] [--offline]
           photo-engine compare-render <manifest.json> [--count 6] [--sheet out.jpg]
           photo-engine serve [--port 8787]
           photo-engine smoke-test

@@ -65,13 +65,14 @@ struct FinishCard: View {
                 TripContextPicker(trip: run.trip, note: $note, events: $events)
                 Picker("Style", selection: $theme) {
                     Text("Book").tag("book")
-                    Text("Polaroids").tag("polaroid")
+                    Text("Snapshots").tag("snapshot")
                 }
                 .pickerStyle(.segmented)
-                Button("Finish \(run.keepers.count) photos") { start(server) }
+                GroupInvite(finish: finish, server: server, tripTitle: run.trip.title) { invite(server) }
+                Button(finish.people.isEmpty ? "Finish \(run.keepers.count) photos" : "Finish with everyone\u{2019}s photos") { start(server) }
                 .buttonStyle(PrimaryButtonStyle())
-                .disabled(run.keepers.isEmpty)
-                Text("Only these keepers are uploaded. Test build: no charge.")
+                .disabled(run.keepers.isEmpty && finish.friendsPhotos == 0)
+                Text("Only your keepers are uploaded. Test build: no charge.")
                     .font(.footnote).foregroundStyle(Color.ink.opacity(0.55))
             } else {
                 Button("Connect a Photocore server") { showingSettings = true }
@@ -99,12 +100,30 @@ struct FinishCard: View {
                 Button { reading = edit } label: { Label("Edit words", systemImage: "pencil") }
                     .buttonStyle(.bordered)
             }
-            Text("Anyone with the link can see the book, leave notes and add their own photos.")
+            if let server, finish.remote?.invitePath != nil {
+                let new = finish.friendsPhotos - (finish.photosAtLastFinish ?? 0)
+                if new > 0 {
+                    Button("Update the book with ^[\(new) new photo](inflect: true)") { start(server) }
+                        .buttonStyle(PrimaryButtonStyle())
+                }
+                GroupInvite(finish: finish, server: server, tripTitle: run.trip.title) { invite(server) }
+                if finish.inviteOpen {
+                    Button("Stop taking photos") { Task { await finish.setInvite(open: false, server: server) } }
+                        .font(.footnote)
+                }
+            }
+            Text("Anyone with the book link can see it and leave notes. Only people with the invite link can add photos.")
                 .font(.footnote).foregroundStyle(Color.ink.opacity(0.55))
         case .failed(let message):
             Text(message).font(.subheadline).foregroundStyle(.red)
             Button("Try again") { if let server { start(server) } }
                 .buttonStyle(.bordered)
+        }
+    }
+
+    private func invite(_ server: FinishServer) {
+        Task {
+            await finish.invite(tripID: run.trip.id, title: run.trip.place, note: note, events: events, theme: theme, server: server)
         }
     }
 

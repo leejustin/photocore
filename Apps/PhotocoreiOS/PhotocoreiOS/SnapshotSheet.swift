@@ -3,7 +3,7 @@ import PhotoEngineCore
 import SwiftUI
 
 /// One instant print: a square photo in a white frame with a handwritten caption.
-struct PolaroidCard: View {
+struct SnapshotCard: View {
     let image: UIImage
     let caption: String
     var width: CGFloat = 300
@@ -30,9 +30,9 @@ struct PolaroidCard: View {
     }
 }
 
-/// Turns a trip's keepers into Polaroid prints that can be saved to Photos or
+/// Turns a trip's keepers into snapshot prints that can be saved to Photos or
 /// shared, using SwiftUI's ImageRenderer. No server, no upload.
-struct PolaroidSheet: View {
+struct SnapshotSheet: View {
     let run: TripRun
     @Environment(\.dismiss) private var dismiss
     @State private var images: [(id: PhotoID, image: UIImage)] = []
@@ -51,7 +51,7 @@ struct PolaroidSheet: View {
                 }
                 LazyVGrid(columns: columns, spacing: 26) {
                     ForEach(Array(images.enumerated()), id: \.element.id) { index, item in
-                        PolaroidCard(image: item.image, caption: caption, width: 160)
+                        SnapshotCard(image: item.image, caption: caption, width: 160)
                             .rotationEffect(.degrees([-2.2, 1.6, -0.8, 2.4][index % 4]))
                             .shadow(color: .black.opacity(0.18), radius: 10, y: 6)
                     }
@@ -59,7 +59,7 @@ struct PolaroidSheet: View {
                 .padding(22)
             }
             .background(Color(red: 0.94, green: 0.91, blue: 0.86))
-            .navigationTitle("Polaroids")
+            .navigationTitle("Snapshots")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) { Button("Close") { dismiss() } }
@@ -99,10 +99,10 @@ struct PolaroidSheet: View {
 
     /// A full-size print, about 1080 pixels wide, written to a temporary PNG.
     private func render(_ image: UIImage) -> URL? {
-        let renderer = ImageRenderer(content: PolaroidCard(image: image, caption: caption, width: 360))
+        let renderer = ImageRenderer(content: SnapshotCard(image: image, caption: caption, width: 360))
         renderer.scale = 3
         guard let output = renderer.uiImage, let png = output.pngData() else { return nil }
-        let url = FileManager.default.temporaryDirectory.appendingPathComponent("polaroid-\(UUID().uuidString).png")
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("snapshot-\(UUID().uuidString).png")
         return (try? png.write(to: url)) != nil ? url : nil
     }
 
@@ -126,12 +126,12 @@ struct PolaroidSheet: View {
         saving = true
         defer { saving = false }
         let urls = exported
-        let title = "Photocore · Polaroids · " + run.trip.title
+        let title = "Photocore · Snapshots · " + run.trip.title
         do {
             try await Self.saveImages(urls, albumTitle: title)
-            message = "Saved \(urls.count) Polaroids to the \u{201C}\(title)\u{201D} album."
+            message = "Saved \(urls.count) snapshots to the \u{201C}\(title)\u{201D} album."
         } catch {
-            message = "Couldn't save the Polaroids. \(error.localizedDescription)"
+            message = "Couldn't save the snapshots. \(error.localizedDescription)"
         }
     }
 }

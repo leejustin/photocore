@@ -168,9 +168,30 @@ struct ServerChecks {
         try expect(emptyNote.status == 400, "an empty note returned \(emptyNote.status)")
         let badHeart = try await send(base.appendingPathComponent("b/\(trip.slug)/guest/hearts"), method: "POST", json: ["photo": "nope"], headers: [:])
         try expect(badHeart.status == 400, "a heart on an unknown photo returned \(badHeart.status)")
+
+        // The invite link: join, add a photo, see it counted, and keep strangers out.
+        guard let invite = trip.invitePath else { throw CheckFailure("a new trip has no invite link") }
+        try expect(html.contains(invite), "the book page doesn't link to the invite page")
+        let invitePage = try await data(base.appendingPathComponent(invite))
+        try expect(invitePage.status == 200 && text(invitePage.body).contains("Add your photos"), "invite page returned \(invitePage.status)")
+        let badInvite = try await data(base.appendingPathComponent("j/notarealcode"))
+        try expect(badInvite.status == 404, "an unknown invite returned \(badInvite.status)")
+        let noName = try await send(base.appendingPathComponent(invite + "/join"), method: "POST", json: ["name": "  "], headers: [:])
+        try expect(noName.status == 400, "joining without a name returned \(noName.status)")
+        let joined = try await send(base.appendingPathComponent(invite + "/join"), method: "POST", json: ["name": "Sam"], headers: [:])
+        try expect(joined.status == 201, "join returned \(joined.status) \(text(joined.body))")
+        let sam = try decode(JoinedWire.self, from: joined.body)
         let guestBytes = try Data(contentsOf: source.appendingPathComponent(files.last!))
-        let guestUpload = try await raw(base.appendingPathComponent("b/\(trip.slug)/guest/photos/fromsam"), method: "PUT", token: nil, body: guestBytes)
-        try expect(guestUpload.status == 201, "guest upload returned \(guestUpload.status) \(text(guestUpload.body))")
+        let stranger = try await raw(base.appendingPathComponent(invite + "/photos/x"), method: "PUT", token: nil, body: guestBytes)
+        try expect(stranger.status == 401, "an upload without a contributor token returned \(stranger.status)")
+        let guestUpload = try await raw(base.appendingPathComponent(invite + "/photos/fromsam"), method: "PUT", token: nil, body: guestBytes, headers: ["X-Photocore-Contributor": sam.token])
+        try expect(guestUpload.status == 201, "contributor upload returned \(guestUpload.status) \(text(guestUpload.body))")
+        let mine = try decode(InviteStatusWire.self, from: try await data(base.appendingPathComponent(invite + "/status"), headers: ["X-Photocore-Contributor": sam.token]).body)
+        try expect(mine.me == "Sam" && mine.mine == 1 && mine.people == 1 && mine.open, "invite status for Sam was \(mine)")
+        let anonymous = try decode(InviteStatusWire.self, from: try await data(base.appendingPathComponent(invite + "/status")).body)
+        try expect(anonymous.me == nil && anonymous.mine == nil, "invite status leaked a person to an anonymous visitor")
+        let ownerView = try decode(TripStatusWire.self, from: try await data(base.appendingPathComponent("v2/trips/\(trip.id)"), token: token).body)
+        try expect(ownerView.contributors.map(\.name) == ["Sam"] && ownerView.contributors.first?.photos == 1, "owner sees contributors \(ownerView.contributors)")
         let activity = try await data(base.appendingPathComponent("b/\(trip.slug)/guest"))
         try expect(text(activity.body).contains("Best dinner"), "guest activity is missing the note: \(activity.status) \(text(activity.body).prefix(300))")
 
@@ -180,16 +201,59 @@ struct ServerChecks {
         let kept = text(try await data(base.appendingPathComponent("b/\(trip.slug)/")).body)
         try expect(kept.contains("Our &lt;b&gt;Lisbon&lt;/b&gt;"), "refinishing lost the owner's edit")
 
+        // Sam takes their photos back; then the owner closes the invite.
+        let removed = try await data(base.appendingPathComponent(invite + "/photos"), method: "DELETE", headers: ["X-Photocore-Contributor": sam.token])
+        try expect(removed.status == 200 && text(removed.body).contains("1"), "removing Sam's photos returned \(removed.status) \(text(removed.body))")
+        let otherRemove = try await data(base.appendingPathComponent(invite + "/photos"), method: "DELETE", headers: ["X-Photocore-Contributor": "nottherealtoken"])
+        try expect(otherRemove.status == 401, "removing photos with a wrong token returned \(otherRemove.status)")
+        let close = try await postJSON(base.appendingPathComponent("v2/trips/\(trip.id)/invite"), token: token, body: ["open": false])
+        try expect(close.status == 200, "closing the invite returned \(close.status)")
+        let lateJoin = try await send(base.appendingPathComponent(invite + "/join"), method: "POST", json: ["name": "Late"], headers: [:])
+        try expect(lateJoin.status == 403, "joining a closed invite returned \(lateJoin.status)")
+        let lateUpload = try await raw(base.appendingPathComponent(invite + "/photos/late"), method: "PUT", token: nil, body: guestBytes, headers: ["X-Photocore-Contributor": sam.token])
+        try expect(lateUpload.status == 403, "uploading to a closed invite returned \(lateUpload.status)")
+
+        // A group trip where only friends add photos: two people, the same
+        // photo twice, and a finish that keeps one copy with a credit.
+        let group = try decode(TripWire.self, from: try await postJSON(base.appendingPathComponent("v2/trips"), token: token, body: ["title": "Group trip", "ownerName": "Ana"]).body)
+        guard let groupInvite = group.invitePath else { throw CheckFailure("group trip has no invite") }
+        var people: [String: JoinedWire] = [:]
+        for name in ["Priya", "Leo", "Mo"] {
+            people[name] = try decode(JoinedWire.self, from: try await send(base.appendingPathComponent(groupInvite + "/join"), method: "POST", json: ["name": name], headers: [:]).body)
+        }
+        // Priya and Leo both send the same shot; Mo sends a different one.
+        let distinct = source.deletingLastPathComponent().appendingPathComponent("distinct.jpg")
+        try writeDistinctJPEG(distinct)
+        for (name, file) in [("Priya", source.appendingPathComponent(files[4])), ("Leo", source.appendingPathComponent(files[4])), ("Mo", distinct)] {
+            let bytes = try Data(contentsOf: file)
+            let up = try await raw(base.appendingPathComponent(groupInvite + "/photos/shot"), method: "PUT", token: nil, body: bytes, headers: ["X-Photocore-Contributor": people[name]!.token])
+            try expect(up.status == 201, "\(name)'s upload returned \(up.status) \(text(up.body))")
+        }
+        let restyle = try await postJSON(base.appendingPathComponent("v2/trips/\(group.id)/settings"), token: token, body: ["theme": "snapshot"])
+        try expect(restyle.status == 200, "changing the style returned \(restyle.status)")
+        let groupFinish = try await data(base.appendingPathComponent("v2/trips/\(group.id)/finish"), method: "POST", token: token)
+        try expect(groupFinish.status == 202, "group finish returned \(groupFinish.status) \(text(groupFinish.body))")
+        let groupJob = try await wait(base: base, token: token, id: try decode(JobWire.self, from: groupFinish.body).id)
+        try expect(groupJob.state == "succeeded", "group finish ended \(groupJob.state) \(groupJob.errorMessage ?? "")")
+        let groupPage = text(try await data(base.appendingPathComponent("b/\(group.slug)/")).body)
+        try expect(groupPage.contains("class=\"theme-snapshot\""), "the style change before the finish was ignored")
+        let groupResult = text(try await data(base.appendingPathComponent("v2/jobs/\(groupJob.id)"), token: token).body)
+        try expect(groupResult.contains("guestDuplicates\":1") || groupResult.contains("guestDuplicates\" : 1"), "the same photo from two people wasn't dropped once: \(groupResult.prefix(600))")
+        // Mo's photo is the cover; one of Priya's and Leo's identical shots is credited in the chapter.
+        let credited = groupPage.contains("class=\"credit\">Priya<") || groupPage.contains("class=\"credit\">Leo<")
+        try expect(credited && (groupPage.contains("Photos by Mo and Priya") || groupPage.contains("Photos by Leo and Mo")), "group book credits are wrong")
+
         let preview = try await raw(base.appendingPathComponent("v2/preview"), method: "POST", token: token, body: try Data(contentsOf: source.appendingPathComponent(files[0])))
         try expect(preview.status == 200 && preview.body.starts(with: [0xFF, 0xD8]), "preview returned \(preview.status)")
-        print("✓ trips: create, upload, finish, public book, owner edits, guest notes and photos, refinish keeps edits, preview")
+        print("✓ trips: create, upload, finish, public book, owner edits, guest notes, invite join and upload, refinish keeps edits, remove and close, group finish with repeats and credits, preview")
     }
 
-    private static func raw(_ url: URL, method: String, token: String?, body: Data) async throws -> HTTPResult {
+    private static func raw(_ url: URL, method: String, token: String?, body: Data, headers: [String: String] = [:]) async throws -> HTTPResult {
         var request = URLRequest(url: url)
         request.httpMethod = method
         request.httpBody = body
         request.setValue("application/octet-stream", forHTTPHeaderField: "Content-Type")
+        for (name, value) in headers { request.setValue(value, forHTTPHeaderField: name) }
         if let token { request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization") }
         let (data, response) = try await Self.session.data(for: request)
         return HTTPResult(status: (response as! HTTPURLResponse).statusCode, body: data, etag: nil)
@@ -242,6 +306,25 @@ struct ServerChecks {
         if !condition { throw CheckFailure(message) }
     }
 
+    /// A busy, colorful picture that looks nothing like the flat test frames.
+    private static func writeDistinctJPEG(_ url: URL) throws {
+        let width = 256
+        let context = CGContext(data: nil, width: width, height: width, bitsPerComponent: 8, bytesPerRow: width * 4, space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)!
+        for stripe in 0..<16 {
+            context.setFillColor(CGColor(red: stripe % 2 == 0 ? 0.95 : 0.1, green: CGFloat(stripe) / 16, blue: 0.2, alpha: 1))
+            context.fill(CGRect(x: stripe * 16, y: 0, width: 16, height: width))
+        }
+        for ring in 0..<5 {
+            context.setStrokeColor(CGColor(red: 0.1, green: 0.9, blue: 0.95, alpha: 1))
+            context.setLineWidth(6)
+            context.strokeEllipse(in: CGRect(x: 30 + ring * 18, y: 40 + ring * 10, width: 120, height: 120))
+        }
+        let image = context.makeImage()!
+        let destination = CGImageDestinationCreateWithURL(url as CFURL, UTType.jpeg.identifier as CFString, 1, nil)!
+        CGImageDestinationAddImage(destination, image, nil)
+        guard CGImageDestinationFinalize(destination) else { throw CheckFailure("could not write \(url.lastPathComponent)") }
+    }
+
     private static func writeJPEG(_ url: URL, red: CGFloat) throws {
         let width = 128
         let context = CGContext(data: nil, width: width, height: width, bitsPerComponent: 8, bytesPerRow: width * 4, space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)!
@@ -275,6 +358,25 @@ private struct TripWire: Decodable {
     var id: String
     var slug: String
     var ownerToken: String
+    var invitePath: String?
+}
+
+private struct TripStatusWire: Decodable {
+    struct Person: Decodable { var name: String; var photos: Int }
+    var inviteOpen: Bool
+    var contributors: [Person]
+}
+
+private struct JoinedWire: Decodable {
+    var name: String
+    var token: String
+}
+
+private struct InviteStatusWire: Decodable {
+    var open: Bool
+    var people: Int
+    var me: String?
+    var mine: Int?
 }
 
 private struct JobWire: Decodable {

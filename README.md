@@ -3,7 +3,8 @@
 **Finish the trip.** Photocore turns a camera roll into a finished trip: the best photos, edited, laid out as a shared online book with a short diary of where you went, plus an Instagram set ready to post.
 
 - **Free, on the iPhone.** Pick a trip and Photocore culls it on the device, asks about a few close calls, and saves the keepers as a Photos album. Nothing is uploaded or copied.
-- **Paid, hosted.** "Finish the trip" uploads only the keepers to a Photocore server, which edits them, writes the diary and captions, publishes the book, and builds the Instagram pack. Guests can leave notes and hearts and add their own photos, which are culled into the book.
+- **Paid, hosted.** "Finish the trip" uploads only the keepers to a Photocore server, which edits them, writes the diary and captions, publishes the book, and builds the Instagram pack.
+- **Group books.** The owner sends one invite link. Friends open it in any browser, give a first name and add their photos; no app or account. The finish culls each person's photos on their own, keeps the best shot of each moment across everyone, shares the space round-robin so one prolific friend can't take over, and credits who took each photo. Guests can also leave notes and hearts on the book.
 - **The Mac studio** stays the owner and pro tool, and the same engine runs the server.
 
 The engine is one set of Swift packages that runs on the iPhone, the Mac app, the CLI and the server.
@@ -14,10 +15,10 @@ Built and tested on branch `feat/consumer-trip-book` (see [the build plan](./out
 
 | Part | State |
 |---|---|
-| Engine on iOS and macOS | Culls on both; 40 Swift tests pass on Mac and the iPhone simulator |
+| Engine on iOS and macOS | Culls on both; 57 Swift tests pass on Mac and the iPhone simulator |
 | iPhone app (`Apps/PhotocoreiOS`) | Trips found from capture dates, streamed cull, swipe review, Photos album, set aside and restore, finish card |
-| Trip book | Chapters by local day and place, diary and captions, owner edits, guest notes and hearts, Instagram pack |
-| Paid finish server | Trip upload, finish job, preview, public book pages, guest uploads |
+| Trip book | Book and Snapshots styles, chapters by local day and place, diary and captions, photo credits, owner edits, guest notes and hearts, Instagram pack |
+| Paid finish server | Trip upload, finish job, preview, public book pages, invite links and group curation |
 | Not built yet | Payments (StoreKit), accounts, publishing books to object storage, Android, a live Gemini or DeepSeek run |
 
 The original specifications are still useful background:
@@ -62,13 +63,18 @@ Local time in the book follows a GPS place's time zone first, then the camera's 
 
 | Route | Auth | Purpose |
 |---|---|---|
-| `POST /v2/trips` | Server token | Start a finish; returns the owner token once |
+| `POST /v2/trips` | Server token | Start a trip; returns the owner token once and the invite path |
+| `POST /v2/trips/{id}/settings` | Server token | Change title, note, style or owner name before a finish |
+| `POST /v2/trips/{id}/invite` | Server token | Open or close the invite link |
 | `PUT /v2/trips/{id}/photos/{name}` | Server token | Upload a keeper (JPEG or HEIC, 60 MB, 400 per trip) |
 | `POST /v2/trips/{id}/finish` | Server token | Queue the finish job |
 | `POST /v2/preview` | Server token | Render one photo with the paid edit, for the upsell |
 | `GET /b/{slug}/` | Public link | The book page, photos and Instagram files |
 | `POST /b/{slug}/edits` | Owner token | Edit the title, intro, headings, diary or a caption |
-| `/b/{slug}/guest/...` | Public link | Notes, hearts and guest photo uploads, with count and size limits |
+| `/b/{slug}/guest/...` | Public link | Notes and hearts, with count and size limits |
+| `GET /j/{code}` | Invite link | The page where friends join and add photos |
+| `POST /j/{code}/join` | Invite link | Join with a first name; returns that person's token once (50 people) |
+| `PUT /j/{code}/photos/{name}`, `DELETE /j/{code}/photos` | Person's token | Add a photo (150 per person, 1,000 per trip) or remove all of yours |
 
 Book pages are public to anyone with the unguessable link, so only expose the server where that is intended. Today that means the tailnet setup below. Publishing books to object storage behind a CDN is the planned production path.
 

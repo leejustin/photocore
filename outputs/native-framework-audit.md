@@ -14,7 +14,7 @@ Where Photocore uses Apple's frameworks, where it still builds its own, and what
 | Nearby landmarks | MapKit |
 | Calendar suggestions | EventKit |
 | Reading the book in the app | SafariServices |
-| Polaroid cards | SwiftUI ImageRenderer |
+| Snapshot cards | SwiftUI ImageRenderer |
 | Highlight reel encode and playback | AVFoundation, AVKit |
 | Sharing | ShareLink |
 
