@@ -70,8 +70,20 @@ final class Store {
         return result.jwsRepresentation
     }
 
+    /// When this phone bought passes, kept so Yearly is offered only to people
+    /// who keep a few trips a year (two passes in twelve months).
+    private(set) var passPurchases: [Date] = (UserDefaults.standard.array(forKey: "BoundPassPurchases") as? [Date]) ?? []
+
+    var offersYearly: Bool { plus == nil && PlanPolicy.offersYearly(passPurchases: passPurchases) }
+
+    private func notePass() {
+        passPurchases = (passPurchases + [Date()]).filter { Date().timeIntervalSince($0) < 400 * 24 * 3600 }
+        UserDefaults.standard.set(passPurchases, forKey: "BoundPassPurchases")
+    }
+
     /// Called once the server has put a pass on a book.
     func spent(jws: String) async {
+        notePass()
         for await result in Transaction.unfinished where result.jwsRepresentation == jws {
             if case .verified(let transaction) = result { await transaction.finish() }
         }

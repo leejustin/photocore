@@ -11,6 +11,7 @@ struct GroupInvite: View {
     /// Opens the plans, with the reason.
     let onUpgrade: (String) -> Void
     @State private var ownerName = OwnerName.saved
+    @State private var ownerEmail = OwnerEmail.saved
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
@@ -28,12 +29,16 @@ struct GroupInvite: View {
                         .font(.footnote).foregroundStyle(Color.ink.opacity(0.55))
                 }
             } else {
-                Text("Send them a link to add their photos. Photocore keeps the best shot of each moment and credits who took it.")
+                Text("Send them a link to add their photos. Bound keeps the best shot of each moment and credits who took it. On iPhone, it picks their best on their phone first.")
                     .font(.subheadline).foregroundStyle(Color.ink.opacity(0.7))
                 TextField("Your first name, for photo credits", text: $ownerName)
                     .textContentType(.givenName)
                     .textFieldStyle(.roundedBorder)
                     .onChange(of: ownerName) { OwnerName.saved = ownerName }
+                TextField("Your email, for the link and reminders (optional)", text: $ownerEmail)
+                    .textContentType(.emailAddress).keyboardType(.emailAddress).textInputAutocapitalization(.never)
+                    .textFieldStyle(.roundedBorder)
+                    .onChange(of: ownerEmail) { OwnerEmail.saved = ownerEmail }
                 Button {
                     onInvite()
                 } label: {
@@ -67,9 +72,9 @@ struct GroupInvite: View {
                 Text(joined >= room ? "The book is full: \(room) of \(room) friends." : "Room for one more friend.")
                     .font(.footnote).foregroundStyle(Color.ink.opacity(0.7))
                 Spacer()
-                if finish.plan == .free || finish.plan == .plus || finish.plan == .tripPass {
+                if finish.plan != .eventPass {
                     Button("More room") {
-                        onUpgrade(finish.plan == .free ? "The free book takes \(room) friends. Plus and the Trip Pass take 25; the Event Pass takes 100." : "The Event Pass takes up to 100 guests.")
+                        onUpgrade(finish.plan == .free ? "A free book takes \(room) friends. Keeping it makes room for 25; the Event Pass takes 100." : "The Event Pass takes up to 100 friends.")
                     }
                     .font(.footnote.weight(.semibold))
                 }

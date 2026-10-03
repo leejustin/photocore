@@ -5,7 +5,7 @@ import XCTest
 /// accepted it: the plans sheet closes and editing unlocks.
 ///
 /// Needs a local server that accepts Xcode test purchases, and a simulator
-/// whose newest trip already has a free book:
+/// whose newest trip already has a finished free book:
 ///
 ///     PHOTO_ENGINE_TOKEN=sim-test-token PHOTO_ENGINE_PORT=8799 PHOTOCORE_STOREKIT_XCODE=1 photocore-server
 final class PurchaseTests: XCTestCase {
@@ -32,7 +32,7 @@ final class PurchaseTests: XCTestCase {
         for _ in 0..<8 where !edit.isHittable { app.swipeUp(velocity: .slow) }
         edit.tap()
 
-        let sheet = app.navigationBars["Make more books"]
+        let sheet = app.navigationBars["Keep this book"]
         XCTAssertTrue(sheet.waitForExistence(timeout: 10), "editing a free book didn't offer the plans")
         let buy = app.buttons.matching(NSPredicate(format: "label == '$4.99'")).firstMatch
         XCTAssertTrue(buy.waitForExistence(timeout: 30), "the Trip Pass didn't load from the StoreKit test store")

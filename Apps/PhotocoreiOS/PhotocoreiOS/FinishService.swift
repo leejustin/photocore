@@ -3,8 +3,9 @@ import Observation
 import PhotoEngineWorkflow
 import Photos
 import UIKit
+import UserNotifications
 
-/// Where the paid finish runs. In a test build this is a Photocore server the
+/// Where books are made. In a test build this is a Photocore server the
 /// owner runs (for example on a Mac mini over Tailscale). Launch arguments
 /// `-PhotocoreServerURL` and `-PhotocoreServerToken` set it for the simulator.
 struct FinishServer: Equatable {
@@ -58,6 +59,31 @@ enum RemoteTripStore {
     }
 }
 
+/// The owner's email for the book link and reminders before a free book goes
+/// offline, remembered once. Optional.
+enum OwnerEmail {
+    static var saved: String {
+        get { UserDefaults.standard.string(forKey: "BoundOwnerEmail") ?? "" }
+        set { UserDefaults.standard.set(newValue.trimmingCharacters(in: .whitespaces), forKey: "BoundOwnerEmail") }
+    }
+}
+
+/// This iPhone's APNs token, for "Day 2 is in", once notifications are allowed.
+enum PushToken {
+    static var hex: String? { UserDefaults.standard.string(forKey: "BoundPushToken") }
+
+    static func save(_ token: Data) {
+        UserDefaults.standard.set(token.map { String(format: "%02x", $0) }.joined(), forKey: "BoundPushToken")
+    }
+
+    /// Asks once, when the owner invites friends; then registers with APNs.
+    @MainActor
+    static func request() async {
+        guard (try? await UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound])) == true else { return }
+        UIApplication.shared.registerForRemoteNotifications()
+    }
+}
+
 /// The owner's first name for photo credits on group books, remembered once.
 enum OwnerName {
     static var saved: String {
@@ -99,9 +125,15 @@ final class TripFinish {
     private(set) var photosAtLastFinish: Int?
     private(set) var plan: Plan = .free
     private(set) var limits: PlanLimits = Plan.free.limits
-    /// Whether this trip can still be this phone's free book.
-    private(set) var freeBookAvailable = true
     private(set) var printing = false
+    /// When a free book goes offline; nil once it's kept.
+    private(set) var hostedUntil: Date?
+    /// Friends' photos added since the book was last made, from the server.
+    private(set) var newSinceFinish = 0
+    /// Whether the book is made again each night while friends add photos.
+    private(set) var live = true
+    private(set) var lastNightly: Date?
+    private var sentDevice: String?
 
     var friendsPhotos: Int { people.reduce(0) { $0 + $1.photos } }
 
@@ -145,9 +177,33 @@ final class TripFinish {
     }
 
     private func settings(title: String?, note: String, events: [String], theme: String) -> [String: Any] {
-        var body: [String: Any] = ["calendarEvents": events, "theme": theme, "note": note.trimmingCharacters(in: .whitespaces), "ownerName": OwnerName.saved]
+        var body: [String: Any] = [
+            "calendarEvents": events, "theme": theme, "note": note.trimmingCharacters(in: .whitespaces),
+            "ownerName": OwnerName.saved, "ownerEmail": OwnerEmail.saved, "timeZone": TimeZone.current.identifier
+        ]
         if let title { body["title"] = title }
         return body
+    }
+
+    /// Turns the nightly refinish on or off.
+    func setLive(_ on: Bool, server: FinishServer) async {
+        guard let remote else { return }
+        live = on
+        let _: [String: Bool]? = try? await call(server, "v2/trips/\(remote.id)/settings", method: "POST", json: ["live": on])
+    }
+
+    /// Saves the owner's email for the book link and reminders.
+    func setEmail(_ email: String, server: FinishServer) async {
+        OwnerEmail.saved = email
+        guard let remote else { return }
+        let _: [String: Bool]? = try? await call(server, "v2/trips/\(remote.id)/settings", method: "POST", json: ["ownerEmail": email])
+    }
+
+    /// Hands this iPhone's push token to the server, once per trip.
+    private func sendDevice(server: FinishServer) async {
+        guard let remote, let token = PushToken.hex, sentDevice != token else { return }
+        let sent: [String: Bool]? = try? await call(server, "v2/trips/\(remote.id)/device", method: "POST", json: ["token": token])
+        if sent != nil { sentDevice = token }
     }
 
     /// Hands a signed App Store transaction to the server for this book.
@@ -177,7 +233,7 @@ final class TripFinish {
         request.setValue("Bearer \(server.token)", forHTTPHeaderField: "Authorization")
         guard let (data, response) = try? await URLSession.shared.data(for: request),
               (response as? HTTPURLResponse)?.statusCode == 200 else { return nil }
-        let url = FileManager.default.temporaryDirectory.appendingPathComponent("Photocore book.pdf")
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("Bound book.pdf")
         try? data.write(to: url, options: .atomic)
         return url
     }
@@ -194,6 +250,8 @@ final class TripFinish {
             body["installID"] = InstallIdentity.id.uuidString
             _ = try await ensureRemote(tripID: tripID, body: body, server: server)
             await refreshPeople(server: server)
+            // "Day 2 is in" reaches this iPhone when friends add more.
+            await PushToken.request()
         } catch {
             inviteError = (error as? FinishError)?.message ?? error.localizedDescription
         }
@@ -215,7 +273,11 @@ final class TripFinish {
         inviteOpen = status.inviteOpen
         if let plan = status.plan { self.plan = plan }
         if let limits = status.limits { self.limits = limits }
-        freeBookAvailable = status.freeBookAvailable ?? true
+        hostedUntil = status.hostedUntil
+        newSinceFinish = status.newSinceFinish ?? 0
+        live = status.live ?? true
+        lastNightly = status.lastNightly
+        await sendDevice(server: server)
     }
 
     func setInvite(open: Bool, server: FinishServer) async {
@@ -235,12 +297,8 @@ final class TripFinish {
                 _ = await applyPlan(jws: plus, tripID: tripID, title: title, server: server)
             }
             // Ask before uploading anything the plan won't cover.
-            if plan == .free && !freeBookAvailable {
-                stage = .needsPlan("Your free book is already made. Plus or a Trip Pass covers this one.")
-                return
-            }
             if let style = BookTheme(name: theme), !limits.allows(style) {
-                stage = .needsPlan("\(style.displayName) is part of Plus and the passes.")
+                stage = .needsPlan("\(style.displayName) comes with keeping the book.")
                 return
             }
             let _: [String: Bool] = try await call(server, "v2/trips/\(trip.id)/settings", method: "POST", json: body)
@@ -302,7 +360,10 @@ final class TripFinish {
         var contributors: [Person]
         var plan: Plan?
         var limits: PlanLimits?
-        var freeBookAvailable: Bool?
+        var hostedUntil: Date?
+        var newSinceFinish: Int?
+        var live: Bool?
+        var lastNightly: Date?
     }
     private struct Job: Decodable {
         struct Failure: Decodable { var message: String }
@@ -335,8 +396,8 @@ final class TripFinish {
         let status = (response as? HTTPURLResponse)?.statusCode ?? 0
         guard (200..<300).contains(status) else {
             let reason = (try? JSONDecoder().decode(ServerError.self, from: data))?.error.message
-            if status == 402 { throw FinishError.payment(reason ?? "This needs Plus or a pass.") }
-            throw FinishError.server(reason ?? "The Photocore server answered \(status).")
+            if status == 402 { throw FinishError.payment(reason ?? "This comes with keeping the book.") }
+            throw FinishError.server(reason ?? "The server answered \(status).")
         }
         let decoder = JSONDecoder()
         decoder.dateDecodingStrategy = .iso8601

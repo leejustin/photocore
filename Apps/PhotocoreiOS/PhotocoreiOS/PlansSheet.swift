@@ -25,20 +25,22 @@ struct PlansSheet: View {
                     if !store.unspentPasses.isEmpty {
                         unspent
                     }
-                    section("Plus", "Every trip, all year") {
-                        features(["Up to 12 books a year", "25 friends and 500 of their photos per book", "Snapshots style, the Instagram set and editing", "No Photocore footer"])
-                        ProductView(id: PlanProduct.plusYearly.rawValue) { icon("sparkles") }
-                    }
-                    section("Just this trip", "Pay once, keep it for good") {
+                    section("Keep it for good", "Free books stay up for 90 days. A Trip Pass keeps this one, for everyone in it.") {
+                        features(["Online for good", "Everyone\u{2019}s full-size photos to download", "Snapshots style, the Instagram set and editing", "Room for 25 friends, and no footer"])
                         ProductView(id: PlanProduct.tripPass.rawValue) { icon("book.closed") }
+                    }
+                    section("A wedding or big party", "One book for up to 100 friends, kept from the start.") {
                         ProductView(id: PlanProduct.eventPass.rawValue) { icon("person.3") }
-                        Text("The Event Pass is for weddings and big parties: up to 100 guests.")
-                            .font(.footnote).foregroundStyle(Color.ink.opacity(0.6))
+                    }
+                    if store.offersYearly {
+                        section("Bound Yearly", "You\u{2019}ve kept a few trips this year. Yearly keeps every book you make, up to 12 a year.") {
+                            ProductView(id: PlanProduct.plusYearly.rawValue) { icon("calendar") }
+                        }
                     }
                     if let message {
                         Text(message).font(.footnote).foregroundStyle(.red)
                     }
-                    Text("Friends never pay to see a book or add their photos. Your library stays on your phone; only the keepers you finish are uploaded.")
+                    Text("Friends never pay to see a book or add their photos, and anyone in the book can keep it from its page. Your library stays on your phone; only the picks you finish are uploaded.")
                         .font(.footnote).foregroundStyle(Color.ink.opacity(0.55))
                     HStack {
                         Button("Restore Purchases") { Task { await store.restore() } }
@@ -50,7 +52,7 @@ struct PlansSheet: View {
                 .padding(20)
             }
             .background(Color.paper)
-            .navigationTitle("Make more books")
+            .navigationTitle("Keep this book")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar { ToolbarItem(placement: .cancellationAction) { Button("Not now") { dismiss() } } }
             .overlay { if applying { ProgressView("Adding it to your book").padding().background(.regularMaterial, in: .rect(cornerRadius: 12)) } }

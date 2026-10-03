@@ -1,8 +1,16 @@
 import Photos
 import SwiftUI
 
+/// Receives this iPhone's push token, for "Day 2 is in".
+final class AppDelegate: NSObject, UIApplicationDelegate {
+    func application(_ application: UIApplication, didRegisterForRemoteNotificationsWithDeviceToken deviceToken: Data) {
+        PushToken.save(deviceToken)
+    }
+}
+
 @main
 struct PhotocoreApp: App {
+    @UIApplicationDelegateAdaptor(AppDelegate.self) private var delegate
     @State private var queue = TripQueue()
 
     init() {

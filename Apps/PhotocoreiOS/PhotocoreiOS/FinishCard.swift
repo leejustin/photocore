@@ -26,7 +26,7 @@ struct FinishCard: View {
         VStack(alignment: .leading, spacing: 14) {
             Text("Finish the trip")
                 .font(.display(26)).foregroundStyle(Color.ink)
-            Text("Every keeper edited to look its best, a shared book with a short diary of where you went, and an Instagram set ready to post.")
+            Text("Your picks edited to look their best, one book with friends\u{2019} photos and a short diary of where you went, and an Instagram set ready to post.")
                 .font(.subheadline).foregroundStyle(Color.ink.opacity(0.7))
             preview
             content
@@ -39,14 +39,14 @@ struct FinishCard: View {
         .sheet(item: $reading) { SafariView(url: $0).ignoresSafeArea() }
         .sheet(item: $plans) { prompt in
             PlansSheet(reason: prompt.reason) { jws in
-                guard let server else { return "Connect a Photocore server first." }
+                guard let server else { return "Connect a server first." }
                 return await finish.applyPlan(jws: jws, tripID: run.trip.id, title: run.trip.place, server: server)
             }
         }
         .onChange(of: theme) { _, picked in
             if let style = BookTheme(name: picked), !finish.limits.allows(style) {
                 theme = "book"
-                plans = PlansPrompt(reason: "\(style.displayName) is part of Plus and the passes.")
+                plans = PlansPrompt(reason: "\(style.displayName) comes with keeping the book.")
             }
         }
         .onAppear { finish.restore(tripID: run.trip.id) }
@@ -94,15 +94,15 @@ struct FinishCard: View {
                 Button(finish.people.isEmpty ? "Finish \(run.keepers.count) photos" : "Finish with everyone\u{2019}s photos") { start(server) }
                 .buttonStyle(PrimaryButtonStyle())
                 .disabled(run.keepers.isEmpty && finish.friendsPhotos == 0)
-                Text("Only your keepers are uploaded.")
+                Text("Only your picks are uploaded.")
                     .font(.footnote).foregroundStyle(Color.ink.opacity(0.55))
             } else {
-                Button("Connect a Photocore server") { showingSettings = true }
+                Button("Connect a Bound server") { showingSettings = true }
                     .buttonStyle(PrimaryButtonStyle())
             }
         case .uploading(let done, let total):
             ProgressView(value: Double(done), total: Double(max(total, 1))) {
-                Text("Uploading \(done) of \(total) keepers").font(.subheadline)
+                Text("Uploading \(done) of \(total) picks").font(.subheadline)
             }
         case .finishing(let message):
             HStack(spacing: 10) {
@@ -120,19 +120,26 @@ struct FinishCard: View {
                 }
                 .buttonStyle(.bordered)
                 Button {
-                    if finish.limits.editing { reading = edit } else { plans = PlansPrompt(reason: "Editing the words is part of Plus and the passes.") }
+                    if finish.limits.editing { reading = edit } else { plans = PlansPrompt(reason: "Editing the words comes with keeping the book.") }
                 } label: { Label("Edit words", systemImage: finish.limits.editing ? "pencil" : "lock") }
                     .buttonStyle(.bordered)
             }
             printRow
             if let server, finish.remote?.invitePath != nil {
-                let new = finish.friendsPhotos - (finish.photosAtLastFinish ?? 0)
+                let new = finish.newSinceFinish
                 if new > 0 {
                     Button("Update the book with ^[\(new) new photo](inflect: true)") { start(server) }
                         .buttonStyle(PrimaryButtonStyle())
                 }
                 GroupInvite(finish: finish, server: server, tripTitle: run.trip.title, onInvite: { invite(server) }, onUpgrade: { plans = PlansPrompt(reason: $0) })
                 if finish.inviteOpen {
+                    Toggle(isOn: Binding(get: { finish.live }, set: { on in Task { await finish.setLive(on, server: server) } })) {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("Update the book each night").font(.subheadline)
+                            Text(finish.lastNightly.map { "Last updated \($0.formatted(.relative(presentation: .named)))." } ?? "While friends add photos, around 3 a.m.")
+                                .font(.footnote).foregroundStyle(Color.ink.opacity(0.55))
+                        }
+                    }
                     Button("Stop taking photos") { Task { await finish.setInvite(open: false, server: server) } }
                         .font(.footnote)
                 }
@@ -155,12 +162,12 @@ struct FinishCard: View {
     /// What this book's plan covers, and a way to more.
     @ViewBuilder private var planLine: some View {
         HStack(alignment: .firstTextBaseline) {
-            Image(systemName: finish.plan == .free ? "gift" : "checkmark.seal")
+            Image(systemName: finish.plan == .free ? "clock" : "checkmark.seal")
                 .foregroundStyle(Color.accentColor)
             Text(planText).font(.footnote).foregroundStyle(Color.ink.opacity(0.7))
             Spacer()
             if finish.plan == .free {
-                Button("Plans") { plans = PlansPrompt(reason: nil) }.font(.footnote.weight(.semibold))
+                Button("Keep it") { plans = PlansPrompt(reason: nil) }.font(.footnote.weight(.semibold))
             }
         }
     }
@@ -168,12 +175,13 @@ struct FinishCard: View {
     private var planText: String {
         switch finish.plan {
         case .free:
-            return finish.freeBookAvailable || Store.shared.plus != nil
-                ? "Your first book is free, with up to \(finish.limits.friends) friends."
-                : "Your free book is made. Plus or a Trip Pass covers this one."
-        case .plus: return "Plus: up to \(finish.limits.friends) friends, both styles, no footer."
-        case .tripPass: return "Trip Pass: this book is yours for good."
-        case .eventPass: return "Event Pass: up to \(finish.limits.friends) guests, kept for good."
+            if let until = finish.hostedUntil {
+                return "Free until \(until.formatted(.dateTime.month(.wide).day())), with up to \(finish.limits.friends) friends. Keep it for good with a Trip Pass."
+            }
+            return "Free for 90 days, with up to \(finish.limits.friends) friends. Keep it for good with a Trip Pass."
+        case .plus: return "Yearly: kept while you subscribe, and a year after."
+        case .tripPass: return "Kept for good, with everyone\u{2019}s full-size photos to download."
+        case .eventPass: return "Event Pass: up to \(finish.limits.friends) friends, kept for good."
         }
     }
 
@@ -220,10 +228,10 @@ struct ServerSettingsView: View {
                         .textInputAutocapitalization(.never).keyboardType(.URL).autocorrectionDisabled()
                     SecureField("Server token", text: $token)
                 } footer: {
-                    Text("The paid finish runs on a Photocore server. Only the keepers you choose are uploaded to it.")
+                    Text("Books are made on a Bound server. Only the picks you finish are uploaded to it.")
                 }
             }
-            .navigationTitle("Photocore server")
+            .navigationTitle("Bound server")
             .toolbar {
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Save") {
