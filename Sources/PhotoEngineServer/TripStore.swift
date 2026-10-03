@@ -227,7 +227,7 @@ actor TripStore {
             let order = PrintOrder(
                 id: Self.randomToken(length: 12), tripID: record.id, slug: record.slug, product: product,
                 sessionID: completion.sessionID, email: completion.email, shipping: shipping,
-                status: .paid, createdAt: Date(), updatedAt: Date(), cents: completion.cents
+                status: .paid, createdAt: Date(), updatedAt: Date(), cents: completion.cents, phone: completion.phone
             )
             try saveOrder(order)
         }

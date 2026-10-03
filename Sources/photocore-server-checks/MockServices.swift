@@ -43,6 +43,11 @@ enum MockServices {
             let n = await log.record("/print-jobs", body, ["authorization": request.headers[.authorization] ?? ""])
             return try json(["id": 9000 + n, "status": ["name": "CREATED"]])
         }
+        router.get("print-jobs/{id}") { request, context in
+            let id = try context.parameters.require("id")
+            _ = await log.record("/print-jobs/status", Data(id.utf8), ["authorization": request.headers[.authorization] ?? ""])
+            return try json(["id": Int(id) ?? 0, "status": ["name": "SHIPPED"], "line_items": [["status": ["messages": ["tracking_urls": ["https://track.example/\(id)"]]]]]])
+        }
         return Application(
             router: router,
             configuration: .init(address: .hostname("127.0.0.1", port: 0), serverName: "Mock"),

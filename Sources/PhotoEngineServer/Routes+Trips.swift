@@ -203,8 +203,9 @@ func registerTripRoutes(
     lifecycle: BookLifecycle,
     address: PublicAddress,
     payments: (any PaymentProvider)?,
-    printsEnabled: Bool
+    printing: PrintFulfillment?
 ) {
+    let printsEnabled = printing != nil
     let siteURL = env.configuration.siteURL
     let features = PageFeatures(keep: payments != nil, prints: payments != nil && printsEnabled)
     @Sendable func pageOptions(_ record: TripRecord) -> BookRenderer.Options {
@@ -623,11 +624,25 @@ func registerTripRoutes(
         }
         try await complete(CheckoutCompletion(
             sessionID: id, kind: pending.kind, tripID: pending.tripID, product: pending.product,
-            email: form["email"].flatMap { $0.isEmpty ? nil : $0 }, name: form["name"], shipping: shipping, cents: pending.cents
+            email: form["email"].flatMap { $0.isEmpty ? nil : $0 }, name: form["name"], shipping: shipping, cents: pending.cents,
+            phone: form["phone"].flatMap { $0.isEmpty ? nil : $0 }
         ))
         var headers = HTTPFields()
         headers[.location] = pending.successURL
         return Response(status: .seeOther, headers: headers)
+    }
+
+    /// The interior and cover PDFs, for the printer to fetch by their secret link.
+    router.get("p/{token}/{name}") { _, context in
+        guard let printing else { throw APIError.notFound("Not found.") }
+        let token = try context.parameters.require("token")
+        let name = try context.parameters.require("name")
+        guard let url = await printing.file(token: token, name: name) else { throw APIError.notFound("Not found.") }
+        var headers = HTTPFields()
+        headers[.contentType] = "application/pdf"
+        headers[.cacheControl] = "private, no-store"
+        headers[HTTPField.Name("X-Content-Type-Options")!] = "nosniff"
+        return APIJSON.bytes(try Data(contentsOf: url), headers: headers)
     }
 
     // MARK: Emails (one-click unsubscribe, no account)

@@ -51,8 +51,41 @@ extension ServerChecks {
         try expect(replay.status == 200 && mails(outbox).count == before + 1, "a repeated webhook applied twice")
         let again = try await send(base.appendingPathComponent("b/\(trip.slug)/keep"), method: "POST", json: [:], headers: [:])
         try expect(again.status == 409, "keeping a kept book returned \(again.status)")
-        let noPrints = try await send(base.appendingPathComponent("b/\(trip.slug)/print"), method: "POST", json: ["product": "softcover"], headers: [:])
-        try expect(noPrints.status == 503, "a print order without a printer returned \(noPrints.status)")
+
+        // A printed copy: Stripe asks for an address and phone; the paid order
+        // goes to the printer with files it can fetch, then ships.
+        let printSession = try decode(CheckoutWire.self, from: try await send(base.appendingPathComponent("b/\(trip.slug)/print"), method: "POST", json: ["product": "softcover"], headers: [:]).body)
+        guard let printForm = await mock.bodies("/v1/checkout/sessions").last.map({ String(decoding: $0, as: UTF8.self) }) else { throw CheckFailure("no print checkout") }
+        for part in ["unit_amount%5D=2900", "metadata%5Bkind%5D=print", "metadata%5Bproduct%5D=softcover", "shipping_address_collection%5Ballowed_countries%5D%5B0%5D=US", "phone_number_collection%5Benabled%5D=true"] {
+            try expect(printForm.contains(part), "the print checkout is missing \(part)")
+        }
+        let shipping: [String: Any] = ["name": "Sam Rivera", "address": ["line1": "500 Oak Ave", "line2": "Apt 4", "city": "Austin", "state": "TX", "postal_code": "78701", "country": "US"]]
+        let printEvent = checkoutEvent(session: printSession.id, trip: trip.id, kind: "print", email: "sam@example.com", name: "Sam Rivera", shipping: shipping, product: "softcover", cents: 2_900)
+        let printPaid = try await raw(base.appendingPathComponent("stripe/webhook"), method: "POST", token: nil, body: printEvent, headers: ["Stripe-Signature": sign(printEvent, secret: webhookSecret)])
+        try expect(printPaid.status == 200, "the print webhook returned \(printPaid.status) \(text(printPaid.body))")
+        let sentOrders = try decode([OrderWire].self, from: try await data(base.appendingPathComponent("v2/admin/orders"), token: token).body)
+        try expect(sentOrders.count == 1 && sentOrders[0].status == "submitted" && sentOrders[0].partnerJobID != nil, "the print order is \(sentOrders)")
+        guard let job = await mock.bodies("/print-jobs").last, let jobObject = try JSONSerialization.jsonObject(with: job) as? [String: Any],
+              let item = (jobObject["line_items"] as? [[String: Any]])?.first, let printable = item["printable_normalization"] as? [String: Any],
+              let interior = (printable["interior"] as? [String: Any])?["source_url"] as? String, let coverURL = (printable["cover"] as? [String: Any])?["source_url"] as? String,
+              let address = jobObject["shipping_address"] as? [String: Any]
+        else { throw CheckFailure("the print job was malformed") }
+        try expect(printable["pod_package_id"] as? String == "0850X0850FCPREPB080CW444GXX" && address["postcode"] as? String == "78701" && address["street2"] as? String == "Apt 4" && address["state_code"] as? String == "TX", "the print job was \(jobObject)")
+        try expect(await mock.requests.first { $0.path == "/token" }?.headers["authorization"] == "Basic " + Data("lulu-key:lulu-secret".utf8).base64EncodedString(), "Lulu sign-in used the wrong credentials")
+        let dimensions = try JSONSerialization.jsonObject(with: await mock.bodies("/cover-dimensions").last ?? Data()) as? [String: Any]
+        let pageCount = dimensions?["interior_page_count"] as? Int ?? 0
+        try expect(pageCount >= 32 && pageCount % 2 == 0, "the interior had \(pageCount) pages")
+        for link in [interior, coverURL] {
+            guard let path = URL(string: link)?.path else { throw CheckFailure("bad file link \(link)") }
+            let file = try await data(base.appendingPathComponent(path))
+            try expect(file.status == 200 && file.body.starts(with: Array("%PDF".utf8)), "the printer's file \(path) returned \(file.status)")
+        }
+        let guessed = try await data(base.appendingPathComponent("p/notarealtokennotarealtoken12/interior.pdf"))
+        try expect(guessed.status == 404, "a guessed print file returned \(guessed.status)")
+        let tick = try await data(base.appendingPathComponent("v2/admin/lifecycle"), method: "POST", token: token)
+        try expect(text(tick.body).contains("\"shipped\":1"), "the shipped order wasn't noticed: \(text(tick.body))")
+        let shippedMail = mails(outbox).last { $0.kind == "shipped" }
+        try expect(shippedMail?.to == "sam@example.com" && shippedMail?.text.contains("https://track.example/") == true, "the shipped email was \(String(describing: shippedMail))")
 
         // A book that went offline comes back when someone keeps it.
         let lapsed = try await finishedFreeTrip(base: base, token: token, title: "Lapsed", owner: "Jo", email: nil, photo: source.appendingPathComponent(files[0]))
@@ -90,8 +123,8 @@ extension ServerChecks {
         let printed = try await form(devBase.appendingPathComponent(printPath), ["name": "Leo Park", "email": "leo@example.com", "line1": "1 Main St", "city": "Portland", "state": "OR", "postal": "97201", "country": "us"])
         try expect(printed.status == 303, "paying for a print returned \(printed.status)")
         let orders = try decode([OrderWire].self, from: try await data(devBase.appendingPathComponent("v2/admin/orders"), token: token).body)
-        try expect(orders.count == 1 && orders[0].product == "hardcover" && orders[0].shipping.country == "US" && orders[0].shipping.postalCode == "97201" && orders[0].cents == 4_900, "the print order was \(orders)")
-        print("✓ payments: keep from the book page through Stripe, signed and fresh webhooks only, applied once, page re-rendered, kept email, an offline book brought back; test checkout for a keep and a hardcover with an address")
+        try expect(orders.count == 1 && orders[0].product == "hardcover" && orders[0].shipping.country == "US" && orders[0].shipping.postalCode == "97201" && orders[0].cents == 4_900 && orders[0].status == "submitted", "the print order was \(orders)")
+        print("✓ payments: keep from the book page through Stripe, signed and fresh webhooks only, applied once, page re-rendered, kept email, an offline book brought back; a softcover through Stripe to the printer with fetchable files, shipped with tracking; test checkout for a keep and a hardcover")
     }
 
     static func finishedFreeTrip(base: URL, token: String, title: String, owner: String, email: String?, photo: URL) async throws -> TripWire {

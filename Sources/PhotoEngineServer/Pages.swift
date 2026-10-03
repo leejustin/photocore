@@ -108,6 +108,7 @@ enum Pages {
             <label for="state">State</label><input id="state" name="state" value="CA">
             <label for="postal">Postal code</label><input id="postal" name="postal" value="95014" required>
             <label for="country">Country</label><input id="country" name="country" value="US" maxlength="2" required>
+            <label for="phone">Phone</label><input id="phone" name="phone" value="4085551234">
             """
         }
         let body = """

@@ -3,10 +3,11 @@ import CoreText
 import Foundation
 import ImageIO
 
-/// Lays a finished book out as a print-ready PDF: 8 x 8 inch square pages with
-/// a 0.125 inch bleed, the size most photo-book printers (Lulu, Blurb and
-/// similar) accept as an upload. Photos come from the book's own finished JPEGs,
-/// so the PDF matches the web book exactly, and can be made at any time.
+/// Lays a finished book out as a print-ready PDF: square pages with a 0.125
+/// inch bleed. The default 8 x 8 inch file is for any photo-book printer; the
+/// Lulu preset is 8.5 x 8.5 inches with the cover as its own wraparound PDF.
+/// Photos come from the book's own finished JPEGs, so the PDF matches the web
+/// book exactly, and can be made at any time.
 public enum BookPrinter {
     public struct Options: Sendable {
         /// Trim size in points (72 per inch).
@@ -14,10 +15,49 @@ public enum BookPrinter {
         public var bleed: CGFloat = 9
         public var margin: CGFloat = 54
         public var footer: String?
+        /// Whether the first page is the photo cover. Printers that take the
+        /// cover as a separate file get a quiet title page instead.
+        public var includeCover = true
+        /// Blank pages are added before the last page up to this count.
+        public var minimumPages = 0
+        /// Pad to an even page count, for printers that need one.
+        public var evenPages = false
 
         public init(footer: String? = nil) {
             self.footer = footer
         }
+
+        /// Lulu's 8.5 inch square, cover separate, at least `minimumPages`.
+        public static func lulu(minimumPages: Int, footer: String? = nil) -> Options {
+            var options = Options(footer: footer)
+            options.trim = 612
+            options.includeCover = false
+            options.minimumPages = minimumPages
+            options.evenPages = true
+            return options
+        }
+    }
+
+    /// A wraparound cover: back, spine and front on one sheet, with bleed.
+    public struct CoverSize: Sendable, Equatable {
+        /// The whole sheet in points, as the printer gives it.
+        public var width: CGFloat
+        public var height: CGFloat
+        /// The trim size of one panel.
+        public var trim: CGFloat
+
+        public init(width: CGFloat, height: CGFloat, trim: CGFloat) {
+            self.width = width
+            self.height = height
+            self.trim = trim
+        }
+
+        /// What goes past the trim on each edge: bleed, plus the wrap on a hardcover.
+        public var edge: CGFloat { max(0, (height - trim) / 2) }
+        public var spine: CGFloat { max(0, width - 2 * (trim + edge)) }
+        public var back: CGRect { CGRect(x: 0, y: 0, width: trim + edge, height: height) }
+        public var spineRect: CGRect { CGRect(x: trim + edge, y: 0, width: spine, height: height) }
+        public var front: CGRect { CGRect(x: trim + edge + spine, y: 0, width: trim + edge, height: height) }
     }
 
     public struct Report: Sendable {
@@ -63,7 +103,19 @@ public enum BookPrinter {
         // Cover: the cover photo to the edge of the bleed, the title over a shade.
         let all = book.allPhotos
         let cover = all.first { $0.id == book.coverPhotoID } ?? all.first
-        newPage {
+        if !options.includeCover {
+            // A quiet title page; the printed cover is its own file.
+            newPage {
+                var y = safe.midY - 40
+                if let line = book.creditLine {
+                    _ = draw(context, line, font: sans(11), color: muted, in: CGRect(x: safe.minX, y: y - 30, width: safe.width, height: 20), centered: true)
+                }
+                y += draw(context, book.title, font: serif(30, bold: true), color: ink, in: CGRect(x: safe.minX, y: y, width: safe.width, height: 120), centered: true)
+                if !book.dateRange.isEmpty {
+                    _ = draw(context, book.dateRange.uppercased(), font: sans(10, bold: true), color: accent, in: CGRect(x: safe.minX, y: safe.midY + 70, width: safe.width, height: 18), centered: true)
+                }
+            }
+        } else { newPage {
             if let cover, let picture = image(cover) {
                 fill(context, picture, in: mediaBox)
                 photos += 1
@@ -79,7 +131,7 @@ public enum BookPrinter {
                 y += draw(context, book.dateRange.uppercased(), font: sans(10, bold: true), color: ink, in: CGRect(x: safe.minX, y: y + 4, width: safe.width, height: 18)) + 4
             }
             _ = draw(context, book.title, font: serif(34, bold: true), color: ink, in: CGRect(x: safe.minX, y: y + 6, width: safe.width, height: 130))
-        }
+        } }
 
         // The intro on its own page.
         if !book.intro.isEmpty {
@@ -137,6 +189,11 @@ public enum BookPrinter {
             }
         }
 
+        // Blank pages so the count meets the printer's minimum, then the closing page.
+        var target = max(options.minimumPages, pages + 1)
+        if options.evenPages, target % 2 == 1 { target += 1 }
+        while pages + 1 < target { newPage {} }
+
         // Closing page: who took the photos.
         newPage {
             var text = book.creditLine ?? ""
@@ -153,7 +210,84 @@ public enum BookPrinter {
 
     static let ink = CGColor(red: 0.11, green: 0.10, blue: 0.09, alpha: 1)
     static let muted = CGColor(red: 0.43, green: 0.40, blue: 0.37, alpha: 1)
-    static let accent = CGColor(red: 0.72, green: 0.33, blue: 0.18, alpha: 1)
+    static let accent = CGColor(red: 0.702, green: 0.196, blue: 0.169, alpha: 1)
+    static let paper = CGColor(red: 0.969, green: 0.949, blue: 0.918, alpha: 1)
+
+    /// The wraparound cover: the cover photo across the front, the title on a
+    /// shade at its foot, the title down the spine when it's wide enough, and
+    /// the credit line on the back.
+    @discardableResult
+    public static func cover(book: TripBook, folder: URL, to url: URL, size: CoverSize, footer: String? = "Bound · Finish the trip.") throws -> URL {
+        var mediaBox = CGRect(x: 0, y: 0, width: size.width, height: size.height)
+        guard let context = CGContext(url as CFURL, mediaBox: &mediaBox, [
+            kCGPDFContextTitle: book.title + " cover",
+            kCGPDFContextCreator: "Bound"
+        ] as CFDictionary) else { throw PrintError.cannotCreate }
+        context.beginPDFPage([kCGPDFContextMediaBox: data(mediaBox)] as CFDictionary)
+        context.setFillColor(paper)
+        context.fill(mediaBox)
+        let inset = size.edge + 36
+        // Front.
+        let all = book.allPhotos
+        let photo = all.first { $0.id == book.coverPhotoID } ?? all.first
+        let front = size.front
+        if let photo, let source = CGImageSourceCreateWithURL(folder.appendingPathComponent(BookRenderer.photoPath(photo)) as CFURL, nil),
+           let picture = CGImageSourceCreateImageAtIndex(source, 0, nil) {
+            fill(context, picture, in: front)
+            context.setFillColor(CGColor(gray: 0, alpha: 0.4))
+            context.fill(CGRect(x: front.minX, y: 0, width: front.width, height: size.height * 0.34))
+        } else {
+            context.setFillColor(ink)
+            context.fill(front)
+        }
+        let words = CGRect(x: front.minX + 36, y: inset, width: front.width - 36 - inset, height: size.height * 0.34 - inset)
+        var y = words.minY
+        if let line = book.creditLine {
+            y += draw(context, line, font: sans(11), color: CGColor(gray: 1, alpha: 0.92), in: CGRect(x: words.minX, y: y, width: words.width, height: 20))
+        }
+        if !book.dateRange.isEmpty {
+            y += draw(context, book.dateRange.uppercased(), font: sans(10, bold: true), color: CGColor(gray: 1, alpha: 0.85), in: CGRect(x: words.minX, y: y + 4, width: words.width, height: 18)) + 4
+        }
+        _ = draw(context, book.title, font: serif(32, bold: true), color: CGColor(gray: 1, alpha: 1), in: CGRect(x: words.minX, y: y + 6, width: words.width, height: max(40, words.maxY - y - 6)))
+        // Spine: ink, with the title running down it when there's room.
+        let spine = size.spineRect
+        if spine.width > 0 {
+            context.setFillColor(ink)
+            context.fill(spine)
+            if spine.width >= 18 {
+                context.saveGState()
+                context.translateBy(x: spine.midX, y: spine.midY)
+                context.rotate(by: -.pi / 2)
+                let length = size.height - 2 * inset
+                let fontSize = min(14, spine.width * 0.5)
+                _ = draw(context, book.title, font: serif(fontSize, bold: true), color: paper, in: CGRect(x: -length / 2, y: -fontSize * 0.7, width: length, height: fontSize * 1.6), centered: true)
+                context.restoreGState()
+            }
+        }
+        // Back: the credit line, a ribbon mark and the footer.
+        let back = size.back
+        let backSafe = CGRect(x: back.minX + inset, y: inset, width: back.width - inset - 36, height: size.height - 2 * inset)
+        if let line = book.creditLine {
+            _ = draw(context, line, font: serif(15), color: muted, in: backSafe.insetBy(dx: 20, dy: backSafe.height * 0.3), centered: true)
+        }
+        if let footer {
+            _ = draw(context, footer, font: serif(10), color: muted, in: CGRect(x: backSafe.minX, y: backSafe.minY, width: backSafe.width, height: 16), centered: true)
+        }
+        context.setFillColor(accent)
+        let ribbon = CGMutablePath()
+        let rx = backSafe.midX - 7, top = backSafe.minY + 70
+        ribbon.move(to: CGPoint(x: rx, y: top))
+        ribbon.addLine(to: CGPoint(x: rx + 14, y: top))
+        ribbon.addLine(to: CGPoint(x: rx + 14, y: top - 26))
+        ribbon.addLine(to: CGPoint(x: rx + 7, y: top - 20))
+        ribbon.addLine(to: CGPoint(x: rx, y: top - 26))
+        ribbon.closeSubpath()
+        context.addPath(ribbon)
+        context.fillPath()
+        context.endPDFPage()
+        context.closePDF()
+        return url
+    }
 
     static func serif(_ size: CGFloat, bold: Bool = false, italic: Bool = false) -> CTFont {
         let name = bold ? "Georgia-Bold" : (italic ? "Georgia-Italic" : "Georgia")

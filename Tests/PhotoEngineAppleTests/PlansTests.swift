@@ -111,6 +111,42 @@ struct PlansTests {
         #expect(document.string?.contains("Photos by Sam and Ana") == true)
     }
 
+    @Test func luluInteriorMeetsTheMinimumAndCoverWraps() throws {
+        let folder = FileManager.default.temporaryDirectory.appendingPathComponent("lulu-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: folder.appendingPathComponent("photos"), withIntermediateDirectories: true)
+        defer { if ProcessInfo.processInfo.environment["PHOTOCORE_KEEP_PRINT"] == nil { try? FileManager.default.removeItem(at: folder) } }
+        var photos: [BookPhoto] = []
+        for i in 0..<4 {
+            try SyntheticPhotos.writeJPEG(seed: i + 10, to: folder.appendingPathComponent("photos/p\(i).jpg"), width: 900, height: 600)
+            photos.append(BookPhoto(id: PhotoID(), fileName: "p\(i).jpg", credit: i % 2 == 0 ? "Sam" : "Ana"))
+        }
+        var printable = book(photos: photos)
+        printable.credit(Dictionary(uniqueKeysWithValues: photos.map { ($0.id, $0.credit ?? "") }))
+        let interior = folder.appendingPathComponent("interior.pdf")
+        let report = try BookPrinter.pdf(book: printable, folder: folder, to: interior, options: .lulu(minimumPages: 32))
+        #expect(report.pages == 32)
+        let document = try #require(PDFDocument(url: interior))
+        let first = try #require(document.page(at: 0))
+        #expect(abs(first.bounds(for: .mediaBox).width - 630) < 0.5 && abs(first.bounds(for: .trimBox).width - 612) < 0.5)
+        // The first page is a title page, not the photo cover.
+        #expect(first.string?.contains("Lisbon") == true)
+        #expect(document.string?.contains("Photos by Ana and Sam") == true)
+
+        // Two 621-point panels (612 trim plus 9 bleed) and a 22-point spine.
+        let size = BookPrinter.CoverSize(width: 1242 + 22, height: 630, trim: 612)
+        #expect(abs(size.spine - 22) < 0.01 && abs(size.edge - 9) < 0.01 && abs(size.front.minX - 643) < 0.01)
+        let hardcover = BookPrinter.CoverSize(width: 2 * (612 + 36) + 30, height: 684, trim: 612)
+        #expect(abs(hardcover.edge - 36) < 0.01 && abs(hardcover.spine - 30) < 0.01)
+        let cover = folder.appendingPathComponent("cover.pdf")
+        try BookPrinter.cover(book: printable, folder: folder, to: cover, size: size)
+        let coverDocument = try #require(PDFDocument(url: cover))
+        #expect(coverDocument.pageCount == 1)
+        let sheet = try #require(coverDocument.page(at: 0)).bounds(for: .mediaBox)
+        #expect(abs(sheet.width - size.width) < 0.5 && abs(sheet.height - 630) < 0.5)
+        #expect(coverDocument.string?.contains("Lisbon") == true)
+        if ProcessInfo.processInfo.environment["PHOTOCORE_KEEP_PRINT"] != nil { print("Lulu files in \(folder.path)") }
+    }
+
     /// Renders a real finished book to a PDF to look at, when asked:
     /// PHOTOCORE_PRINT_BOOK=<book folder> PHOTOCORE_PRINT_OUT=<file.pdf>.
     @Test func printARealBookWhenAsked() throws {

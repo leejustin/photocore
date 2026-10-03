@@ -33,7 +33,8 @@ public enum PhotocoreApplication {
         let trips = TripStore(root: tripsRoot)
         let address = PublicAddress(configuration.publicURL)
         let mailer = Mailers.make(configuration, outbox: tripsRoot.appendingPathComponent("outbox", isDirectory: true))
-        let lifecycle = BookLifecycle(trips: trips, mailer: mailer, address: address)
+        let printing = PrintPartners.make(configuration).map { PrintFulfillment(partner: $0, trips: trips, mailer: mailer, address: address) }
+        let lifecycle = BookLifecycle(trips: trips, mailer: mailer, address: address, printing: printing)
         registerTripRoutes(
             router,
             env: env,
@@ -42,7 +43,7 @@ public enum PhotocoreApplication {
             lifecycle: lifecycle,
             address: address,
             payments: Payments.make(configuration, address: address),
-            printsEnabled: configuration.devCheckout
+            printing: printing
         )
         return Application(
             router: router,

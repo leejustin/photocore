@@ -61,6 +61,7 @@ struct CheckoutCompletion: Sendable, Equatable {
     var name: String?
     var shipping: ShippingAddress?
     var cents: Int?
+    var phone: String? = nil
 }
 
 protocol PaymentProvider: Sendable {
@@ -100,6 +101,8 @@ struct StripePayments: PaymentProvider {
             for (index, country) in ShippingCountries.allowed.enumerated() {
                 form.append(("shipping_address_collection[allowed_countries][\(index)]", country))
             }
+            // The printer's carrier needs a phone number.
+            form.append(("phone_number_collection[enabled]", "true"))
         }
         var http = URLRequest(url: apiBase.appendingPathComponent("v1/checkout/sessions"))
         http.httpMethod = "POST"
@@ -182,7 +185,8 @@ enum StripeWebhook {
             sessionID: id, kind: kind, tripID: trip,
             product: (metadata["product"] as? String).flatMap(PrintProduct.init(rawValue:)),
             email: customer?["email"] as? String, name: customer?["name"] as? String,
-            shipping: shipping, cents: object["amount_total"] as? Int
+            shipping: shipping, cents: object["amount_total"] as? Int,
+            phone: customer?["phone"] as? String
         )
     }
 }

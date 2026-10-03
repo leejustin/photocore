@@ -22,10 +22,13 @@ actor BookLifecycle {
     /// (nightly refinish, deleting unpicked photos). Each returns a count.
     private var extraWork: [(String, @Sendable (Date) async -> Int)] = []
 
-    init(trips: TripStore, mailer: any Mailer, address: PublicAddress) {
+    let printing: PrintFulfillment?
+
+    init(trips: TripStore, mailer: any Mailer, address: PublicAddress, printing: PrintFulfillment? = nil) {
         self.trips = trips
         self.mailer = mailer
         self.address = address
+        self.printing = printing
     }
 
     func add(_ name: String, _ work: @escaping @Sendable (Date) async -> Int) {
@@ -34,11 +37,7 @@ actor BookLifecycle {
 
     /// Called when a print order is paid, so it's sent to the printer without
     /// waiting for the next tick.
-    private var onPrintOrders: (@Sendable () async -> Void)?
-
-    func whenPrintOrdersChange(_ work: @escaping @Sendable () async -> Void) { onPrintOrders = work }
-
-    func printOrdersChanged() async { await onPrintOrders?() }
+    func printOrdersChanged() async { await printing?.submitPending() }
 
     func bookURL(_ record: TripRecord) -> String { publicBase + TripPaths.book(record.slug) }
     func unsubscribeURL(_ token: String) -> String { publicBase + "/u/" + token }
@@ -81,6 +80,11 @@ actor BookLifecycle {
             }, to: await trips.recipients(record.id))
             // Earlier reminders count as sent too, so a late tick sends one email, not two.
             try? await trips.update(record.id) { $0.remindersSent = Array(0...due) }
+        }
+        if let printing {
+            let printed = await printing.submitPending(), shipped = await printing.followUp()
+            if printed > 0 { report.other["printed", default: 0] += printed }
+            if shipped > 0 { report.other["shipped", default: 0] += shipped }
         }
         for (name, work) in extraWork {
             let count = await work(now)

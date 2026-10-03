@@ -34,8 +34,19 @@ public struct ServerConfiguration: Sendable {
     /// A checkout that charges nothing, for local development. Ignored when a
     /// Stripe key is set.
     public var devCheckout: Bool
+    /// Lulu Print API credentials; printed copies are offered only with these
+    /// (or with the test checkout).
+    public var luluClientKey: String?
+    public var luluClientSecret: String?
+    /// `https://api.sandbox.lulu.com` while testing; Lulu's live API by default.
+    public var luluAPIBase: String?
+    public var luluSoftcoverPackage: String?
+    public var luluHardcoverPackage: String?
+    public var luluShippingLevel: String?
+    /// The address Lulu writes to about orders.
+    public var printContactEmail: String?
 
-    public init(port: Int, security: WorkerSecurity, catalogURL: URL, mediaCacheDirectory: URL, tokenWasGenerated: Bool, bundleID: String = "com.photocore.trip", storeKitTestRoot: URL? = nil, allowXcodePurchases: Bool = false, siteURL: String? = nil, appStoreURL: String? = nil, publicURL: String? = nil, resendAPIKey: String? = nil, mailFrom: String? = nil, allowClockShift: Bool = false, stripeSecretKey: String? = nil, stripeWebhookSecret: String? = nil, stripeAPIBase: String? = nil, devCheckout: Bool = false) {
+    public init(port: Int, security: WorkerSecurity, catalogURL: URL, mediaCacheDirectory: URL, tokenWasGenerated: Bool, bundleID: String = "com.photocore.trip", storeKitTestRoot: URL? = nil, allowXcodePurchases: Bool = false, siteURL: String? = nil, appStoreURL: String? = nil, publicURL: String? = nil, resendAPIKey: String? = nil, mailFrom: String? = nil, allowClockShift: Bool = false, stripeSecretKey: String? = nil, stripeWebhookSecret: String? = nil, stripeAPIBase: String? = nil, devCheckout: Bool = false, luluClientKey: String? = nil, luluClientSecret: String? = nil, luluAPIBase: String? = nil, luluSoftcoverPackage: String? = nil, luluHardcoverPackage: String? = nil, luluShippingLevel: String? = nil, printContactEmail: String? = nil) {
         self.port = port
         self.security = security
         self.catalogURL = catalogURL
@@ -54,6 +65,13 @@ public struct ServerConfiguration: Sendable {
         self.stripeWebhookSecret = stripeWebhookSecret
         self.stripeAPIBase = stripeAPIBase
         self.devCheckout = devCheckout
+        self.luluClientKey = luluClientKey
+        self.luluClientSecret = luluClientSecret
+        self.luluAPIBase = luluAPIBase
+        self.luluSoftcoverPackage = luluSoftcoverPackage
+        self.luluHardcoverPackage = luluHardcoverPackage
+        self.luluShippingLevel = luluShippingLevel
+        self.printContactEmail = printContactEmail
     }
 
     /// The base for absolute links, with no trailing slash.
@@ -91,7 +109,14 @@ public struct ServerConfiguration: Sendable {
             mailFrom: environment["PHOTOCORE_MAIL_FROM"],
             stripeSecretKey: environment["STRIPE_SECRET_KEY"],
             stripeWebhookSecret: environment["STRIPE_WEBHOOK_SECRET"],
-            devCheckout: environment["PHOTOCORE_DEV_CHECKOUT"] == "1"
+            devCheckout: environment["PHOTOCORE_DEV_CHECKOUT"] == "1",
+            luluClientKey: environment["LULU_CLIENT_KEY"],
+            luluClientSecret: environment["LULU_CLIENT_SECRET"],
+            luluAPIBase: environment["LULU_API_BASE"],
+            luluSoftcoverPackage: environment["LULU_POD_SOFTCOVER"],
+            luluHardcoverPackage: environment["LULU_POD_HARDCOVER"],
+            luluShippingLevel: environment["LULU_SHIPPING_LEVEL"],
+            printContactEmail: environment["PHOTOCORE_PRINT_CONTACT"]
         )
     }
 

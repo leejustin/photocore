@@ -30,4 +30,10 @@ struct PrintOrder: Codable, Sendable {
     var trackingURL: String?
     var attempts: Int?
     var error: String?
+    /// The buyer's phone, which the carrier needs.
+    var phone: String?
+    /// The secret in the links the printer fetches the files from.
+    var fileToken: String?
+    /// Interior pages sent to the printer.
+    var pages: Int?
 }

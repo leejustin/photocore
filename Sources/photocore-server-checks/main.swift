@@ -42,7 +42,11 @@ struct ServerChecks {
                 allowClockShift: true,
                 stripeSecretKey: "sk_test_checks",
                 stripeWebhookSecret: Self.webhookSecret,
-                stripeAPIBase: mockBase
+                stripeAPIBase: mockBase,
+                luluClientKey: "lulu-key",
+                luluClientSecret: "lulu-secret",
+                luluAPIBase: mockBase,
+                printContactEmail: "prints@example.com"
             )
             // A second server with the no-charge test checkout instead of Stripe.
             let devOutput = root.appendingPathComponent("dev-output", isDirectory: true)
