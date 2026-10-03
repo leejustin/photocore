@@ -72,6 +72,8 @@ struct InviteStatusDTO: Encodable, Sendable {
     var mine: Int?
     /// Whether this person gave an email.
     var emailSet: Bool?
+    /// Who is making the book, for the App Clip's first screen.
+    var ownerName: String?
 }
 
 struct TripCreatedDTO: Encodable, Sendable {
@@ -346,7 +348,7 @@ func registerTripRoutes(
         let theme = limits.allows(record.theme) ? record.theme : .book
         var contributors = [TripFinisher.Contributor(name: nil, folder: await trips.guestFolder(tid))]
         for person in await trips.contributors(tid) {
-            contributors.append(TripFinisher.Contributor(name: person.name, folder: await trips.contributorFolder(tid, person.id)))
+            contributors.append(TripFinisher.Contributor(name: person.name, folder: await trips.contributorFolder(tid, person.id), alreadyCulled: person.offered == true))
         }
         let job = JobRecord(id: UUID().uuidString, kind: "finish-trip", sessionID: nil, state: "queued", request: Data("{\"trip\":\"\(tid)\"}".utf8), createdAt: Date())
         let folders = TripFinisher.Folders(
@@ -675,6 +677,19 @@ func registerTripRoutes(
         return APIJSON.bytes(try Data(contentsOf: url), headers: headers)
     }
 
+    /// Lets iOS open invite links in the App Clip, and book links in the app.
+    router.get(".well-known/apple-app-site-association") { _, _ in
+        guard let team = env.configuration.appleTeamID, !team.isEmpty else { throw APIError.notFound("Not found.") }
+        let app = "\(team).\(env.configuration.bundleID)"
+        let file: [String: Any] = [
+            "appclips": ["apps": ["\(team).\(env.configuration.appClipBundleID)"]],
+            "applinks": ["details": [["appIDs": [app], "components": [["/": "/j/*", "comment": "Invites"], ["/": "/b/*", "comment": "Books"]]]]]
+        ]
+        var headers = HTTPFields()
+        headers[.contentType] = "application/json"
+        return APIJSON.bytes(try JSONSerialization.data(withJSONObject: file, options: [.sortedKeys]), headers: headers)
+    }
+
     // MARK: Emails (one-click unsubscribe, no account)
 
     router.get("u/{token}") { _, context in
@@ -726,7 +741,8 @@ func registerTripRoutes(
            let photo = book.allPhotos.first(where: { $0.id == book.coverPhotoID }) ?? book.allPhotos.first {
             cover = TripPaths.book(record.slug) + BookRenderer.photoPath(photo)
         }
-        return APIJSON.bytes(Data(InvitePage.html(code: code, title: record.title, ownerName: record.ownerName, cover: cover).utf8), headers: headers)
+        let appClip = env.configuration.appStoreID.map { (appID: $0, clipBundleID: env.configuration.appClipBundleID) }
+        return APIJSON.bytes(Data(InvitePage.html(code: code, title: record.title, ownerName: record.ownerName, cover: cover, appClip: appClip).utf8), headers: headers)
     }
 
     router.get("j/{code}/status") { request, context in
@@ -743,7 +759,8 @@ func registerTripRoutes(
             bookPath: record.finishedAt == nil ? nil : TripPaths.book(record.slug),
             me: person?.name,
             mine: mine,
-            emailSet: person.map { $0.email != nil }
+            emailSet: person.map { $0.email != nil },
+            ownerName: record.ownerName
         )
         return try APIJSON.response(status)
     }
@@ -774,6 +791,34 @@ func registerTripRoutes(
         let email = try optionalEmail(body.email ?? "") ?? nil
         try await trips.setEmail(record.id, contributor: person.id, email: email)
         return try APIJSON.response(["emailSet": email != nil])
+    }
+
+    struct OffersBody: Decodable { var offers: [PhotoOffer] }
+    struct WantedDTO: Encodable { var wanted: [String]; var uploaded: Int; var offered: Int }
+
+    /// The App Clip's offers: a feature print, time and score for each of the
+    /// person's best, before any photo. Answers with the originals wanted.
+    router.post("j/{code}/offers") { request, context in
+        let code = try context.parameters.require("code")
+        guard let record = await trips.record(invite: code) else { throw APIError.notFound("This invite link doesn't work.") }
+        guard record.inviteOpen else { throw APIError.forbidden("This trip isn't taking photos any more.") }
+        guard let person = await trips.contributor(record.id, token: contributorToken(request)) else { throw APIError.unauthorized("Join the trip first.") }
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        let buffer = try await request.body.collect(upTo: 8 * 1_024 * 1_024)
+        guard let body = try? decoder.decode(OffersBody.self, from: Data(buffer: buffer)) else { throw APIError.invalid("Those offers couldn't be read.") }
+        guard body.offers.allSatisfy({ ($0.featurePrint?.count ?? 0) < 64 * 1_024 }) else { throw APIError.invalid("An offer is too large.") }
+        _ = try await trips.saveOffers(record.id, contributor: person.id, body.offers, limit: record.limits.photosPerFriend)
+        let result = await trips.wanted(record.id, contributor: person.id)
+        return try APIJSON.response(WantedDTO(wanted: result.wanted, uploaded: result.uploaded, offered: result.offered))
+    }
+
+    router.get("j/{code}/wanted") { request, context in
+        let code = try context.parameters.require("code")
+        guard let record = await trips.record(invite: code) else { throw APIError.notFound("This invite link doesn't work.") }
+        guard let person = await trips.contributor(record.id, token: contributorToken(request)) else { throw APIError.unauthorized("Join the trip first.") }
+        let result = await trips.wanted(record.id, contributor: person.id)
+        return try APIJSON.response(WantedDTO(wanted: result.wanted, uploaded: result.uploaded, offered: result.offered))
     }
 
     router.put("j/{code}/photos/{name}") { request, context in

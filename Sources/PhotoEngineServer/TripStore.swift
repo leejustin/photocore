@@ -1,5 +1,7 @@
 import CryptoKit
 import Foundation
+import ImageIO
+import PhotoEngineApple
 import PhotoEngineCore
 import PhotoEngineWorkflow
 
@@ -86,6 +88,9 @@ struct Contributor: Codable, Sendable {
     var tappedFaces: [Data]?
     /// Book photo file names they said they're not in.
     var notMe: [String]?
+    /// Whether they joined from the App Clip, which culls on their phone and
+    /// sends offers before any photo.
+    var offered: Bool?
 }
 
 /// Someone to email about a book.
@@ -533,6 +538,98 @@ actor TripStore {
 
     func allRecords() -> [TripRecord] { Array(records.values) }
 
+    // MARK: Offers (analysis first, originals second)
+
+    func offersFolder(_ id: String) -> URL { folder(id).appendingPathComponent("offers", isDirectory: true) }
+
+    /// The name an upload is stored under, so an offer and its original meet.
+    static func safeName(_ name: String) -> String {
+        String(name.filter { $0.isLetter || $0.isNumber || $0 == "-" || $0 == "_" }.prefix(48))
+    }
+
+    func offers(_ id: String, contributor: String) -> [PhotoOffer] {
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        return (try? decoder.decode([PhotoOffer].self, from: Data(contentsOf: offersFolder(id).appendingPathComponent(contributor + ".json")))) ?? []
+    }
+
+    /// Adds a person's offers, replacing any with the same name.
+    func saveOffers(_ id: String, contributor: String, _ new: [PhotoOffer], limit: Int) throws -> [PhotoOffer] {
+        var merged = Dictionary(offers(id, contributor: contributor).map { ($0.name, $0) }, uniquingKeysWith: { $1 })
+        for offer in new {
+            var clean = offer
+            clean.name = Self.safeName(offer.name)
+            guard !clean.name.isEmpty else { continue }
+            merged[clean.name] = clean
+        }
+        guard merged.count <= limit else { throw APIError.conflict("That's more photos than one person can add (\(limit)).") }
+        let list = merged.values.sorted { $0.name < $1.name }
+        try FileManager.default.createDirectory(at: offersFolder(id), withIntermediateDirectories: true)
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .iso8601
+        try encoder.encode(list).write(to: offersFolder(id).appendingPathComponent(contributor + ".json"), options: .atomic)
+        _ = try changeContributor(id, contributor) { $0.offered = true }
+        return list
+    }
+
+    /// Names of a person's uploads, by the name they were offered under.
+    func uploadedNames(_ id: String, contributor: String) -> Set<String> {
+        let prefix = "c\(contributor)-"
+        let names = (try? FileManager.default.contentsOfDirectory(atPath: contributorFolder(id, contributor).path)) ?? []
+        return Set(names.filter { $0.hasPrefix(prefix) }.map { String(($0 as NSString).deletingPathExtension.dropFirst(prefix.count)) })
+    }
+
+    /// The owner's photos as offers, with feature prints made here once and kept.
+    func ownerOffers(_ id: String) -> [PhotoOffer] {
+        let cacheURL = offersFolder(id).appendingPathComponent("owner.json")
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        var cache = (try? decoder.decode([String: PhotoOffer].self, from: Data(contentsOf: cacheURL))) ?? [:]
+        let files = ((try? FileManager.default.contentsOfDirectory(at: ownerFolder(id), includingPropertiesForKeys: nil)) ?? []).filter { !$0.lastPathComponent.hasPrefix(".") }
+        var changed = false
+        for file in files where cache[file.lastPathComponent] == nil {
+            guard let source = CGImageSourceCreateWithURL(file as CFURL, nil),
+                  let image = CGImageSourceCreateThumbnailAtIndex(source, 0, [
+                      kCGImageSourceCreateThumbnailFromImageAlways: true,
+                      kCGImageSourceCreateThumbnailWithTransform: true,
+                      kCGImageSourceThumbnailMaxPixelSize: 512
+                  ] as CFDictionary) else { continue }
+            let properties = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any]
+            let exif = properties?[kCGImagePropertyExifDictionary] as? [CFString: Any]
+            let formatter = DateFormatter()
+            formatter.locale = Locale(identifier: "en_US_POSIX")
+            formatter.timeZone = TimeZone(identifier: "UTC")
+            formatter.dateFormat = "yyyy:MM:dd HH:mm:ss"
+            let date = (exif?[kCGImagePropertyExifDateTimeOriginal] as? String).flatMap(formatter.date(from:))
+            cache[file.lastPathComponent] = PhotoOffer(name: file.lastPathComponent, captured: date, score: 1, featurePrint: try? AppleVisualDistance.featurePrintData(for: image))
+            changed = true
+        }
+        let present = Set(files.map(\.lastPathComponent))
+        if cache.keys.contains(where: { !present.contains($0) }) { cache = cache.filter { present.contains($0.key) }; changed = true }
+        if changed {
+            try? FileManager.default.createDirectory(at: offersFolder(id), withIntermediateDirectories: true)
+            let encoder = JSONEncoder()
+            encoder.dateEncodingStrategy = .iso8601
+            try? encoder.encode(cache).write(to: cacheURL, options: .atomic)
+        }
+        return Array(cache.values)
+    }
+
+    /// The originals this person should upload: their offers the book wants
+    /// that aren't up yet.
+    func wanted(_ id: String, contributor: String) -> (wanted: [String], uploaded: Int, offered: Int) {
+        let mine = offers(id, contributor: contributor)
+        guard !mine.isEmpty else { return ([], 0, 0) }
+        var everyone: [GroupOffers.Candidate] = []
+        for person in contributors(id) {
+            everyone += offers(id, contributor: person.id).map { GroupOffers.Candidate(person: person.id, offer: $0) }
+        }
+        let chosen = GroupOffers.wanted(owner: ownerOffers(id), offers: everyone)
+        let uploaded = uploadedNames(id, contributor: contributor)
+        let want = mine.map(\.name).filter { chosen.contains([contributor, $0]) }
+        return (want.filter { !uploaded.contains($0) }, want.filter { uploaded.contains($0) }.count, mine.count)
+    }
+
     // MARK: Photos of you
 
     func facesFolder(_ id: String) -> URL { folder(id).appendingPathComponent("faces", isDirectory: true) }
@@ -596,7 +693,7 @@ actor TripStore {
             throw APIError.conflict("You've added as many photos as one person can (\(limit)).")
         }
         guard Self.isImage(data) else { throw APIError.invalid("Add JPEG or HEIC photos.") }
-        let safe = String(name.filter { $0.isLetter || $0.isNumber || $0 == "-" || $0 == "_" }.prefix(48))
+        let safe = Self.safeName(name)
         let ext = data.starts(with: [0xFF, 0xD8]) ? "jpg" : "heic"
         // The person's id in the name keeps every file name unique in the book.
         let url = folder.appendingPathComponent("c\(contributor.id)-" + (safe.isEmpty ? UUID().uuidString : safe) + "." + ext)

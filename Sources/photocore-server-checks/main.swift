@@ -76,6 +76,7 @@ struct ServerChecks {
             try await exerciseTrips(port: port, token: token, source: source)
             try await exercisePlans(port: port, token: token, source: source)
             try await exerciseLifecycle(port: port, token: token, source: source, outbox: output.appendingPathComponent("trips/outbox"))
+            try await exerciseOffers(port: port, token: token, source: source)
             try await exercisePayments(port: port, devPort: devPort, token: token, source: source, mock: mockLog, outbox: output.appendingPathComponent("trips/outbox"))
             group.cancelAll()
         }
@@ -619,6 +620,7 @@ struct InviteStatusWire: Decodable {
     var me: String?
     var mine: Int?
     var emailSet: Bool?
+    var ownerName: String?
 }
 
 struct JobWire: Decodable {

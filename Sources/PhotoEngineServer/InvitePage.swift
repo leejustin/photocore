@@ -8,7 +8,9 @@ import Foundation
 /// theirs out.
 enum InvitePage {
     /// - Parameter cover: the finished book's cover photo, once there is one.
-    static func html(code: String, title: String?, ownerName: String?, cover: String? = nil) -> String {
+    /// - Parameter appClip: the App Store id and App Clip bundle id, so Safari
+    ///   on iPhone offers the App Clip, which picks on the phone first.
+    static func html(code: String, title: String?, ownerName: String?, cover: String? = nil, appClip: (appID: String, clipBundleID: String)? = nil) -> String {
         let trip = title.flatMap { $0.isEmpty ? nil : $0 }
         let who = ownerName.flatMap { $0.isEmpty ? nil : $0 }
         let headline = "\(who ?? "Someone from the trip") is making a book of \(trip ?? "the trip")."
@@ -18,6 +20,7 @@ enum InvitePage {
         <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
         <meta name="color-scheme" content="light dark">
         <meta name="robots" content="noindex">
+        \(appClip.map { "<meta name=\"apple-itunes-app\" content=\"app-id=\(escape($0.appID)), app-clip-bundle-id=\(escape($0.clipBundleID)), app-clip-display=card\">" } ?? "")
         <title>\(escape(trip ?? "Add your photos")) · Bound</title>
         <meta property="og:title" content="\(escape(headline))">
         <meta property="og:description" content="Add your photos. The best shot of each moment goes in, with your name on it.">

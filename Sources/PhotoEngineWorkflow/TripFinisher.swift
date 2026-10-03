@@ -11,10 +11,14 @@ public enum TripFinisher {
     public struct Contributor: Sendable {
         public var name: String?
         public var folder: URL
+        /// Set when the person's phone already culled their photos (the App
+        /// Clip), so the server keeps all of them before curating together.
+        public var alreadyCulled: Bool
 
-        public init(name: String?, folder: URL) {
+        public init(name: String?, folder: URL, alreadyCulled: Bool = false) {
             self.name = name
             self.folder = folder
+            self.alreadyCulled = alreadyCulled
         }
     }
 
@@ -105,7 +109,7 @@ public enum TripFinisher {
             progress("Picking the best of everyone's photos", index, people.count)
             var profile = ScoringProfile.default(for: .trip)
             profile.sizingMode = .percentage
-            profile.keepPercentage = guestKeepPercent
+            profile.keepPercentage = person.alreadyCulled ? 100 : guestKeepPercent
             let result = try runner.run(folder: person.folder, outputDirectory: folders.work.appendingPathComponent("contributor-\(index)", isDirectory: true), profile: profile, exportSpecification: ExportSpecification(preset: .compact))
             let scores = Dictionary(result.shortlist.decisions.map { ($0.photoID, $0.score) }, uniquingKeysWith: max)
             for photo in KeeperSelection(result: result).ordered(in: result) {

@@ -45,8 +45,15 @@ public struct ServerConfiguration: Sendable {
     public var luluShippingLevel: String?
     /// The address Lulu writes to about orders.
     public var printContactEmail: String?
+    /// Apple developer team id, for the App Clip and universal links file.
+    public var appleTeamID: String?
+    /// Bound's App Store id, for the banner that opens the App Clip from an invite.
+    public var appStoreID: String?
 
-    public init(port: Int, security: WorkerSecurity, catalogURL: URL, mediaCacheDirectory: URL, tokenWasGenerated: Bool, bundleID: String = "com.photocore.trip", storeKitTestRoot: URL? = nil, allowXcodePurchases: Bool = false, siteURL: String? = nil, appStoreURL: String? = nil, publicURL: String? = nil, resendAPIKey: String? = nil, mailFrom: String? = nil, allowClockShift: Bool = false, stripeSecretKey: String? = nil, stripeWebhookSecret: String? = nil, stripeAPIBase: String? = nil, devCheckout: Bool = false, luluClientKey: String? = nil, luluClientSecret: String? = nil, luluAPIBase: String? = nil, luluSoftcoverPackage: String? = nil, luluHardcoverPackage: String? = nil, luluShippingLevel: String? = nil, printContactEmail: String? = nil) {
+    /// The App Clip's bundle id.
+    public var appClipBundleID: String { bundleID + ".Clip" }
+
+    public init(port: Int, security: WorkerSecurity, catalogURL: URL, mediaCacheDirectory: URL, tokenWasGenerated: Bool, bundleID: String = "com.photocore.trip", storeKitTestRoot: URL? = nil, allowXcodePurchases: Bool = false, siteURL: String? = nil, appStoreURL: String? = nil, publicURL: String? = nil, resendAPIKey: String? = nil, mailFrom: String? = nil, allowClockShift: Bool = false, stripeSecretKey: String? = nil, stripeWebhookSecret: String? = nil, stripeAPIBase: String? = nil, devCheckout: Bool = false, luluClientKey: String? = nil, luluClientSecret: String? = nil, luluAPIBase: String? = nil, luluSoftcoverPackage: String? = nil, luluHardcoverPackage: String? = nil, luluShippingLevel: String? = nil, printContactEmail: String? = nil, appleTeamID: String? = nil, appStoreID: String? = nil) {
         self.port = port
         self.security = security
         self.catalogURL = catalogURL
@@ -72,6 +79,8 @@ public struct ServerConfiguration: Sendable {
         self.luluHardcoverPackage = luluHardcoverPackage
         self.luluShippingLevel = luluShippingLevel
         self.printContactEmail = printContactEmail
+        self.appleTeamID = appleTeamID
+        self.appStoreID = appStoreID
     }
 
     /// The base for absolute links, with no trailing slash.
@@ -119,7 +128,9 @@ public struct ServerConfiguration: Sendable {
             luluSoftcoverPackage: environment["LULU_POD_SOFTCOVER"],
             luluHardcoverPackage: environment["LULU_POD_HARDCOVER"],
             luluShippingLevel: environment["LULU_SHIPPING_LEVEL"],
-            printContactEmail: environment["PHOTOCORE_PRINT_CONTACT"]
+            printContactEmail: environment["PHOTOCORE_PRINT_CONTACT"],
+            appleTeamID: environment["PHOTOCORE_APPLE_TEAM_ID"],
+            appStoreID: environment["PHOTOCORE_APP_STORE_ID"]
         )
     }
 
