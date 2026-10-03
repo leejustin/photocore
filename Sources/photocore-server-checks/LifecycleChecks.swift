@@ -34,6 +34,16 @@ extension ServerChecks {
         _ = try await wait(base: base, token: token, id: try decode(JobWire.self, from: refinish.body).id)
         try expect(mails(outbox).count == mailBefore + 1, "a refinish sent the ready email again")
 
+        // Photos of you: only for someone who joined; these test frames have no faces.
+        let you = try await data(base.appendingPathComponent(invite + "/you"), headers: ["X-Photocore-Contributor": sam.token])
+        try expect(you.status == 200 && text(you.body).contains("\"available\":false"), "photos of you returned \(you.status) \(text(you.body))")
+        let strangerYou = try await data(base.appendingPathComponent(invite + "/you"))
+        try expect(strangerYou.status == 401, "photos of you without a token returned \(strangerYou.status)")
+        let badFace = try await data(base.appendingPathComponent(invite + "/faces/../../trip.json"))
+        try expect(badFace.status == 404, "a face path outside the crops returned \(badFace.status)")
+        let noFaceZip = try await data(base.appendingPathComponent(invite + "/you.zip"), headers: ["X-Photocore-Contributor": sam.token])
+        try expect(noFaceZip.status == 404, "a zip with no photos of you returned \(noFaceZip.status)")
+
         // Six days left: the first reminder, to Ana and Sam, once.
         try await shift(base: base, token: token, trip: trip.id, days: 84)
         let first = try decode(TickWire.self, from: try await data(base.appendingPathComponent("v2/admin/lifecycle"), method: "POST", token: token).body)
@@ -72,7 +82,7 @@ extension ServerChecks {
         try expect(purged.status == 410 && text(purged.body).contains("photos have been deleted") && !text(purged.body).contains("Keep it"), "the purged book returned \(purged.status)")
         let closed = try await send(base.appendingPathComponent(invite + "/join"), method: "POST", json: ["name": "Late"], headers: [:])
         try expect(closed.status == 403, "joining a purged book returned \(closed.status)")
-        print("✓ lifecycle: emails at join and later, ready email once, reminders at a week and a day, one-click unsubscribe, offline page, purge after 30 days")
+        print("✓ lifecycle: photos of you only for people who joined, emails at join and later, ready email once, reminders at a week and a day, one-click unsubscribe, offline page, purge after 30 days")
     }
 
     static func shift(base: URL, token: String, trip: String, days: Double) async throws {

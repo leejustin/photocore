@@ -205,7 +205,8 @@ func registerTripRoutes(
     lifecycle: BookLifecycle,
     address: PublicAddress,
     payments: (any PaymentProvider)?,
-    printing: PrintFulfillment?
+    printing: PrintFulfillment?,
+    embedder: any FaceEmbedder
 ) {
     let printsEnabled = printing != nil
     let siteURL = env.configuration.siteURL
@@ -375,6 +376,9 @@ func registerTripRoutes(
             try await trips.saveSources(tid, outcome.sources)
             // Friends' photos that weren't picked are deleted now; only the book's stay.
             await trips.deleteUnpicked(tid, considered: outcome.considered, picked: outcome.sources.map(\.url))
+            // Faces for "photos of you"; a book without them still finishes.
+            Task { await jobs.noteProgress(id: job.id, stage: "finish", completed: 0, total: 1, message: "Finding faces") }
+            try? await YouIndex.build(trips: trips, tripID: tid, embedder: embedder)
             let firstFinish = await trips.record(id: tid)?.finishedAt == nil
             try await trips.update(tid) {
                 let first = $0.finishedAt ?? Date()
@@ -387,8 +391,10 @@ func registerTripRoutes(
                 let title = record.title.flatMap { $0.isEmpty ? nil : $0 } ?? outcome.book.title
                 let bookURL = address.base + TripPaths.book(record.slug)
                 let friends = await trips.recipients(tid).filter { $0.contributorID != nil }
+                let hasFaces = FaceIndex.load(from: await trips.facesFolder(tid)).map { !$0.faces.isEmpty } ?? false
+                let youURL = hasFaces ? TripPaths.invite(record).map { address.base + $0 + "#you" } : nil
                 _ = await lifecycle.send({ recipient in
-                    MailTemplates.bookReady(to: recipient.email, name: recipient.name, title: title, yours: recipient.name.flatMap { outcome.keptPerContributor[$0] } ?? 0, bookURL: bookURL, youURL: nil, unsubscribe: address.base + "/u/" + recipient.unsubscribeToken)
+                    MailTemplates.bookReady(to: recipient.email, name: recipient.name, title: title, yours: recipient.name.flatMap { outcome.keptPerContributor[$0] } ?? 0, bookURL: bookURL, youURL: youURL, unsubscribe: address.base + "/u/" + recipient.unsubscribeToken)
                 }, to: friends)
             }
             return try APIJSON.data(FinishResult(

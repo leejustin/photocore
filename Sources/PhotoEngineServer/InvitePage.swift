@@ -60,6 +60,18 @@ enum InvitePage {
         </section>
 
         <section id="ready" hidden><a id="read" class="pick" href="#">Read the book</a></section>
+
+        <section id="you" hidden>
+          <h2>Photos of you</h2>
+          <p class="hint" id="you-hint">Tap your face. Bound finds your other photos in the book. Only you see this, and nobody is recognized: it only compares faces in this book.</p>
+          <div id="faces" class="faces"></div>
+          <button type="button" class="link" id="more-faces" hidden>More faces</button>
+          <div id="yours" hidden>
+            <h3 id="yours-title"></h3>
+            <div id="your-photos" class="mine"></div>
+            <button type="button" class="pick" id="save-yours">Save your photos</button>
+          </div>
+        </section>
         <p class="fine">Only people with this link can add photos. Photos stay private until they're picked for the book, and the ones that aren't picked are deleted.</p>
         <p class="brand">Bound · Finish the trip.</p>
         </main>
@@ -109,6 +121,16 @@ enum InvitePage {
     .hint, .fine { font-size:14px; color:var(--muted); margin:0; }
     .fine { margin-top:8px; text-align:center; }
     .optional { font-weight:400; color:var(--muted); }
+    #you h2 { font-family:var(--serif); font-weight:600; font-size:24px; margin:0; }
+    #you h3 { font-family:var(--serif); font-weight:600; font-size:19px; margin:10px 0 0; }
+    .faces { display:grid; grid-template-columns:repeat(auto-fill, minmax(58px, 1fr)); gap:8px; }
+    .face { padding:0; border:2px solid transparent; border-radius:50%; background:none; cursor:pointer; aspect-ratio:1; overflow:hidden; }
+    .face img { width:100%; height:100%; object-fit:cover; border-radius:50%; display:block; }
+    .face.on { border-color:var(--accent); box-shadow:0 0 0 2px var(--accent); }
+    .mine { display:grid; grid-template-columns:repeat(3, 1fr); gap:6px; }
+    .mine figure { margin:0; position:relative; }
+    .mine img { width:100%; aspect-ratio:1; object-fit:cover; border-radius:6px; display:block; }
+    .mine button { position:absolute; left:4px; bottom:4px; font:inherit; font-size:11px; padding:3px 8px; border:0; border-radius:99px; background:rgba(20,18,16,.6); color:#fff; cursor:pointer; }
     form.inline { display:flex; gap:8px; padding:0; border:0; background:none; margin:0; }
     form.inline input { flex:1; min-width:0; }
     button.small { font:inherit; font-weight:600; padding:10px 16px; border:0; border-radius:999px; background:var(--ink); color:var(--paper); cursor:pointer; }
@@ -130,7 +152,7 @@ enum InvitePage {
       function plural(n, one){ return n + ' ' + one + (n === 1 ? '' : 's'); }
       function refresh(){
         fetch(base + '/status', { headers: headers() }).then(function(r){ return r.json(); }).then(function(s){
-          if (s.bookPath) { $('ready').hidden = false; $('read').href = s.bookPath; }
+          if (s.bookPath) { $('ready').hidden = false; $('read').href = s.bookPath; if (me && s.me) loadYou(); }
           if (!s.open) { $('closed').hidden = false; $('join').hidden = true; $('add').hidden = true; return; }
           if (me && s.me) {
             $('join').hidden = true; $('add').hidden = false; $('me').textContent = s.me;
@@ -208,6 +230,53 @@ enum InvitePage {
         var files = leftOut; leftOut = [];
         $('add-skipped').hidden = true; $('skipped').hidden = true;
         upload(files);
+      });
+      var allFaces = false, lastYou = null;
+      function renderYou(y){
+        lastYou = y;
+        if (!y.available) { $('you').hidden = true; return; }
+        $('you').hidden = false;
+        var tapped = {}; y.tapped.forEach(function(id){ tapped[id] = true; });
+        var shown = allFaces ? y.faces : y.faces.slice(0, 30);
+        $('faces').innerHTML = '';
+        shown.forEach(function(f){
+          var b = document.createElement('button'); b.type = 'button'; b.className = 'face' + (tapped[f.id] ? ' on' : '');
+          b.setAttribute('aria-label', tapped[f.id] ? 'Your face, tap to undo' : 'Tap if this is you');
+          var img = document.createElement('img'); img.src = f.url; img.alt = ''; img.loading = 'lazy'; b.appendChild(img);
+          b.addEventListener('click', function(){ youPost('', { face: f.id }); });
+          $('faces').appendChild(b);
+        });
+        $('more-faces').hidden = allFaces || y.faces.length <= 30;
+        $('yours').hidden = !y.photos.length;
+        $('you-hint').textContent = y.photos.length
+          ? 'Tap more of your faces if any photos are missing. Only you see this.'
+          : 'Tap your face. Bound finds your other photos in the book. Only you see this, and nobody is recognized: it only compares faces in this book.';
+        $('yours-title').textContent = y.photos.length === 1 ? 'You\\u2019re in 1 photo' : 'You\\u2019re in ' + y.photos.length + ' photos';
+        $('your-photos').innerHTML = '';
+        y.photos.forEach(function(p){
+          var fig = document.createElement('figure');
+          var img = document.createElement('img'); img.src = p.url; img.alt = p.credit ? 'By ' + p.credit : ''; img.loading = 'lazy';
+          var no = document.createElement('button'); no.type = 'button'; no.textContent = 'Not me';
+          no.addEventListener('click', function(){ youPost('/not', { file: p.file }); });
+          fig.appendChild(img); fig.appendChild(no); $('your-photos').appendChild(fig);
+        });
+        if (location.hash === '#you' && !window.__boundScrolled) { window.__boundScrolled = true; $('you').scrollIntoView(); }
+      }
+      function loadYou(){
+        fetch(base + '/you', { headers: headers() }).then(function(r){ return r.ok ? r.json() : null; }).then(function(y){ if (y) renderYou(y); }).catch(function(){});
+      }
+      function youPost(path, body){
+        fetch(base + '/you' + path, { method:'POST', headers: Object.assign({ 'Content-Type':'application/json' }, headers()), body: JSON.stringify(body) })
+          .then(function(r){ return r.ok ? r.json() : null; }).then(function(y){ if (y) renderYou(y); }).catch(function(){});
+      }
+      $('more-faces').addEventListener('click', function(){ allFaces = true; if (lastYou) renderYou(lastYou); });
+      $('save-yours').addEventListener('click', function(){
+        var button = $('save-yours'); button.disabled = true; button.textContent = 'Getting your photos\\u2026';
+        fetch(base + '/you.zip', { headers: headers() }).then(function(r){ if (!r.ok) throw r; return r.blob(); }).then(function(blob){
+          var a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = 'Photos of ' + (me && me.name || 'you') + '.zip';
+          document.body.appendChild(a); a.click(); a.remove();
+          setTimeout(function(){ URL.revokeObjectURL(a.href); }, 10000);
+        }).catch(function(){ alert('Couldn\\u2019t get your photos. Try again in a moment.'); }).then(function(){ button.disabled = false; button.textContent = 'Save your photos'; });
       });
       $('remove').addEventListener('click', function(){
         if (!confirm('Remove all the photos you added? They won\\u2019t be in the book.')) return;

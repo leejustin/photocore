@@ -118,7 +118,7 @@ enum MailTemplates {
         if yours > 0 {
             text += "\n\(yours == 1 ? "One of your photos made it" : "\(yours) of your photos made it") in, with your name under \(yours == 1 ? "it" : "them").\n"
         }
-        if let youURL { text += "\nPhotos of you from everyone: \(youURL)\n" }
+        if let youURL { text += "\nFind the photos you're in, from everyone, and save them: \(youURL)\n" }
         text += signature(unsubscribe)
         return Mail(to: to, subject: "The book of \(title) is ready", text: text, unsubscribe: unsubscribe, kind: "ready")
     }

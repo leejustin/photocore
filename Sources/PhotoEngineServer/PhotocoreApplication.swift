@@ -33,6 +33,7 @@ public enum PhotocoreApplication {
         let trips = TripStore(root: tripsRoot)
         let address = PublicAddress(configuration.publicURL)
         let mailer = Mailers.make(configuration, outbox: tripsRoot.appendingPathComponent("outbox", isDirectory: true))
+        let embedder = FaceIndexer.defaultEmbedder()
         let printing = PrintPartners.make(configuration).map { PrintFulfillment(partner: $0, trips: trips, mailer: mailer, address: address) }
         let lifecycle = BookLifecycle(trips: trips, mailer: mailer, address: address, printing: printing)
         registerTripRoutes(
@@ -43,8 +44,10 @@ public enum PhotocoreApplication {
             lifecycle: lifecycle,
             address: address,
             payments: Payments.make(configuration, address: address),
-            printing: printing
+            printing: printing,
+            embedder: embedder
         )
+        registerYouRoutes(router, trips: trips, embedder: embedder)
         return Application(
             router: router,
             configuration: .init(address: .hostname("127.0.0.1", port: configuration.port), serverName: "Photocore"),

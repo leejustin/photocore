@@ -81,6 +81,11 @@ struct Contributor: Codable, Sendable {
     /// Their one-click unsubscribe token (`<trip id>.<secret>`).
     var mailToken: String?
     var unsubscribed: Bool?
+    /// Embeddings of the faces they tapped as theirs, so the taps survive a
+    /// refinish. Only used inside this book.
+    var tappedFaces: [Data]?
+    /// Book photo file names they said they're not in.
+    var notMe: [String]?
 }
 
 /// Someone to email about a book.
@@ -528,11 +533,23 @@ actor TripStore {
 
     func allRecords() -> [TripRecord] { Array(records.values) }
 
+    // MARK: Photos of you
+
+    func facesFolder(_ id: String) -> URL { folder(id).appendingPathComponent("faces", isDirectory: true) }
+
+    func changeContributor(_ id: String, _ person: String, _ change: (inout Contributor) -> Void) throws -> Contributor? {
+        var list = contributors(id)
+        guard let index = list.firstIndex(where: { $0.id == person }) else { return nil }
+        change(&list[index])
+        try saveContributors(id, list)
+        return list[index]
+    }
+
     /// Deletes an offline book's photos, uploads, notes and friends' details,
     /// keeping only the trip record so its links say what happened.
     func purge(_ id: String, now: Date = Date()) throws {
         let fm = FileManager.default
-        for name in ["owner", "guests", "book", "contributors", "work", "offers"] {
+        for name in ["owner", "guests", "book", "contributors", "work", "offers", "faces"] {
             try? fm.removeItem(at: folder(id).appendingPathComponent(name, isDirectory: true))
         }
         for name in ["guest.json", "contributors.json"] {
