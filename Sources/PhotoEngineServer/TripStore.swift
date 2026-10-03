@@ -41,14 +41,15 @@ struct TripRecord: Codable, Sendable {
     func isHosted(at date: Date = Date()) -> Bool { hostedUntil.map { date < $0 } ?? true }
 }
 
-/// Which purchases and free books have been spent, so a pass covers one book,
-/// Plus covers twelve a year and each phone gets one free book.
+/// Which purchases have been spent, so a pass covers one book and Yearly
+/// covers twelve a year.
 struct EntitlementLedger: Codable, Sendable {
     /// Pass transaction ID to the trip it was spent on.
     var passes: [String: String] = [:]
     /// Plus original transaction ID to trip IDs and when each was started.
     var plusBooks: [String: [String: Date]] = [:]
-    /// Install hash to the trip that used the free book.
+    /// Install hash to the trip that used the free book, from when each phone
+    /// had one free book. No longer enforced; kept so old ledgers still load.
     var freeBooks: [String: String] = [:]
 }
 
@@ -81,10 +82,9 @@ enum TripLimits {
     static let notes = 500
     static let noteLength = 500
     static let nameLength = 40
-    /// The most any plan allows; each plan's own limit is lower or equal.
+    /// The most any plan allows; each plan's own limits are lower or equal.
     static let contributors = 100
-    static let photosPerContributor = 150
-    static let contributedPhotos = 1_000
+    static let photosPerContributor = 300
 }
 
 /// Trips live on disk under the worker's output root, one folder each:
@@ -143,7 +143,7 @@ actor TripStore {
             guard let expires = transaction.expires, expires > now else { throw APIError.paymentRequired(StoreKitError.expired.description) }
             var books = ledger.plusBooks[transaction.originalTransactionId] ?? [:]
             if books[id] == nil, PlanPolicy.plusBooksUsed(Array(books.values), now: now) >= PlanPolicy.plusBooksPerYear {
-                throw APIError.paymentRequired("Plus covers \(PlanPolicy.plusBooksPerYear) books a year, and this year's are used. A Trip Pass covers this one.")
+                throw APIError.paymentRequired("Yearly keeps \(PlanPolicy.plusBooksPerYear) books a year, and this year's are used. A Trip Pass keeps this one.")
             }
             books[id] = books[id] ?? now
             ledger.plusBooks[transaction.originalTransactionId] = books
@@ -165,32 +165,14 @@ actor TripStore {
         if let finished = record.finishedAt {
             record.hostedUntil = PlanPolicy.hostedUntil(plan: product.plan, firstFinished: finished, subscriptionExpires: record.subscriptionExpires)
         }
-        // A free book that becomes paid gives the phone its free book back.
-        if let hash = record.installHash, ledger.freeBooks[hash] == id { ledger.freeBooks[hash] = nil }
         try saveLedger()
         try save(record)
         return record
     }
 
-    /// Whether this trip's phone can still make its free book with this trip.
-    func freeBookAvailable(_ record: TripRecord) -> Bool {
-        guard let hash = record.installHash else { return false }
-        return ledger.freeBooks[hash].map { $0 == record.id } ?? true
-    }
-
-    /// Spends the phone's free book on this trip, or refuses if it went elsewhere.
-    func claimFreeBook(_ id: String) throws {
-        guard let record = records[id] else { throw APIError.notFound("No trip \(id)") }
-        guard record.currentPlan == .free else { return }
-        guard let hash = record.installHash else {
-            throw APIError.paymentRequired("Update the app to make your free book.")
-        }
-        if let used = ledger.freeBooks[hash], used != id {
-            throw APIError.paymentRequired("Your free book is already made. Plus or a Trip Pass covers this one.")
-        }
-        ledger.freeBooks[hash] = id
-        try saveLedger()
-    }
+    /// Every book is free to make, so a trip can always be finished on the
+    /// free plan. Kept for apps that still read the field.
+    func freeBookAvailable(_ record: TripRecord) -> Bool { true }
 
     func notePrintInterest(_ id: String) throws -> Int {
         guard var record = records[id] else { return 0 }
@@ -291,13 +273,13 @@ actor TripStore {
         contributors(id).reduce(0) { $0 + photoCount(contributorFolder(id, $1.id)) }
     }
 
-    /// Stores one contributor photo, within that person's and the trip's limits.
+    /// Stores one contributor photo, within that person's limit on this book's plan.
     func store(photo data: Data, name: String, id: String, contributor: Contributor) throws -> URL {
         let folder = contributorFolder(id, contributor.id)
-        guard photoCount(folder) < TripLimits.photosPerContributor else {
-            throw APIError.conflict("You've added as many photos as one person can (\(TripLimits.photosPerContributor)).")
+        let limit = min(records[id]?.limits.photosPerFriend ?? TripLimits.photosPerContributor, TripLimits.photosPerContributor)
+        guard photoCount(folder) < limit else {
+            throw APIError.conflict("You've added as many photos as one person can (\(limit)).")
         }
-        guard contributedCount(id) < TripLimits.contributedPhotos else { throw APIError.conflict("This trip has all the photos it can take.") }
         guard Self.isImage(data) else { throw APIError.invalid("Add JPEG or HEIC photos.") }
         let safe = String(name.filter { $0.isLetter || $0.isNumber || $0 == "-" || $0 == "_" }.prefix(48))
         let ext = data.starts(with: [0xFF, 0xD8]) ? "jpg" : "heic"

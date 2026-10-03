@@ -1,8 +1,6 @@
 {
   "identifier" : "6E0F2A51",
-  "nonRenewingSubscriptions" : [
-
-  ],
+  "nonRenewingSubscriptions" : [],
   "products" : [
     {
       "displayPrice" : "4.99",
@@ -10,7 +8,7 @@
       "internalID" : "6740000001",
       "localizations" : [
         {
-          "description" : "One book with everything Plus gives it, kept for good.",
+          "description" : "Keeps one book for good, with both styles, editing and everyone's full-size photos.",
           "displayName" : "Trip Pass",
           "locale" : "en_US"
         }
@@ -20,12 +18,12 @@
       "type" : "Consumable"
     },
     {
-      "displayPrice" : "29.00",
+      "displayPrice" : "39.00",
       "familyShareable" : false,
       "internalID" : "6740000002",
       "localizations" : [
         {
-          "description" : "One book for a wedding or big party, up to 100 guests, kept for good.",
+          "description" : "One book for a wedding or big party: up to 100 friends, kept for good.",
           "displayName" : "Event Pass",
           "locale" : "en_US"
         }
@@ -41,18 +39,12 @@
   "subscriptionGroups" : [
     {
       "id" : "21500001",
-      "localizations" : [
-
-      ],
-      "name" : "Photocore Plus",
+      "localizations" : [],
+      "name" : "Bound Yearly",
       "subscriptions" : [
         {
-          "adHocOffers" : [
-
-          ],
-          "codeOffers" : [
-
-          ],
+          "adHocOffers" : [],
+          "codeOffers" : [],
           "displayPrice" : "24.99",
           "familyShareable" : true,
           "groupNumber" : 1,
@@ -60,47 +52,17 @@
           "introductoryOffer" : null,
           "localizations" : [
             {
-              "description" : "Up to 12 books a year, 25 friends each, both styles, no footer.",
-              "displayName" : "Plus, yearly",
+              "description" : "Every book you make is kept, up to 12 a year.",
+              "displayName" : "Bound Yearly",
               "locale" : "en_US"
             }
           ],
           "productID" : "com.photocore.trip.plus.yearly",
           "recurringSubscriptionPeriod" : "P1Y",
-          "referenceName" : "Plus yearly",
+          "referenceName" : "Bound Yearly",
           "subscriptionGroupID" : "21500001",
           "type" : "RecurringSubscription",
-          "winbackOffers" : [
-
-          ]
-        },
-        {
-          "adHocOffers" : [
-
-          ],
-          "codeOffers" : [
-
-          ],
-          "displayPrice" : "2.99",
-          "familyShareable" : true,
-          "groupNumber" : 2,
-          "internalID" : "6740000004",
-          "introductoryOffer" : null,
-          "localizations" : [
-            {
-              "description" : "Up to 12 books a year, 25 friends each, both styles, no footer.",
-              "displayName" : "Plus, monthly",
-              "locale" : "en_US"
-            }
-          ],
-          "productID" : "com.photocore.trip.plus.monthly",
-          "recurringSubscriptionPeriod" : "P1M",
-          "referenceName" : "Plus monthly",
-          "subscriptionGroupID" : "21500001",
-          "type" : "RecurringSubscription",
-          "winbackOffers" : [
-
-          ]
+          "winbackOffers" : []
         }
       ]
     }

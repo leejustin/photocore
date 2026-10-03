@@ -294,54 +294,52 @@ struct ServerChecks {
         try expect(unknown.status == 400, "an unknown product returned \(unknown.status)")
         let xcode = try await apply(try TestStore.jws(product: "com.photocore.trip.pass.trip", transaction: "z", environment: "Xcode"), to: trip)
         try expect(xcode.status == 400, "an Xcode test purchase was accepted on a production setup: \(xcode.status)")
-        let expired = try await apply(try TestStore.jws(product: "com.photocore.trip.plus.monthly", transaction: "old", original: "old-original", expires: Date().addingTimeInterval(-86_400)), to: trip)
+        let monthly = try await apply(try TestStore.jws(product: "com.photocore.trip.plus.monthly", transaction: "monthly", original: "monthly", expires: Date().addingTimeInterval(86_400)), to: trip)
+        try expect(monthly.status == 400, "the retired monthly plan was accepted: \(monthly.status)")
+        let expired = try await apply(try TestStore.jws(product: "com.photocore.trip.plus.yearly", transaction: "old", original: "old-original", expires: Date().addingTimeInterval(-86_400)), to: trip)
         try expect(expired.status == 402, "an expired subscription returned \(expired.status)")
         let reused = try await apply(try TestStore.jws(product: "com.photocore.trip.pass.trip", transaction: "pass-1"), to: trip)
         try expect(reused.status == 409, "a pass spent on another book returned \(reused.status)")
 
-        // One free book per phone: the first finishes, the second is asked to upgrade.
+        // Every book is free to make: one phone finishes two free books.
         let bytes = try Data(contentsOf: source.appendingPathComponent(files[0]))
         let freeOne = try await newTrip("Free one", phone: "check-phone-4")
         let freeTwo = try await newTrip("Free two", phone: "check-phone-4")
         for book in [freeOne, freeTwo] {
             let up = try await raw(base.appendingPathComponent("v2/trips/\(book.id)/photos/one"), method: "PUT", token: token, body: bytes)
             try expect(up.status == 201, "upload returned \(up.status)")
+            let finish = try await data(base.appendingPathComponent("v2/trips/\(book.id)/finish"), method: "POST", token: token)
+            try expect(finish.status == 202, "a free book returned \(finish.status) \(text(finish.body))")
+            let job = try await wait(base: base, token: token, id: try decode(JobWire.self, from: finish.body).id)
+            try expect(job.state == "succeeded", "the free book ended \(job.state)")
         }
-        let firstFree = try await data(base.appendingPathComponent("v2/trips/\(freeOne.id)/finish"), method: "POST", token: token)
-        try expect(firstFree.status == 202, "a phone's first free book returned \(firstFree.status)")
-        let firstJob = try await wait(base: base, token: token, id: try decode(JobWire.self, from: firstFree.body).id)
-        try expect(firstJob.state == "succeeded", "the free book ended \(firstJob.state)")
-        let secondFree = try await data(base.appendingPathComponent("v2/trips/\(freeTwo.id)/finish"), method: "POST", token: token)
-        try expect(secondFree.status == 402, "a second free book on one phone returned \(secondFree.status)")
         let status = try decode(PlanStatusWire.self, from: try await data(base.appendingPathComponent("v2/trips/\(freeTwo.id)"), token: token).body)
-        try expect(!status.freeBookAvailable && status.plan == "free", "the trip claims a free book is available: \(status)")
-        let refinish = try await data(base.appendingPathComponent("v2/trips/\(freeOne.id)/finish"), method: "POST", token: token)
-        try expect(refinish.status == 202, "refinishing the free book itself returned \(refinish.status)")
-        _ = try await wait(base: base, token: token, id: try decode(JobWire.self, from: refinish.body).id)
+        try expect(status.freeBookAvailable && status.plan == "free", "a second free book wasn't allowed: \(status)")
+        try expect(status.hostedUntil.map { abs($0.timeIntervalSinceNow - 90 * 86_400) < 3_600 } == true, "a free book isn't up for 90 days: \(String(describing: status.hostedUntil))")
 
-        // A new phone's free book takes five friends, not six.
+        // A free book takes fifteen friends, not sixteen.
         let other = try await newTrip("Free trip", phone: "check-phone-2")
         guard let invite = other.invitePath else { throw CheckFailure("no invite") }
-        for i in 1...5 {
+        for i in 1...15 {
             let joined = try await send(base.appendingPathComponent(invite + "/join"), method: "POST", json: ["name": "Friend \(i)"], headers: [:])
             try expect(joined.status == 201, "friend \(i) joining returned \(joined.status)")
         }
-        let sixth = try await send(base.appendingPathComponent(invite + "/join"), method: "POST", json: ["name": "Friend 6"], headers: [:])
-        try expect(sixth.status == 409, "a sixth friend on a free book returned \(sixth.status)")
+        let sixteenth = try await send(base.appendingPathComponent(invite + "/join"), method: "POST", json: ["name": "Friend 16"], headers: [:])
+        try expect(sixteenth.status == 409, "a sixteenth friend on a free book returned \(sixteenth.status)")
         let eventPass = try await apply(try TestStore.jws(product: "com.photocore.trip.pass.event", transaction: "event-1"), to: other)
         try expect(eventPass.status == 200, "an Event Pass returned \(eventPass.status)")
-        let roomNow = try await send(base.appendingPathComponent(invite + "/join"), method: "POST", json: ["name": "Friend 6"], headers: [:])
-        try expect(roomNow.status == 201, "a sixth friend after the Event Pass returned \(roomNow.status)")
+        let roomNow = try await send(base.appendingPathComponent(invite + "/join"), method: "POST", json: ["name": "Friend 16"], headers: [:])
+        try expect(roomNow.status == 201, "a sixteenth friend after the Event Pass returned \(roomNow.status)")
 
-        // Plus covers twelve books a year: one was used by the first trip.
+        // Yearly covers twelve books a year: one was used by the first trip.
         let subscription = try TestStore.jws(product: "com.photocore.trip.plus.yearly", transaction: "plus-2", original: "plus-original", expires: Date().addingTimeInterval(30 * 86_400))
         for i in 2...12 {
             let book = try await newTrip("Plus book \(i)", phone: "check-phone-3")
             let applied = try await apply(subscription, to: book)
-            try expect(applied.status == 200, "Plus book \(i) returned \(applied.status) \(text(applied.body))")
+            try expect(applied.status == 200, "Yearly book \(i) returned \(applied.status) \(text(applied.body))")
         }
         let thirteenth = try await apply(subscription, to: try await newTrip("Plus book 13", phone: "check-phone-3"))
-        try expect(thirteenth.status == 402, "a thirteenth Plus book in a year returned \(thirteenth.status)")
+        try expect(thirteenth.status == 402, "a thirteenth Yearly book in a year returned \(thirteenth.status)")
 
         // Print: the owner's PDF and visitors' interest.
         let printed = try await data(base.appendingPathComponent("v2/trips/\(Self.firstTripID)/print.pdf"), token: token)
@@ -350,7 +348,7 @@ struct ServerChecks {
         try expect(want.status == 200, "print interest returned \(want.status)")
         let counted = try decode(PlanStatusWire.self, from: try await data(base.appendingPathComponent("v2/trips/\(Self.firstTripID)"), token: token).body)
         try expect(counted.printInterest == 1, "print interest counted \(counted.printInterest)")
-        print("✓ plans: forged, foreign, unknown, Xcode and expired purchases refused; passes spent once; one free book per phone; five friends free; Event Pass room; twelve Plus books a year; print PDF and interest")
+        print("✓ plans: forged, foreign, unknown, retired, Xcode and expired purchases refused; passes spent once; every book free for 90 days; fifteen friends free; Event Pass room; twelve Yearly books a year; print PDF and interest")
     }
 
     nonisolated(unsafe) static var firstTripID = ""
@@ -479,6 +477,7 @@ private struct PlanStatusWire: Decodable {
     var plan: String
     var freeBookAvailable: Bool
     var printInterest: Int
+    var hostedUntil: Date?
 }
 
 private enum BookRendererFooter {

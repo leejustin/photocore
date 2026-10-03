@@ -4,25 +4,56 @@ import PhotoEngineCore
 import PhotoEngineWorkflow
 import Testing
 
-/// The pricing rules: what each plan allows, how long books stay up, Plus's
-/// yearly book count, what a free book page shows, and the print PDF.
+/// The pricing rules: what each plan allows, how long books stay up, Yearly's
+/// book count, reminders, what a free book page shows, and the print PDF.
 struct PlansTests {
     @Test func eachPlanAllowsWhatThePricingSays() {
         let free = Plan.free.limits
-        #expect(free.friends == 5 && free.branded && !free.editing && !free.instagram)
+        #expect(free.friends == 15 && free.photosPerFriend == 150 && free.branded && !free.editing && !free.instagram && !free.download)
         #expect(free.allows(.book) && !free.allows(.snapshot))
-        let plus = Plan.plus.limits
-        #expect(plus.friends == 25 && plus.friendPhotos == 500 && !plus.branded && plus.editing && plus.instagram && plus.allows(.snapshot))
-        #expect(Plan.tripPass.limits == plus)
-        #expect(Plan.eventPass.limits.friends == 100)
-        #expect(Plan.eventPass.rank > Plan.plus.rank && Plan.plus.rank > Plan.free.rank)
+        let pass = Plan.tripPass.limits
+        #expect(pass.friends == 25 && !pass.branded && pass.editing && pass.instagram && pass.download && pass.allows(.snapshot))
+        #expect(Plan.plus.limits == pass && Plan.plus.displayName == "Yearly")
+        let event = Plan.eventPass.limits
+        #expect(event.friends == 100 && event.photosPerFriend == 300 && event.friendPhotos == 30_000)
+        #expect(Plan.eventPass.rank > Plan.tripPass.rank && Plan.tripPass.rank > Plan.free.rank)
         #expect(PlanProduct.allCases.filter(\.isPass).map(\.plan) == [.tripPass, .eventPass])
+        #expect(WebPrice.cents(for: .tripPass) == 499 && WebPrice.cents(for: .eventPass) == 3_900 && WebPrice.cents(for: .free) == nil)
+    }
+
+    @Test func limitsReadWhatOlderServersSent() throws {
+        let old = #"{"friends":25,"friendPhotos":500,"styles":["book","snapshot"],"branded":false,"instagram":true,"editing":true}"#
+        let limits = try JSONDecoder().decode(PlanLimits.self, from: Data(old.utf8))
+        #expect(limits.photosPerFriend == 20 && limits.download)
+        let round = try JSONDecoder().decode(PlanLimits.self, from: JSONEncoder().encode(Plan.free.limits))
+        #expect(round == Plan.free.limits)
+    }
+
+    @Test func remindersComeAWeekAndADayBefore() {
+        let end = Date(timeIntervalSince1970: 1_800_000_000)
+        let day: TimeInterval = 86_400
+        #expect(PlanPolicy.reminderDue(hostedUntil: end, sent: [], now: end.addingTimeInterval(-20 * day)) == nil)
+        #expect(PlanPolicy.reminderDue(hostedUntil: end, sent: [], now: end.addingTimeInterval(-6 * day)) == 0)
+        #expect(PlanPolicy.reminderDue(hostedUntil: end, sent: [0], now: end.addingTimeInterval(-6 * day)) == nil)
+        #expect(PlanPolicy.reminderDue(hostedUntil: end, sent: [0], now: end.addingTimeInterval(-0.5 * day)) == 1)
+        // A server that was down all week sends only the last one.
+        #expect(PlanPolicy.reminderDue(hostedUntil: end, sent: [], now: end.addingTimeInterval(-0.5 * day)) == 1)
+        #expect(PlanPolicy.reminderDue(hostedUntil: end, sent: [], now: end.addingTimeInterval(day)) == nil)
+        #expect(PlanPolicy.daysLeft(until: end, now: end.addingTimeInterval(-6.2 * day)) == 7)
+    }
+
+    @Test func yearlyIsOfferedAfterTwoPassesInAYear() {
+        let now = Date(timeIntervalSince1970: 1_800_000_000)
+        let day: TimeInterval = 86_400
+        #expect(!PlanPolicy.offersYearly(passPurchases: [now.addingTimeInterval(-10 * day)], now: now))
+        #expect(PlanPolicy.offersYearly(passPurchases: [now.addingTimeInterval(-10 * day), now.addingTimeInterval(-90 * day)], now: now))
+        #expect(!PlanPolicy.offersYearly(passPurchases: [now.addingTimeInterval(-10 * day), now.addingTimeInterval(-400 * day)], now: now))
     }
 
     @Test func booksStayUpForTheRightTime() {
         let finished = Date(timeIntervalSince1970: 1_800_000_000)
         let year: TimeInterval = 365 * 24 * 3600
-        #expect(PlanPolicy.hostedUntil(plan: .free, firstFinished: finished, subscriptionExpires: nil) == finished.addingTimeInterval(year))
+        #expect(PlanPolicy.hostedUntil(plan: .free, firstFinished: finished, subscriptionExpires: nil) == finished.addingTimeInterval(90 * 24 * 3600))
         let renews = finished.addingTimeInterval(40 * 24 * 3600)
         #expect(PlanPolicy.hostedUntil(plan: .plus, firstFinished: finished, subscriptionExpires: renews) == renews.addingTimeInterval(year))
         #expect(PlanPolicy.hostedUntil(plan: .tripPass, firstFinished: finished, subscriptionExpires: nil) == nil)

@@ -84,7 +84,7 @@ struct TripDTO: Encodable, Sendable {
     var plan: Plan
     var limits: PlanLimits
     var hostedUntil: Date?
-    /// Whether this trip can be the phone's free book.
+    /// Always true: every book is free to make. Kept for older apps.
     var freeBookAvailable: Bool
     var printInterest: Int
 }
@@ -228,7 +228,7 @@ func registerTripRoutes(_ router: Router<BasicRequestContext>, env: ServerEnviro
         guard await trips.record(id: tid) != nil else { throw APIError.notFound("No trip \(tid)") }
         let body = try await request.decode(as: CreateTripBody.self, context: context)
         if let theme = body.theme.flatMap({ BookTheme(name: $0) }), let record = await trips.record(id: tid), !record.limits.allows(theme) {
-            throw APIError.paymentRequired("\(theme.displayName) is part of Plus and the passes.")
+            throw APIError.paymentRequired("\(theme.displayName) comes with a Trip Pass.")
         }
         try await trips.update(tid) { record in
             if let title = body.title { record.title = String(title.prefix(120)) }
@@ -275,7 +275,6 @@ func registerTripRoutes(_ router: Router<BasicRequestContext>, env: ServerEnviro
             throw APIError.precondition("Add some photos before finishing.")
         }
         try ensureHosted(record)
-        if record.currentPlan == .free { try await trips.claimFreeBook(tid) }
         let limits = record.limits
         let theme = limits.allows(record.theme) ? record.theme : .book
         var contributors = [TripFinisher.Contributor(name: nil, folder: await trips.guestFolder(tid))]
@@ -374,7 +373,7 @@ func registerTripRoutes(_ router: Router<BasicRequestContext>, env: ServerEnviro
         guard let record = await trips.record(slug: slug) else { throw APIError.notFound("No book.") }
         let bearer = request.headers[.authorization].flatMap { $0.hasPrefix("Bearer ") ? String($0.dropFirst(7)) : nil }
         guard await trips.isOwner(record, token: bearer) else { throw APIError.unauthorized("Only the book's owner can edit it.") }
-        guard record.limits.editing else { throw APIError.paymentRequired("Editing the words is part of Plus and the passes.") }
+        guard record.limits.editing else { throw APIError.paymentRequired("Editing the words comes with a Trip Pass.") }
         let body = try await request.decode(as: EditBody.self, context: context)
         do {
             try TripFinisher.applyEdit(key: body.key, value: body.value, bookFolder: await trips.bookFolder(record.id), options: TripPaths.options(record, siteURL: siteURL))
@@ -480,9 +479,6 @@ func registerTripRoutes(_ router: Router<BasicRequestContext>, env: ServerEnviro
         guard record.inviteOpen else { throw APIError.forbidden("This trip isn't taking photos any more.") }
         guard let person = await trips.contributor(record.id, token: contributorToken(request)) else {
             throw APIError.unauthorized("Join the trip before adding photos.")
-        }
-        guard await trips.contributedCount(record.id) < record.limits.friendPhotos else {
-            throw APIError.conflict("This book has all the photos it can take for now.")
         }
         let buffer = try await request.body.collect(upTo: TripLimits.uploadBytes)
         let url = try await trips.store(photo: Data(buffer: buffer), name: name, id: record.id, contributor: person)

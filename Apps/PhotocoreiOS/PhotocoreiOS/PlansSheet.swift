@@ -28,7 +28,6 @@ struct PlansSheet: View {
                     section("Plus", "Every trip, all year") {
                         features(["Up to 12 books a year", "25 friends and 500 of their photos per book", "Snapshots style, the Instagram set and editing", "No Photocore footer"])
                         ProductView(id: PlanProduct.plusYearly.rawValue) { icon("sparkles") }
-                        ProductView(id: PlanProduct.plusMonthly.rawValue) { icon("calendar") }
                     }
                     section("Just this trip", "Pay once, keep it for good") {
                         ProductView(id: PlanProduct.tripPass.rawValue) { icon("book.closed") }
