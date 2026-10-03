@@ -3,11 +3,14 @@ info:
   title: Photocore
   version: "2.0.0"
   description: |
-    Local curation API. Bind is 127.0.0.1 only. Every route except GET /healthz
-    the shared-book routes under /b/ and the invite routes under /j/ requires
-    Authorization: Bearer with the server token. Book edits need the book's own
-    owner token instead; invite uploads need the person's own contributor token
-    in X-Photocore-Contributor. Clients never choose an output path.
+    Local curation API and the server behind Bound, the consumer app. Bind is
+    127.0.0.1 only. Every route requires Authorization: Bearer with the server
+    token except GET /healthz, GET /new and the routes under /b/ (books), /j/
+    (invites), /u/ (unsubscribe), /p/ (print files), /w/ (web owners),
+    /checkout/ (test checkout), /stripe/ (signed webhook) and /.well-known/.
+    Book edits and /w/trips need the book's own owner token; invite routes
+    that act for a person need their contributor token in
+    X-Photocore-Contributor. Clients never choose an output path.
 servers:
   - url: http://127.0.0.1:8787
 paths:
@@ -316,6 +319,186 @@ paths:
       responses:
         "200":
           description: "{removed}"
+  /v2/trips/{tid}/device:
+    post:
+      summary: Register the owner's iPhone (APNs token) for "Day 2 is in"
+      responses:
+        "200": { description: Registered }
+        "400": { description: Not a device token }
+  /v2/metrics/growth:
+    get:
+      summary: '"Make one for your trip" taps by month and platform'
+      responses:
+        "200": { description: Counts }
+  /v2/admin/lifecycle:
+    post:
+      summary: Run reminders, purges, the nightly refinish and print follow-up now
+      responses:
+        "200": { description: What ran }
+  /v2/admin/orders:
+    get:
+      summary: Every print order
+      responses:
+        "200": { description: Orders }
+  /b/{slug}/make:
+    get:
+      summary: '"Make one for your trip": counts the platform, redirects to the App Store or /new'
+      security: []
+      responses:
+        "302": { description: Redirect }
+  /b/{slug}/keep:
+    post:
+      summary: Start a checkout to keep a free book for good (anyone with the link)
+      security: []
+      responses:
+        "200": { description: "{url, id} of the checkout" }
+        "409": { description: Already kept }
+        "410": { description: Photos already deleted }
+        "503": { description: Payments aren't set up }
+  /b/{slug}/print:
+    post:
+      summary: Start a checkout for a printed copy (softcover or hardcover), shipped
+      security: []
+      responses:
+        "200": { description: "{url, id} of the checkout" }
+  /b/{slug}/thanks:
+    get:
+      summary: Thank-you page after a checkout
+      security: []
+      responses:
+        "200": { description: Page }
+  /b/{slug}/photos.zip:
+    get:
+      summary: Everyone's full-size photos in a kept book
+      security: []
+      responses:
+        "200": { description: Zip }
+        "402": { description: Comes with keeping the book }
+  /j/{code}/email:
+    post:
+      summary: Add, change or clear the person's email
+      security: []
+      responses:
+        "200": { description: Saved }
+  /j/{code}/offers:
+    post:
+      summary: The App Clip's offers (feature print, time, score per pick); answers with the originals wanted
+      security: []
+      responses:
+        "200": { description: "{wanted, uploaded, offered}" }
+  /j/{code}/wanted:
+    get:
+      summary: Originals the book still wants from this person
+      security: []
+      responses:
+        "200": { description: "{wanted, uploaded, offered}" }
+  /j/{code}/you:
+    get:
+      summary: Photos of you, faces to tap and the photos found
+      security: []
+      responses:
+        "200": { description: Faces, taps and photos }
+    post:
+      summary: Tap or untap a face as yours
+      security: []
+      responses:
+        "200": { description: Updated }
+  /j/{code}/you/not:
+    post:
+      summary: Say you're not in a photo, or undo it
+      security: []
+      responses:
+        "200": { description: Updated }
+  /j/{code}/you.zip:
+    get:
+      summary: The book's photos of you
+      security: []
+      responses:
+        "200": { description: Zip }
+  /j/{code}/faces/{file}:
+    get:
+      summary: One face crop for the picker
+      security: []
+      responses:
+        "200": { description: JPEG }
+  /u/{token}:
+    get:
+      summary: Unsubscribe page
+      security: []
+      responses:
+        "200": { description: Page }
+    post:
+      summary: Stop emails about this book (one click)
+      security: []
+      responses:
+        "200": { description: Done }
+  /p/{token}/{name}:
+    get:
+      summary: Interior or cover PDF for the printer
+      security: []
+      responses:
+        "200": { description: PDF }
+  /stripe/webhook:
+    post:
+      summary: Stripe's signed webhook; paid checkouts keep books, add Event Passes or order prints
+      security: []
+      responses:
+        "200": { description: Received }
+        "400": { description: Bad signature }
+  /checkout/dev/{id}:
+    get:
+      summary: The no-charge test checkout (PHOTOCORE_DEV_CHECKOUT=1)
+      security: []
+      responses:
+        "200": { description: Page }
+  /new:
+    get:
+      summary: Start a book on the web
+      security: []
+      responses:
+        "200": { description: Page }
+  /w/trips:
+    post:
+      summary: Create a web book; returns the owner token once. Ten an hour per address
+      security: []
+      responses:
+        "201": { description: "{id, ownerToken, ownerPath}" }
+  /w/{id}:
+    get:
+      summary: The web owner's private page
+      security: []
+      responses:
+        "200": { description: Page }
+  /w/trips/{id}:
+    get:
+      summary: Web book status (owner token)
+      security: []
+      responses:
+        "200": { description: Status }
+  /w/trips/{id}/photos/{name}:
+    put:
+      summary: Add an owner photo (owner token); culled on the server at finish
+      security: []
+      responses:
+        "201": { description: Stored }
+  /w/trips/{id}/finish:
+    post:
+      summary: Make the book (owner token)
+      security: []
+      responses:
+        "202": { description: Queued }
+  /w/trips/{id}/event:
+    post:
+      summary: Checkout for the Event Pass (owner token)
+      security: []
+      responses:
+        "200": { description: "{url, id}" }
+  /.well-known/apple-app-site-association:
+    get:
+      summary: App Clip and universal links (when PHOTOCORE_APPLE_TEAM_ID is set)
+      security: []
+      responses:
+        "200": { description: JSON }
 components:
   parameters:
     sid:

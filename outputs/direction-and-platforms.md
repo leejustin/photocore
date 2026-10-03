@@ -1,6 +1,6 @@
-# Photocore direction: group culling, local-first, and Android
+# Bound direction: group picking, local-first, and Android
 
-Written 2026-10-03. Companion to [`product-strategy.md`](./product-strategy.md) (the story and the market) and [`business-model.md`](./business-model.md) (who pays, for what, and why). This document records the product reasoning behind the group book, how group culling stays local, what makes it worth joining, how we position against Google Photos, and how Android users are served without an Android engine.
+Written 2026-10-03; everything in section 6 except the real trips and the native Android app was built the same day (see `consumer-build-plan.md`, chunks 18 to 29). Companion to [`product-strategy.md`](./product-strategy.md) (the story and the market) and [`business-model.md`](./business-model.md) (who pays, for what, and why). This document records the product reasoning behind the group book, how group culling stays local, what makes it worth joining, how we position against Google Photos, and how Android users are served without an Android engine.
 
 ## 1. Culling is the engine, not the product
 
@@ -43,7 +43,9 @@ Owner edits to the book stay as they are: stored apart from generated text on th
 
 Today the invite asks friends to give photos. The strongest single change is to make joining selfish: **add your photos, get everyone's photos of you.** It's the reason a friend actually opens the link, and it's the thing Apple shared albums and Google collaborative Memories don't do across platforms.
 
-Implementation: an optional selfie when a friend joins, matched against faces in the merged keepers on the server, scoped to that one trip and deleted with it. Person identity stays out of the engine (the README is explicit about that); this is a product feature on the server with an explicit opt-in, which is a different thing. "Photos of me" delivery is free, because it drives participation.
+Implementation, as built: after each finish the server keeps an aligned crop and an embedding of every clear face in the book. A friend taps their own face once or twice on the invite page; faces close to their taps, in the same book, are theirs. They can tap more, say "not me", and save all their photos as one zip, free. Nothing is matched against a name or anything outside the book, and it's deleted with the book.
+
+The first plan was a selfie at join. Measured on a real event shoot, Vision feature prints of face crops group a person reliably only within a trip, where clothes, glasses and light match; a selfie taken elsewhere wouldn't match. Tapping a face in the book uses exactly that strength and collects nothing new. A licensed Core ML face-embedding model (`PHOTOCORE_FACE_MODEL`) would find more of each person.
 
 ### Live during the trip, not only after
 
@@ -98,12 +100,12 @@ These roughly cancel. The server is the source of truth for `Plan` and `PlanLimi
 
 ## 6. Order of work
 
-1. **Run the 5 to 10 real group trips** the strategy doc calls for, before building anything below. If friends don't upload, none of this matters.
-2. **Level 1 browser pre-filter** on the join page. A weekend.
-3. **Analysis-first protocol with the App Clip.** The piece that makes "local" and "group" true at once, mostly plumbing on data the engine already stores.
-4. **"Photos of you" on join.** Measure whether it moves participation.
-5. **Nightly refinish during the trip.**
-6. **Level 2 web owner flow**, when the user-agent log says Android organizers are being lost.
-7. **Level 3 native Android**, only on evidence.
+1. **Run the 5 to 10 real group trips** the strategy doc calls for. Still to do, and now the most important thing: everything below is built and needs real groups to judge it.
+2. **Level 1 browser pre-filter** on the join page. Built.
+3. **Analysis-first protocol with the App Clip.** Built; verified end to end in the simulator. Needs a domain, an Apple team and an App Store record to run from a real link.
+4. **"Photos of you."** Built, by tapping your face rather than a selfie (see section 3). Measure whether it moves participation.
+5. **Nightly refinish during the trip.** Built, with emails and APNs pushes.
+6. **Level 2 web owner flow.** Built at `/new`, ahead of the user-agent evidence, because "Make one for your trip" needed somewhere to send Android visitors. The make-one taps are counted by platform (`/v2/metrics/growth`) so the decision below has data.
+7. **Level 3 native Android**, only on evidence. Not built, by design.
 
 Each of 3 through 5 adds server surface. Speed on the book and prints matters more than depth on the protocol.

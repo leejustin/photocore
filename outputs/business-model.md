@@ -1,12 +1,12 @@
-# Photocore business model
+# Bound business model
 
 **Free to make. Pay to keep. Print to own.**
 
-Written 2026-10-02. Replaces the plan table in `product-strategy.md`. Prices are starting points to test, but the shape is the decision.
+Written 2026-10-02, updated 2026-10-03 when it was built and the consumer app was named Bound. Replaces the plan table in `product-strategy.md`. Prices are starting points to test, but the shape is the decision.
 
 ## The one-paragraph model
 
-Culling is free, forever, on the phone, for everyone. Every book is free to make, free for every friend to join from a link, and free to view for 90 days. Then it goes away unless someone keeps it. Anyone in the book, not only the organizer, can keep it for good with one $4.99 purchase, and anyone can order a printed copy. Weddings and large events pay a flat pass up front. A yearly plan exists only for people who keep buying passes, and we never lead with it. Revenue comes from kept books and prints. Growth comes from every free book reaching every person in it.
+Picking is free, forever, on the phone, for everyone. Every book is free to make, free for every friend to join from a link, and free to view for 90 days. Then it goes away unless someone keeps it. Anyone in the book, not only the organizer, can keep it for good with one $4.99 Trip Pass, and anyone can order a printed copy. Weddings and large events pay a flat pass up front. A yearly plan exists only for people who keep buying passes, and we never lead with it. Revenue comes from kept books and prints. Growth comes from every free book reaching every person in it.
 
 ## Why this shape
 
@@ -20,12 +20,14 @@ Culling is free, forever, on the phone, for everyone. Every book is free to make
 
 | | Price | What you get | Who buys |
 |---|---|---|---|
-| **Cull** | Free, forever | Every trip culled on the phone. Album, snapshot cards, highlight reel. Nothing uploaded. | Nobody. This is the habit. |
-| **Book** | Free to make | Invite up to 15 friends by link, 150 photos each. Best shot of each moment across everyone, credits, grounded diary, Book style, "Made with Photocore" footer. Every friend gets the photos they're in. Online 90 days, with reminders at 7 days and 1 day. | Nobody. This is the growth loop. |
-| **Keep** | $4.99 once | The book stays up for good. Both styles, editing, the Instagram set, no footer, and a download of everyone's full-size keepers. | Anyone in the book. |
-| **Event** | $39 once | A wedding or big party. Up to 100 guests, 300 photos each, kept for good from the start, guest "photos of you" delivery, a print-ready PDF. | The couple, the planner, the host. |
-| **Prints** | Per order | Softcover 8 x 8 from $29, hardcover from $49, a Snapshots print pack from $15. Any person in any book can order their own. | Anyone in the book, and their parents. |
-| **Yearly** | $24.99 a year | Every book you make is kept automatically, up to 12 a year. Offered only after a second Keep in 12 months, as "you'd have saved $5." | The 5% who travel a lot. |
+| **Pick** | Free, forever | Every trip picked on the phone. Picks saved to Photos, snapshot cards, highlight reel. Nothing uploaded. | Nobody. This is the habit. |
+| **Book** | Free to make | Invite up to 15 friends by link, 150 photos each. Best shot of each moment across everyone, credits, grounded diary, Book style, "Made free with Bound" footer. Every friend can find and save the photos they're in. Online 90 days, with reminders at 7 days and 1 day. | Nobody. This is the growth loop. |
+| **Keep (Trip Pass)** | $4.99 once | The book stays up for good. Both styles, editing, the Instagram set, no footer, room for 25 friends, and a download of everyone's full-size photos. | Anyone in the book, in the app or on the book page. |
+| **Event Pass** | $39 once | A wedding or big party. Up to 100 friends, 300 photos each, kept for good from the start. | The couple, the planner, the host. |
+| **Prints** | Per order | Softcover 8.5 x 8.5 from $29, hardcover from $49, standard shipping included, printed by Lulu. | Anyone in the book, and their parents. |
+| **Yearly** | $24.99 a year | Every book you make is kept, up to 12 a year. Offered in the app only after two Trip Passes in 12 months. | The 5% who travel a lot. |
+
+"Keep" is the verb on every page; the Trip Pass is what keeps a book. That joins this model with the brand's choice to keep the Trip Pass and Event Pass names. A Snapshots print pack (from $15) was in the first draft; it needs a printer that makes loose prints and is not built.
 
 Friends never pay to add or view. Nobody needs an account to do either. Buying creates an account by email so the purchase survives a lost phone.
 
@@ -34,6 +36,7 @@ Friends never pay to add or view. Nobody needs an account to do either. Buying c
 - **Plus monthly at $2.99.** Monthly subscriptions for burst products churn, confuse the choice, and anchor the price low.
 - **The 5-friend cap on free books.** A 10-person trip that can't make a free book is a lost growth loop and ten lost buyers. The paid moment is keep and print, not size. Weddings are the exception because 100 guests cost real money and have real budgets.
 - **"First book free per phone."** Every book is free to make. The thing that's scarce is permanence.
+- **Size as the main paywall.** Keeping a book adds room for 25 friends instead of 15, but the pitch is keeping and printing.
 - **Features as the paywall.** Styles and the Instagram set come with Keep, but they're not the pitch.
 
 ## Who pays on which platform
@@ -110,10 +113,15 @@ Culling costs nothing because it runs on the phone. A free book costs under a di
 | Does anyone print? | 10% of books, measured by the interest tap until a partner is live | Prints stay a feature, and Keep has to carry revenue. |
 | Does it spread? | 1 new organizer per book | Below 0.5, this is a paid-acquisition business and the prices need to triple. |
 
-## Changes this implies in the code
+## What's built
 
-- `Plan` and `PlanLimits`: Free gains 15 friends and unlimited books; Trip Pass becomes Keep, purchasable by any person token, not only the owner; Plus monthly goes; Event rises to $39 and 300 photos per guest.
-- Book expiry at 90 days with reminder emails at 7 and 1 days, which needs an optional email at join time ("so we can send you the book").
-- Stripe Checkout on `/b/{slug}/keep` and `/b/{slug}/print`, writing to the same ledger as StoreKit.
-- A full-size keepers download for kept books.
-- A print partner API behind the existing `print.pdf` route.
+Built on 2026-10-03 (see `consumer-build-plan.md`, chunks 18 to 29):
+
+- `Plan` and `PlanLimits`: free books take 15 friends with 150 photos each and stay up 90 days; any number of free books; the Trip Pass and Yearly add 25 friends, both styles, editing, the Instagram set and the download; the Event Pass takes 100 friends with 300 photos each; monthly is retired.
+- The lifecycle: reminders at 7 days and 1 day to everyone who gave an email, an offline page that can still be kept for 30 days, then the photos are deleted.
+- Stripe Checkout on `/b/{slug}/keep`, `/b/{slug}/print` and the web owner's Event Pass, with signed webhooks writing to the same ledger as StoreKit.
+- The full-size download for kept books.
+- Lulu behind printed copies, with the interior and cover made from the book.
+- Yearly is offered only after two passes in 12 months, counted on the phone.
+
+Not built: App Store Server Notifications (refunds and renewals), so a Yearly book's hosting is set when it's applied, not when the subscription renews.

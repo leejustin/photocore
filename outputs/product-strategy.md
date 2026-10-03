@@ -2,7 +2,7 @@
 
 **One trip. Everyone's photos. One book.**
 
-Written 2026-10-01. Photocore is the working name.
+Written 2026-10-01. The consumer app is now **Bound** (see [`brand.md`](./brand.md)); Photocore stays the name of the engine, the server and the Mac studio.
 
 ## The story in one paragraph
 
@@ -148,7 +148,7 @@ If friends don't upload, the group angle fails and the free cull becomes the pro
 
 ## Open decisions
 
-- **The name.** "Photocore" sounds like a pro tool. The product is warm and social. A new name should be checked for trademarks before use, as we learned with Polaroid.
+- **The name.** Decided: Bound, with Pressed as the fallback (see `brand.md`). A real trademark search still comes before anything is printed.
 - **The starting prices.** Test offering Plus first against offering the Trip Pass first.
 - **How long friends' originals are kept.** This is a trade between cost and goodwill.
 - **Where weddings fit.** They could stay a later premium tier, or become a second launch market if early demand pulls that way.

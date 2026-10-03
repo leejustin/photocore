@@ -1,26 +1,29 @@
-# Photocore
+# Bound, made with Photocore
 
-**Finish the trip.** Photocore turns a camera roll into a finished trip: the best photos, edited, laid out as a shared online book with a short diary of where you went, plus an Instagram set ready to post.
+**Finish the trip.** Everyone's photos. One book.
 
-- **Free, on the iPhone.** Pick a trip and Photocore culls it on the device, asks about a few close calls, and saves the keepers as a Photos album. Nothing is uploaded or copied.
-- **Paid, hosted.** "Finish the trip" uploads only the keepers to a Photocore server, which edits them, writes the diary and captions, publishes the book, and builds the Instagram pack.
-- **Group books.** The owner sends one invite link. Friends open it in any browser, give a first name and add their photos; no app or account. The finish culls each person's photos on their own, keeps the best shot of each moment across everyone, shares the space round-robin so one prolific friend can't take over, and credits who took each photo. Guests can also leave notes and hearts on the book.
-- **The Mac studio** stays the owner and pro tool, and the same engine runs the server.
+**Bound** is the consumer app: it picks your best photos from each trip on your iPhone, brings in everyone who was there from one link, and turns the pile into one book with a short diary of where you went. **Photocore** is the engine underneath, the CLI, the server binary and the Mac pro studio. See [the brand](./outputs/brand.md), [the business model](./outputs/business-model.md), [direction and platforms](./outputs/direction-and-platforms.md) and [the strategy](./outputs/product-strategy.md).
 
-The engine is one set of Swift packages that runs on the iPhone, the Mac app, the CLI and the server.
+- **Free, on the iPhone.** Pick a trip and Bound picks your best on the phone, asks about a few close calls, and saves your picks to Photos. Nothing is uploaded or copied.
+- **Every book is free to make.** Up to 15 friends with 150 photos each, online for 90 days. Anyone in the book can keep it for good for $4.99 (a Trip Pass), from the app or the book page. The Event Pass ($39) is for weddings and big parties. Yearly is offered only to people who keep a few books a year.
+- **Friends add theirs from a link.** In any browser, the invite page skips repeats and blurry ones on the person's phone before anything goes up. On iPhone, the App Clip picks their best on the phone, sends feature prints first, and uploads only the originals the book needs.
+- **The book.** The best shot of each moment across everyone, shared out fairly, credited, with a diary written only from facts. Friends' photos that weren't picked are deleted. Each friend can tap their face to find every photo they're in and save them, free.
+- **During the trip,** the book is made again each night while friends add photos, and everyone hears "Day 2 is in".
+- **Keep, print, download.** Kept books stay up for good with everyone's full-size photos to download. Anyone can order a printed copy, made by Lulu and shipped.
+- **No app needed to make one.** `/new` starts a book on the web, for organizers on Android.
+- **The Mac studio** stays the owner's pro tool, and the same engine runs the server.
 
 ## Current status
 
-Built and tested on branch `feat/consumer-trip-book` (see [the build plan](./outputs/consumer-build-plan.md) and [the evaluation log](./outputs/evaluation-log.md)):
-
 | Part | State |
 |---|---|
-| Engine on iOS and macOS | Culls on both; 57 Swift tests pass on Mac and the iPhone simulator |
-| iPhone app (`Apps/PhotocoreiOS`) | Trips found from capture dates, streamed cull, swipe review, Photos album, set aside and restore, finish card |
-| Trip book | Book and Snapshots styles, chapters by local day and place, diary and captions, photo credits, owner edits, guest notes and hearts, Instagram pack |
-| Paid finish server | Trip upload, finish job, preview, public book pages, invite links and group curation |
-| Plans | Free first book per phone, Plus, Trip Pass and Event Pass with StoreKit 2; the server checks every signed purchase and enforces the caps |
-| Not built yet | Print ordering (needs a print partner), App Store Server Notifications for refunds, publishing books to object storage, Android, a live Gemini or DeepSeek run |
+| Engine on iOS and macOS | Culls on both; 69 Swift tests and 48 engine checks pass |
+| Bound for iPhone (`Apps/PhotocoreiOS`) | Trips from capture dates, streamed cull, swipe review, picks to Photos, set aside and restore, snapshots, highlight reel, finish card, plans, invite panel, nightly toggle, push token |
+| Bound App Clip (`Apps/PhotocoreiOS/BoundClip`) | Opens from an invite, picks on the phone, offers feature prints, uploads only what's wanted; verified in the simulator |
+| Invite page | Designed as the book's cover; browser pre-filter; optional email; photos of you |
+| Trip book | Book and Snapshots styles, chapters by local day and place, grounded diary, credits, owner edits, notes and hearts, Instagram pack, keep and print on the page |
+| Server (`photocore-server`) | Trips, invites, offers, finish, 90-day lifecycle with reminders, email, Stripe, Lulu, downloads, photos of you, nightly refinish, APNs, web owners; 8 groups of server checks pass against stand-in Stripe, Lulu and APNs |
+| Not built | A live Stripe, Lulu, APNs or Resend account run (all need credentials); App Store Server Notifications for refunds and renewals; publishing books to object storage; a Snapshots print pack (needs a second printer); a native Android app (on evidence only, see the direction doc) |
 
 The original specifications are still useful background:
 
@@ -28,21 +31,22 @@ The original specifications are still useful background:
 - [Local Photo Curator specification](./outputs/local-photo-curator-spec.md)
 - [Hybrid processing platform specification](./outputs/hybrid-photo-processing-platform-spec.md)
 
-## The iPhone app
+## The iPhone app and App Clip
 
 ```bash
 xcrun simctl addmedia booted /path/to/some/*.JPG
 Scripts/ios-app.sh -PhotocoreAutoOpen YES
+Scripts/clip.sh http://localhost:8799/j/<invite code>
 ```
 
-`Scripts/ios-app.sh` builds `Apps/PhotocoreiOS`, installs it on the booted simulator, grants Photos access and launches it. To run on a phone, open `Apps/PhotocoreiOS/PhotocoreiOS.xcodeproj` and set your team.
+`Scripts/ios-app.sh` builds Bound (`Apps/PhotocoreiOS`), installs it on the booted simulator, grants Photos access and launches it. `Scripts/clip.sh` installs the App Clip and opens it on an invite, the way tapping the link would. To run on a phone, open `Apps/PhotocoreiOS/PhotocoreiOS.xcodeproj`, set your team, and set `BOUND_DOMAIN` to the domain that serves invite links (it goes into the associated-domains entitlements of the app and the clip). The bundle ID stays `com.photocore.trip` and the clip is `com.photocore.trip.Clip`; App Store product IDs never change.
 
 How it stays safe on a real camera roll:
 
 - **One trip at a time, capped.** Trips are found by 20-hour gaps, need 20 photos, and split above 21 days or 1,500 photos. Trips queue and cull one after another.
 - **Streamed, not copied.** Thumbnails are read from Photos in batches, analyzed in memory and dropped. Only about 5 KB of analysis per photo is stored, and a killed app resumes from the last batch.
 - **Guards.** It refuses to start under 200 MB free, pauses when the phone is hot, and slows down in Low Power Mode.
-- **Nothing is deleted by culling.** "Set aside" gathers the other photos in a "Photocore · Set aside" album to look over; nothing else changes and one tap undoes it. Photocore never hides photos: iOS keeps hidden photos away from apps, so an app could hide them but never unhide them. Favorites, edited, shared and album photos are never set aside. Deleting is a separate step, at most 500 at a time, through the iOS confirmation into Recently Deleted (30 days). Every step is logged, with a pending entry written before any change.
+- **Nothing is deleted by picking.** "Set aside" gathers the other photos in "Bound · Set aside" in Photos to look over; nothing else changes and one tap undoes it. Bound never hides photos: iOS keeps hidden photos away from apps, so an app could hide them but never unhide them. Favorites, edited, shared and already-sorted photos are never set aside. Deleting is a separate step, at most 500 at a time, through the iOS confirmation into Recently Deleted (30 days). Every step is logged, with a pending entry written before any change. Albums titled "Photocore · Set aside" from before the rename are still found and renamed.
 
 ## The trip book
 
@@ -58,34 +62,54 @@ The writer never invents the trip. It gets a list of facts, each with a source: 
 
 Local time in the book follows a GPS place's time zone first, then the camera's recorded UTC offset. Cameras often stay on home time while traveling.
 
-## The paid finish server
+## The server
 
-`photocore-server` adds these routes (full list in `Sources/PhotoEngineServer/openapi.yaml`):
+```bash
+Scripts/dev-server.sh            # http://127.0.0.1:8799, token dev-token, test checkout and printer
+PHOTO_ENGINE_TOKEN=dev-token GEMINI_API_KEY=... swift run photocore-server
+Scripts/ios-app.sh -PhotocoreServerURL http://localhost:8799 -PhotocoreServerToken dev-token
+```
+
+`Scripts/dev-server.sh` keeps everything in `.build/dev-server-data`, uses the no-charge test checkout and a printer that prints nothing, and writes emails to `worker-runs/trips/outbox`. The full route list is in `Sources/PhotoEngineServer/openapi.yaml`. The main ones:
 
 | Route | Auth | Purpose |
 |---|---|---|
 | `POST /v2/trips` | Server token | Start a trip; returns the owner token once and the invite path |
-| `POST /v2/trips/{id}/settings` | Server token | Change title, note, style or owner name before a finish |
-| `POST /v2/trips/{id}/invite` | Server token | Open or close the invite link |
-| `PUT /v2/trips/{id}/photos/{name}` | Server token | Upload a keeper (JPEG or HEIC, 60 MB, 400 per trip) |
-| `POST /v2/trips/{id}/finish` | Server token | Queue the finish job |
-| `POST /v2/preview` | Server token | Render one photo with the paid edit, for the upsell |
-| `POST /v2/trips/{id}/plan` | Server token | Apply an App Store purchase (Plus, Trip Pass, Event Pass), checked against Apple's root certificate |
-| `GET /v2/trips/{id}/print.pdf` | Server token | The book as a print-ready PDF for Lulu, Blurb or any photo-book printer |
-| `GET /b/{slug}/` | Public link | The book page, photos and Instagram files; 410 once its hosting ends |
-| `POST /b/{slug}/print-interest` | Public link | Counts visitors who'd want a printed copy |
-| `POST /b/{slug}/edits` | Owner token | Edit the title, intro, headings, diary or a caption |
-| `/b/{slug}/guest/...` | Public link | Notes and hearts, with count and size limits |
-| `GET /j/{code}` | Invite link | The page where friends join and add photos |
-| `POST /j/{code}/join` | Invite link | Join with a first name; returns that person's token once (50 people) |
-| `PUT /j/{code}/photos/{name}`, `DELETE /j/{code}/photos` | Person's token | Add a photo (150 per person, 1,000 per trip) or remove all of yours |
+| `POST /v2/trips/{id}/settings` | Server token | Title, note, style, owner name and email, time zone, nightly on or off |
+| `PUT /v2/trips/{id}/photos/{name}` | Server token | Upload a pick (JPEG or HEIC, 60 MB, 400 per trip) |
+| `POST /v2/trips/{id}/finish` | Server token | Queue the finish |
+| `POST /v2/trips/{id}/plan` | Server token | Apply an App Store purchase, checked against Apple's root certificate |
+| `POST /v2/trips/{id}/device` | Server token | The owner's iPhone, for "Day 2 is in" |
+| `GET /b/{slug}/` | Public link | The book; an offline page once a free book's 90 days are up |
+| `POST /b/{slug}/keep`, `/print` | Public link | Checkout to keep the book or order a printed copy |
+| `GET /b/{slug}/photos.zip` | Public link | Everyone's full-size photos, once kept |
+| `GET /b/{slug}/make` | Public link | "Make one for your trip", counted by platform |
+| `GET /j/{code}` | Invite link | The invite page |
+| `POST /j/{code}/join`, `/email` | Invite link | Join with a first name and an optional email |
+| `PUT /j/{code}/photos/{name}` | Person's token | Add a photo (150 per person on a free book) |
+| `POST /j/{code}/offers`, `GET /wanted` | Person's token | The App Clip's offers and the originals wanted |
+| `GET`/`POST /j/{code}/you` | Person's token | Photos of you: tap your face, see and save your photos |
+| `GET /new`, `/w/...` | Owner token | Make a book on the web |
+| `POST /stripe/webhook` | Stripe signature | Paid checkouts |
+| `GET /u/{token}` | Link in an email | One-click unsubscribe |
 
-Book pages are public to anyone with the unguessable link, so only expose the server where that is intended. Today that means the tailnet setup below. Publishing books to object storage behind a CDN is the planned production path.
+What it needs to talk to the outside world, all optional; without each, that part is off or goes to a local stand-in:
 
-```bash
-PHOTO_ENGINE_TOKEN=dev-token GEMINI_API_KEY=... swift run photocore-server
-Scripts/ios-app.sh -PhotocoreServerURL http://localhost:8787 -PhotocoreServerToken dev-token
-```
+| Setting | For |
+|---|---|
+| `PHOTOCORE_PUBLIC_URL` | The public address, for links in emails, checkout returns and print files |
+| `PHOTOCORE_DATA_DIR` | One folder for everything the server writes |
+| `RESEND_API_KEY`, `PHOTOCORE_MAIL_FROM` | Sending email; otherwise emails go to the outbox folder |
+| `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET` | Web purchases; `PHOTOCORE_DEV_CHECKOUT=1` gives a no-charge test checkout instead |
+| `LULU_CLIENT_KEY`, `LULU_CLIENT_SECRET`, `LULU_API_BASE` | Printed copies; use `https://api.sandbox.lulu.com` first. `LULU_POD_SOFTCOVER`, `LULU_POD_HARDCOVER` and `LULU_SHIPPING_LEVEL` override the defaults, which should be checked against Lulu's pricing calculator |
+| `PHOTOCORE_PRINT_CONTACT` | The address Lulu writes to |
+| `PHOTOCORE_APPLE_TEAM_ID` | The App Clip and universal links file, and APNs |
+| `APNS_KEY_FILE`, `APNS_KEY_ID`, `APNS_SANDBOX` | "Day 2 is in" pushes to the owner's iPhone |
+| `PHOTOCORE_APP_STORE_ID`, `PHOTOCORE_APP_STORE_URL` | The invite page's App Clip banner, and where iPhone visitors go from "Make one" |
+| `TURNSTILE_SITE_KEY`, `TURNSTILE_SECRET` | Cloudflare Turnstile on `/new` |
+| `PHOTOCORE_FACE_MODEL`, `PHOTOCORE_FACE_THRESHOLD` | A Core ML face-embedding model for photos of you; Vision feature prints by default |
+
+Book pages, invites and print files are public to anyone with their unguessable link, and Stripe and Lulu must reach the server, so production means a public address. Publishing books to object storage behind a CDN is still the planned path; until then, put the server behind a proxy you trust and keep `PHOTO_ENGINE_ALLOWED_ROOTS` narrow.
 
 ## Technical direction
 

@@ -82,3 +82,22 @@ Also found: the aesthetics model returns one constant near-zero score for every 
 Cause: several culls at once, each with worker threads parked on the gate, starve Vision's internal queues of threads. Production never does this: the app culls one trip at a time and the server's job queue is serial. Every Vision caller, including Core Image auto adjustment (which uses Vision face detection), now goes through the gate, and text recognition runs exclusively.
 
 Subject-aware finish on seven Pycon frames: masks on 3 of 7 (the lion dance, a portrait on a swing, a café table); none on the four landscapes and sunsets, which is correct. A 1.2% background blur melted framing tree trunks and looked fake, so the default finish has no blur and the portrait preset uses 0.3%.
+
+## 2026-10-03 — Bound: photos of you, the browser pre-filter and the App Clip
+
+**Face identity from Vision feature prints.** 300 frames of the Post_Pycon_TW shoot (read-only, downsampled), faces of at least 70 px, aligned by the eyes and cropped square with a 1.25x margin, revision-2 feature prints:
+
+| Measure | Value |
+| --- | --- |
+| Faces found | 201 |
+| Different people in the same photo | p5 0.59, p50 0.84 |
+| Leader grouping under 0.5 | 175 groups, nearly all one person each |
+| Nearest neighbours of a query face | The same person when clothes, glasses and light match; otherwise mixed with lookalikes |
+
+The feature print sees clothing, glasses and light as much as the face, so it groups one person reliably within a trip and poorly across a selfie. The selfie plan was dropped: a friend taps their own face in the book, and faces under 0.5 from a tap are theirs. On a 40-frame book (19 faces), tapping the man in round sunglasses found both photos of him and nothing else. A face-embedding Core ML model can replace Vision (`PHOTOCORE_FACE_MODEL`); none is included because most published face weights are licensed for non-commercial use only.
+
+**Browser pre-filter.** Ten generated files in the invite page: a three-frame burst with real EXIF times one second apart, a soft copy of it, a heavily blurred scene, a black frame, three distinct scenes, a different scene at the same second as the burst, and a text file. Kept: the sharpest burst frame, the three scenes and the same-second different scene. Skipped: two repeats, one blurry, one dark, one non-photo. "Add them anyway" sent the four photos too. Found and fixed on the way: the page's policy blocked `blob:` images, which would have made the filter upload everything without saying so.
+
+**App Clip, end to end in the simulator.** Against a local server, a friend joined from the clip and picked 9 photos; the phone kept its best 3 and offered them (about 4 KB of feature print each); the server asked for 2, one being the same moment as another of the friend's offers five minutes apart; 7 never left the phone. Found and fixed: the keyboard covered Continue with no way to dismiss it.
+
+**Web owner flow.** Eight photos from a web owner: the server kept 3 for the book and deleted the other 5; Keep through the test checkout made the page offer the full-size zip and drop the free footer.
