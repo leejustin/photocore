@@ -174,6 +174,32 @@ actor TripStore {
     /// free plan. Kept for apps that still read the field.
     func freeBookAvailable(_ record: TripRecord) -> Bool { true }
 
+    // MARK: Growth
+
+    /// Taps on "Make one for your trip", by platform and month. The direction
+    /// doc's trigger for building the Android web flow is this split.
+    func noteMakeOne(platform: String, now: Date = Date()) throws {
+        let url = root.appendingPathComponent("growth.json")
+        var counts = (try? JSONDecoder().decode([String: [String: Int]].self, from: Data(contentsOf: url))) ?? [:]
+        let month = String(ISO8601DateFormatter.string(from: now, timeZone: .gmt, formatOptions: [.withFullDate]).prefix(7))
+        counts[month, default: [:]][platform, default: 0] += 1
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        try encoder.encode(counts).write(to: url, options: .atomic)
+    }
+
+    func growth() -> [String: [String: Int]] {
+        (try? JSONDecoder().decode([String: [String: Int]].self, from: Data(contentsOf: root.appendingPathComponent("growth.json")))) ?? [:]
+    }
+
+    /// The platform a request came from, from its User-Agent.
+    static func platform(userAgent: String?) -> String {
+        let agent = (userAgent ?? "").lowercased()
+        if agent.contains("android") { return "android" }
+        if agent.contains("iphone") || agent.contains("ipad") || agent.contains("ipod") { return "ios" }
+        return "other"
+    }
+
     func notePrintInterest(_ id: String) throws -> Int {
         guard var record = records[id] else { return 0 }
         record.printInterest = (record.printInterest ?? 0) + 1

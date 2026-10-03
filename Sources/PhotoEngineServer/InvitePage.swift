@@ -1,29 +1,40 @@
 import Foundation
 
-/// The page behind a trip's invite link. Anyone who was there opens it in a
-/// browser, gives a first name and adds photos; no app or account needed. The
-/// page keeps the person's token in the browser so they can come back to add
-/// more or take theirs out.
+/// The page behind a trip's invite link, and for most people the first thing
+/// they see of Bound. It's designed like the cover of the book with their
+/// friend's name on it, not like an upload form. Anyone who was there gives a
+/// first name and adds photos; no app or account needed. The page keeps the
+/// person's token in the browser so they can come back to add more or take
+/// theirs out.
 enum InvitePage {
-    static func html(code: String, title: String?, ownerName: String?) -> String {
-        let trip = title.flatMap { $0.isEmpty ? nil : $0 } ?? "the trip"
-        let who = ownerName.flatMap { $0.isEmpty ? nil : $0 } ?? "Someone from the trip"
+    /// - Parameter cover: the finished book's cover photo, once there is one.
+    static func html(code: String, title: String?, ownerName: String?, cover: String? = nil) -> String {
+        let trip = title.flatMap { $0.isEmpty ? nil : $0 }
+        let who = ownerName.flatMap { $0.isEmpty ? nil : $0 }
+        let headline = "\(who ?? "Someone from the trip") is making a book of \(trip ?? "the trip")."
         return """
         <!doctype html>
         <html lang="en"><head><meta charset="utf-8">
         <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
         <meta name="color-scheme" content="light dark">
         <meta name="robots" content="noindex">
-        <title>Add your photos · \(escape(trip))</title>
-        <meta property="og:title" content="Add your photos to \(escape(trip))">
-        <meta property="og:description" content="\(escape(who)) is making a book of the trip with everyone's photos.">
+        <title>\(escape(trip ?? "Add your photos")) · Bound</title>
+        <meta property="og:title" content="\(escape(headline))">
+        <meta property="og:description" content="Add your photos. The best shot of each moment goes in, with your name on it.">
         <style>\(css)</style></head>
         <body><main>
-        <p class="kicker">Photocore</p>
-        <h1>Add your photos to <span class="trip">\(escape(trip))</span></h1>
-        <p class="lede">\(escape(who)) is making a book of the trip from everyone's photos. Add yours, and the best shot of each moment goes in, with your name on it.</p>
+        <div class="cover\(cover == nil ? "" : " has-photo")">
+          \(cover.map { "<img src=\"\(escape($0))\" alt=\"\">" } ?? "")
+          <div class="cover-words">
+            <p class="cover-kicker">A book by everyone who was there</p>
+            <p class="cover-title">\(escape(trip ?? "Our trip"))</p>
+          </div>
+          <span class="ribbon" aria-hidden="true"></span>
+        </div>
+        <h1>\(escape(headline)) <span>Add your photos.</span></h1>
+        <p class="lede">The best shot of each moment goes in, with your name under it. Add as many as you like: repeats and blurry ones are fine.</p>
 
-        <section id="closed" hidden><p>This trip isn't taking photos any more.</p></section>
+        <section id="closed" hidden><p>This book isn't taking photos any more.</p></section>
 
         <form id="join" hidden>
           <label for="name">Your first name</label>
@@ -34,16 +45,16 @@ enum InvitePage {
         <section id="add" hidden>
           <p class="who">Adding as <strong id="me"></strong> · <button type="button" class="link" id="not-me">Not you?</button></p>
           <label class="pick">Choose photos<input id="files" type="file" accept="image/*" multiple></label>
-          <p class="hint">Add as many as you like, up to 150. Repeats and blurry ones are fine: Photocore picks.</p>
           <div id="progress" hidden><div class="bar"><span id="bar"></span></div><p id="status" aria-live="polite"></p></div>
           <p id="mine" class="hint"></p>
           <button type="button" class="link danger" id="remove" hidden>Remove my photos</button>
         </section>
 
         <section id="ready" hidden><a id="read" class="pick" href="#">Read the book</a></section>
-        <p class="fine">Only people with this link can add photos. Photos stay private until they're picked for the book.</p>
+        <p class="fine">Only people with this link can add photos. Photos stay private until they're picked for the book, and the ones that aren't picked are deleted.</p>
+        <p class="brand">Bound · Finish the trip.</p>
         </main>
-        <script>window.PHOTOCORE_INVITE = \(json(code));\(script)</script></body></html>
+        <script>window.BOUND_INVITE = \(json(code));\(script)</script></body></html>
         """
     }
 
@@ -61,17 +72,25 @@ enum InvitePage {
     }
 
     static let css = """
-    :root { --paper:#f7f3ec; --ink:#1d1a17; --muted:#6f675e; --accent:#b8532f; --line:#e4ddd1; --card:#fffdf9; --serif:"New York","Iowan Old Style","Palatino Linotype",Palatino,Georgia,serif; --sans:-apple-system,BlinkMacSystemFont,"Helvetica Neue","Segoe UI",sans-serif; }
-    @media (prefers-color-scheme: dark) { :root { --paper:#141210; --ink:#efeae2; --muted:#a69e94; --accent:#e58a63; --line:#2a2622; --card:#1c1916; } }
+    :root { --paper:#f7f2ea; --ink:#1e1b18; --cover:#1e1b18; --muted:#6f675e; --accent:#b3322b; --line:#e4ddd1; --card:#fffdf9; --serif:"New York","Iowan Old Style","Palatino Linotype",Palatino,Georgia,serif; --sans:-apple-system,BlinkMacSystemFont,"Helvetica Neue","Segoe UI",sans-serif; }
+    @media (prefers-color-scheme: dark) { :root { --paper:#141210; --ink:#efeae2; --cover:#2a2622; --muted:#a69e94; --accent:#e06b61; --line:#2a2622; --card:#1c1916; } }
     * { box-sizing:border-box; }
     body { margin:0; background:var(--paper); color:var(--ink); font:17px/1.6 var(--sans); }
-    main { max-width:560px; margin:0 auto; padding:56px 20px 64px; }
-    .kicker { text-transform:uppercase; letter-spacing:.14em; font-size:11.5px; font-weight:600; color:var(--accent); margin:0 0 12px; }
-    h1 { font-family:var(--serif); font-weight:600; font-size:clamp(30px, 7vw, 40px); line-height:1.12; letter-spacing:-.015em; margin:0 0 14px; }
-    .lede { color:var(--muted); margin:0 0 30px; }
-    form, #add, #closed, #ready { background:var(--card); border:1px solid var(--line); border-radius:18px; padding:22px; display:grid; gap:12px; margin-bottom:18px; }
+    main { max-width:560px; margin:0 auto; padding:40px 16px 64px; }
+    .cover { position:relative; width:min(300px, 72vw); aspect-ratio:5 / 6; margin:0 auto 34px; border-radius:10px 14px 14px 10px; background:var(--cover); color:#f4ede1; overflow:hidden; box-shadow:0 2px 3px rgba(0,0,0,.18), 0 18px 40px rgba(40,25,10,.22); }
+    .cover::before { content:""; position:absolute; top:0; bottom:0; left:22px; width:3px; background:rgba(255,255,255,.08); z-index:2; }
+    .cover img { position:absolute; inset:0; width:100%; height:100%; object-fit:cover; }
+    .cover.has-photo .cover-words { background:linear-gradient(to top, rgba(0,0,0,.7), rgba(0,0,0,0)); }
+    .cover-words { position:absolute; left:0; right:0; bottom:0; padding:44px 22px 24px 40px; z-index:1; }
+    .cover-kicker { margin:0 0 6px; font-size:11px; letter-spacing:.14em; text-transform:uppercase; opacity:.75; }
+    .cover-title { margin:0; font-family:var(--serif); font-weight:600; font-size:30px; line-height:1.08; letter-spacing:-.01em; }
+    .ribbon { position:absolute; right:38px; bottom:-1px; width:22px; height:46px; background:var(--accent); clip-path:polygon(0 0, 100% 0, 100% 100%, 50% 78%, 0 100%); z-index:3; }
+    h1 { font-family:var(--serif); font-weight:600; font-size:clamp(26px, 6.4vw, 34px); line-height:1.18; letter-spacing:-.01em; margin:0 0 12px; text-align:center; }
+    h1 span { color:var(--accent); white-space:nowrap; }
+    .lede { color:var(--muted); margin:0 0 26px; text-align:center; }
+    form, #add, #closed, #ready, #you { background:var(--card); border:1px solid var(--line); border-radius:16px; padding:20px; display:grid; gap:12px; margin-bottom:16px; }
     label[for] { font-weight:600; font-size:15px; }
-    input#name { font:inherit; padding:12px 14px; border-radius:12px; border:1px solid var(--line); background:var(--paper); color:var(--ink); }
+    input[type=text], input[type=email], input#name { font:inherit; padding:12px 14px; border-radius:12px; border:1px solid var(--line); background:var(--paper); color:var(--ink); width:100%; }
     button[type=submit], .pick { font:inherit; font-weight:600; text-align:center; text-decoration:none; padding:14px 22px; border:0; border-radius:999px; background:var(--accent); color:#fff; cursor:pointer; display:block; }
     .pick input { display:none; }
     .who { margin:0; font-size:15px; color:var(--muted); }
@@ -79,6 +98,7 @@ enum InvitePage {
     .danger { color:var(--muted); font-size:14px; }
     .hint, .fine { font-size:14px; color:var(--muted); margin:0; }
     .fine { margin-top:8px; text-align:center; }
+    .brand { text-align:center; font-family:var(--serif); font-size:14px; color:var(--muted); margin:26px 0 0; letter-spacing:.02em; }
     .bar { height:8px; border-radius:99px; background:var(--line); overflow:hidden; }
     .bar span { display:block; height:100%; width:0; background:var(--accent); transition:width .2s; }
     #status { margin:8px 0 0; font-size:15px; }
@@ -87,7 +107,7 @@ enum InvitePage {
 
     static let script = """
     (function(){
-      var code = window.PHOTOCORE_INVITE, base = '/j/' + code, key = 'photocore-invite-' + code;
+      var code = window.BOUND_INVITE, base = '/j/' + code, key = 'photocore-invite-' + code;
       function $(id){ return document.getElementById(id); }
       function load(){ try { return JSON.parse(localStorage.getItem(key) || 'null'); } catch (e) { return null; } }
       function save(v){ try { if (v) localStorage.setItem(key, JSON.stringify(v)); else localStorage.removeItem(key); } catch (e) {} }

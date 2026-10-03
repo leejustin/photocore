@@ -119,7 +119,7 @@ final class TripRun {
     func saveAlbum() async throws {
         guard let outcome else { return }
         let identifiers = keepers.compactMap { outcome.identifier(for: $0.id) }
-        try await PhotoLibraryWriter.saveAlbum(title: "Photocore · " + trip.title, localIdentifiers: identifiers, markFavorite: false)
+        try await PhotoLibraryWriter.saveAlbum(title: "Bound · " + trip.title, localIdentifiers: identifiers, markFavorite: false)
         albumSaved = true
     }
 

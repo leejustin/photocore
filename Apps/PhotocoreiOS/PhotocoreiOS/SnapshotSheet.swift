@@ -80,7 +80,7 @@ struct SnapshotSheet: View {
                 .padding(.horizontal, 20).padding(.vertical, 12)
                 .background(.ultraThinMaterial)
             }
-            .alert("Photocore", isPresented: Binding(get: { message != nil }, set: { if !$0 { message = nil } })) {
+            .alert("Bound", isPresented: Binding(get: { message != nil }, set: { if !$0 { message = nil } })) {
                 Button("OK", role: .cancel) {}
             } message: { Text(message ?? "") }
             .task { await load() }
@@ -126,10 +126,10 @@ struct SnapshotSheet: View {
         saving = true
         defer { saving = false }
         let urls = exported
-        let title = "Photocore · Snapshots · " + run.trip.title
+        let title = "Bound · Snapshots · " + run.trip.title
         do {
             try await Self.saveImages(urls, albumTitle: title)
-            message = "Saved \(urls.count) snapshots to the \u{201C}\(title)\u{201D} album."
+            message = "Saved \(urls.count) snapshots to \u{201C}\(title)\u{201D} in Photos."
         } catch {
             message = "Couldn't save the snapshots. \(error.localizedDescription)"
         }

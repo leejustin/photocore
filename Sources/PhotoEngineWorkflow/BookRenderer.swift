@@ -8,28 +8,66 @@ public enum BookRenderer {
     public struct Options: Sendable {
         /// Where owner edits are POSTed (`{"key", "value"}`), or nil for a read-only page.
         public var editEndpoint: String?
-        /// Where guest notes and reactions are POSTed, or nil to hide them.
+        /// Where friends' notes and hearts are POSTed, or nil to hide them.
         public var guestEndpoint: String?
         /// The trip's invite page, where people who were there add their photos;
         /// nil when the owner has closed it.
         public var invitePath: String?
         /// Where "I'd love a printed copy" taps are counted, or nil to hide it.
+        /// Ignored when printed copies can be ordered.
         public var printInterestEndpoint: String?
-        /// Empty for no footer. Free books carry a Photocore footer.
+        /// Empty for no footer. Free books carry a "Made free with Bound" footer.
         public var footer: String
         public var footerLink: String?
+        /// Where "Keep this book" is POSTed for a checkout link, while the book
+        /// isn't kept for good. Anyone in the book can keep it.
+        public var keepEndpoint: String?
+        /// When a free book goes offline, to say so on the page.
+        public var hostedUntil: Date?
+        /// Everyone's full-size photos as one download, once the book is kept.
+        public var downloadPath: String?
+        /// Where a print order is POSTed (`{"product"}`) for a checkout link.
+        public var printOrderEndpoint: String?
+        /// "Make one for your trip", on every book.
+        public var makeOnePath: String?
 
-        public init(editEndpoint: String? = nil, guestEndpoint: String? = nil, invitePath: String? = nil, printInterestEndpoint: String? = nil, footer: String = "Made with Photocore", footerLink: String? = nil) {
+        public init(
+            editEndpoint: String? = nil,
+            guestEndpoint: String? = nil,
+            invitePath: String? = nil,
+            printInterestEndpoint: String? = nil,
+            footer: String = "",
+            footerLink: String? = nil,
+            keepEndpoint: String? = nil,
+            hostedUntil: Date? = nil,
+            downloadPath: String? = nil,
+            printOrderEndpoint: String? = nil,
+            makeOnePath: String? = nil
+        ) {
             self.editEndpoint = editEndpoint
             self.guestEndpoint = guestEndpoint
             self.invitePath = invitePath
             self.printInterestEndpoint = printInterestEndpoint
             self.footer = footer
             self.footerLink = footerLink
+            self.keepEndpoint = keepEndpoint
+            self.hostedUntil = hostedUntil
+            self.downloadPath = downloadPath
+            self.printOrderEndpoint = printOrderEndpoint
+            self.makeOnePath = makeOnePath
         }
 
         /// The footer free books carry: the growth loop's last page.
-        public static let freeFooter = "Made free with Photocore. Make a book of your own trip."
+        public static let freeFooter = "Made free with Bound"
+        public static let makeOne = "Make one for your trip"
+    }
+
+    /// "January 3", in the reader's language where the server knows it.
+    static func longDate(_ date: Date) -> String {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US")
+        formatter.setLocalizedDateFormatFromTemplate("MMMMd")
+        return formatter.string(from: date)
     }
 
     public static func photoPath(_ photo: BookPhoto) -> String {
@@ -143,9 +181,9 @@ public enum BookRenderer {
         if options.guestEndpoint != nil {
             body += """
             <section class="guestbook"><h2>Notes from everyone</h2>
-            <p class="hint">Were you there? Add a memory, or tap \u{2661} on your favorites.</p><ul id="notes"></ul>
+            <p class="hint">Were you there? Leave a note, or tap \u{2661} on your favorites.</p><ul id="notes"></ul>
             <form id="note-form"><input id="note-name" maxlength="40" placeholder="Your name" required>
-            <textarea id="note-text" maxlength="500" rows="3" placeholder="A memory from the trip" required></textarea>
+            <textarea id="note-text" maxlength="500" rows="3" placeholder="Something from the trip" required></textarea>
             <button type="submit">Add note</button></form>
             """
             if let invite = options.invitePath {
@@ -157,7 +195,35 @@ public enum BookRenderer {
             }
             body += "</section>"
         }
-        if options.printInterestEndpoint != nil {
+        if options.keepEndpoint != nil || options.downloadPath != nil {
+            body += "<section class=\"keep\">"
+            if options.keepEndpoint != nil {
+                if let until = options.hostedUntil {
+                    body += "<h2>Online until \(text(longDate(until)))</h2>"
+                    body += "<p class=\"hint\" id=\"keep-left\" data-until=\"\(Int(until.timeIntervalSince1970))\">Free books stay up for 90 days. Keep it for good, with everyone\u{2019}s full-size photos to download.</p>"
+                } else {
+                    body += "<h2>Keep this book</h2><p class=\"hint\">Keep it for good, with everyone\u{2019}s full-size photos to download.</p>"
+                }
+                body += "<button type=\"button\" id=\"keep\">Keep it for $4.99</button>"
+                body += "<p class=\"fine\">Anyone in the book can keep it, once, for everyone.</p>"
+            }
+            if let download = options.downloadPath {
+                body += "<h2>Everyone\u{2019}s photos</h2><p class=\"hint\">Every photo in the book at full size, with who took it in the name.</p>"
+                body += "<a class=\"upload\" href=\"\(attr(download))\" download>Download all photos</a>"
+            }
+            body += "</section>"
+        }
+        if options.printOrderEndpoint != nil {
+            body += """
+            <section class="printcopy"><h2>Hold it in your hands</h2>
+            <p class="hint">An 8.5 inch square printed book, made to order. Standard shipping included.</p>
+            <div class="printbuy">
+            """
+            for product in PrintProduct.allCases {
+                body += "<button type=\"button\" class=\"print-order\" data-product=\"\(product.rawValue)\">\(text(product.displayName)) \u{00B7} $\(product.cents / 100)</button>"
+            }
+            body += "</div><p class=\"fine\">Everyone in the book can order their own copy.</p></section>"
+        } else if options.printInterestEndpoint != nil {
             body += """
             <section class="printcopy"><h2>Want it on paper?</h2>
             <p class="hint">Printed copies are coming. Tap if you'd want one, so the book's owner knows.</p>
@@ -166,13 +232,20 @@ public enum BookRenderer {
             """
         }
         body += "</main>"
+        var footerParts: [String] = []
         if !options.footer.isEmpty {
             let words = text(options.footer)
-            body += "<footer><p>" + (options.footerLink.map { "<a href=\"\(attr($0))\">\(words)</a>" } ?? words) + "</p></footer>"
+            footerParts.append(options.footerLink.map { "<a href=\"\(attr($0))\">\(words)</a>" } ?? words)
+        }
+        if let make = options.makeOnePath {
+            footerParts.append("<a class=\"make\" href=\"\(attr(make))\">\(text(Options.makeOne))</a>")
+        }
+        if !footerParts.isEmpty {
+            body += "<footer><p>" + footerParts.joined(separator: " \u{00B7} ") + "</p></footer>"
         }
 
         let config = """
-        window.PHOTOCORE = { edit: \(jsString(options.editEndpoint)), guest: \(jsString(options.guestEndpoint)), print: \(jsString(options.printInterestEndpoint)) };
+        window.PHOTOCORE = { edit: \(jsString(options.editEndpoint)), guest: \(jsString(options.guestEndpoint)), print: \(jsString(options.printInterestEndpoint)), keep: \(jsString(options.keepEndpoint)), order: \(jsString(options.printOrderEndpoint)) };
         """
         return """
         <!doctype html>
@@ -214,8 +287,8 @@ public enum BookRenderer {
     }
 
     static let css = """
-    :root { --paper:#f7f3ec; --ink:#1d1a17; --muted:#6f675e; --faint:#a49b90; --accent:#b8532f; --line:#e4ddd1; --card:#fffdf9; --serif:"New York","Iowan Old Style","Palatino Linotype",Palatino,Georgia,serif; --sans:-apple-system,BlinkMacSystemFont,"Helvetica Neue","Segoe UI",sans-serif; }
-    @media (prefers-color-scheme: dark) { :root { --paper:#141210; --ink:#efeae2; --muted:#a69e94; --faint:#6d665e; --accent:#e58a63; --line:#2a2622; --card:#1c1916; } }
+    :root { --paper:#f7f2ea; --ink:#1e1b18; --muted:#6f675e; --faint:#a49b90; --accent:#b3322b; --line:#e4ddd1; --card:#fffdf9; --serif:"New York","Iowan Old Style","Palatino Linotype",Palatino,Georgia,serif; --sans:-apple-system,BlinkMacSystemFont,"Helvetica Neue","Segoe UI",sans-serif; }
+    @media (prefers-color-scheme: dark) { :root { --paper:#141210; --ink:#efeae2; --muted:#a69e94; --faint:#6d665e; --accent:#e06b61; --line:#2a2622; --card:#1c1916; } }
     * { box-sizing:border-box; }
     html { scroll-behavior:smooth; -webkit-text-size-adjust:100%; }
     body { margin:0; background:var(--paper); color:var(--ink); font:17px/1.65 var(--sans); }
@@ -276,6 +349,16 @@ public enum BookRenderer {
     .printcopy h2 { font-size:26px; }
     .printcopy button { font:inherit; font-weight:600; padding:11px 22px; border-radius:999px; border:1.5px solid var(--accent); background:none; color:var(--accent); cursor:pointer; }
     .printcopy button:disabled { opacity:.55; cursor:default; }
+    .printbuy { display:flex; flex-wrap:wrap; gap:10px; justify-content:center; margin:6px 0 10px; }
+    .keep { margin-top:72px; text-align:center; padding:32px 22px; border-top:1px solid var(--line); border-bottom:1px solid var(--line); }
+    .keep h2 { font-size:26px; }
+    .keep h2 + .hint { max-width:30em; margin-left:auto; margin-right:auto; }
+    .keep button { font:inherit; font-weight:600; padding:12px 26px; border:0; border-radius:999px; background:var(--accent); color:#fff; cursor:pointer; }
+    .keep button:disabled { opacity:.6; cursor:default; }
+    .keep .upload { margin-top:4px; }
+    .keep h2 ~ h2 { margin-top:28px; }
+    .fine { font-size:13px; color:var(--faint); margin:10px 0 0; }
+    footer .make { font-weight:600; }
     footer { text-align:center; color:var(--faint); font-size:13px; letter-spacing:.04em; padding:56px 20px 64px; }
     .lightbox { position:fixed; inset:0; background:rgba(0,0,0,.94); display:flex; align-items:center; justify-content:center; z-index:10; cursor:zoom-out; }
     .lightbox img { max-width:96vw; max-height:92vh; border-radius:4px; }
@@ -298,7 +381,7 @@ public enum BookRenderer {
       .guestbook { padding:22px; margin-top:64px; }
     }
     @media print {
-      .chapters, .heart, .guestbook, .printcopy, footer { display:none; }
+      .chapters, .heart, .guestbook, .printcopy, .keep, footer { display:none; }
       body { background:#fff; color:#000; }
       .cover { height:100vh; page-break-after:always; }
       .chapter { page-break-before:always; padding-top:0; }
@@ -385,9 +468,26 @@ public enum BookRenderer {
             .then(function(r){ return r.json(); }).then(function(d){ document.getElementById('note-text').value=''; render(d); }).catch(function(){});
         });
       }
+      function checkout(endpoint, body, button){
+        button.disabled = true;
+        fetch(endpoint, { method:'POST', headers:{ 'Content-Type':'application/json' }, body: JSON.stringify(body || {}) })
+          .then(function(r){ return r.json().then(function(d){ if (!r.ok) throw d; return d; }); })
+          .then(function(d){ if (d.url) location.href = d.url; else { button.disabled = false; } })
+          .catch(function(e){ button.disabled = false; alert((e && e.error && e.error.message) || 'That didn\\u2019t work. Try again in a moment.'); });
+      }
+      var keep = document.getElementById('keep');
+      if (keep && cfg.keep) keep.addEventListener('click', function(){ checkout(cfg.keep, {}, keep); });
+      document.querySelectorAll('.print-order').forEach(function(btn){
+        if (cfg.order) btn.addEventListener('click', function(){ checkout(cfg.order, { product: btn.dataset.product }, btn); });
+      });
+      var left = document.getElementById('keep-left');
+      if (left && left.dataset.until) {
+        var days = Math.max(0, Math.ceil((Number(left.dataset.until) * 1000 - Date.now()) / 86400000));
+        if (days <= 14) left.textContent = (days <= 1 ? 'Last day online. ' : days + ' days left online. ') + left.textContent;
+      }
       var want = document.getElementById('print-interest');
       if (want && cfg.print) {
-        var key = 'photocore-print-' + location.pathname, done = false;
+        var key = 'bound-print-' + location.pathname, done = false;
         try { done = localStorage.getItem(key) === '1'; } catch (e) {}
         function thanks(){ want.disabled = true; document.getElementById('print-thanks').hidden = false; }
         if (done) thanks();

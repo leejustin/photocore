@@ -16,8 +16,10 @@ public struct ServerConfiguration: Sendable {
     public var allowXcodePurchases: Bool
     /// Where the free-book footer links, if anywhere.
     public var siteURL: String?
+    /// Bound on the App Store, where "Make one for your trip" sends iPhone visitors.
+    public var appStoreURL: String?
 
-    public init(port: Int, security: WorkerSecurity, catalogURL: URL, mediaCacheDirectory: URL, tokenWasGenerated: Bool, bundleID: String = "com.photocore.trip", storeKitTestRoot: URL? = nil, allowXcodePurchases: Bool = false, siteURL: String? = nil) {
+    public init(port: Int, security: WorkerSecurity, catalogURL: URL, mediaCacheDirectory: URL, tokenWasGenerated: Bool, bundleID: String = "com.photocore.trip", storeKitTestRoot: URL? = nil, allowXcodePurchases: Bool = false, siteURL: String? = nil, appStoreURL: String? = nil) {
         self.port = port
         self.security = security
         self.catalogURL = catalogURL
@@ -27,6 +29,7 @@ public struct ServerConfiguration: Sendable {
         self.storeKitTestRoot = storeKitTestRoot
         self.allowXcodePurchases = allowXcodePurchases
         self.siteURL = siteURL
+        self.appStoreURL = appStoreURL
     }
 
     public static func fromEnvironment(_ environment: [String: String] = ProcessInfo.processInfo.environment) throws -> ServerConfiguration {
@@ -52,7 +55,8 @@ public struct ServerConfiguration: Sendable {
             bundleID: environment["PHOTOCORE_BUNDLE_ID"] ?? "com.photocore.trip",
             storeKitTestRoot: environment["PHOTOCORE_STOREKIT_TEST_ROOT"].map { URL(fileURLWithPath: $0) },
             allowXcodePurchases: environment["PHOTOCORE_STOREKIT_XCODE"] == "1",
-            siteURL: environment["PHOTOCORE_SITE_URL"]
+            siteURL: environment["PHOTOCORE_SITE_URL"],
+            appStoreURL: environment["PHOTOCORE_APP_STORE_URL"]
         )
     }
 

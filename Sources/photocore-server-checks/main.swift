@@ -188,7 +188,12 @@ struct ServerChecks {
         guard let invite = trip.invitePath else { throw CheckFailure("a new trip has no invite link") }
         try expect(html.contains(invite), "the book page doesn't link to the invite page")
         let invitePage = try await data(base.appendingPathComponent(invite))
-        try expect(invitePage.status == 200 && text(invitePage.body).contains("Add your photos"), "invite page returned \(invitePage.status)")
+        try expect(invitePage.status == 200 && text(invitePage.body).contains("Add your photos") && text(invitePage.body).contains("is making a book of Test trip."), "invite page returned \(invitePage.status)")
+        try expect(html.contains("/b/\(trip.slug)/make") && html.contains("Make one for your trip"), "the book page has no make-one link")
+        let make = try await noRedirect(base.appendingPathComponent("b/\(trip.slug)/make"), headers: ["User-Agent": "Mozilla/5.0 (Linux; Android 15; Pixel 9)"])
+        try expect(make.status == 302 && make.location == "/new", "make-one for Android returned \(make.status) \(make.location ?? "")")
+        let growth = text(try await data(base.appendingPathComponent("v2/metrics/growth"), token: token).body)
+        try expect(growth.contains("\"android\":1"), "the make-one tap wasn't counted: \(growth)")
         let badInvite = try await data(base.appendingPathComponent("j/notarealcode"))
         try expect(badInvite.status == 404, "an unknown invite returned \(badInvite.status)")
         let noName = try await send(base.appendingPathComponent(invite + "/join"), method: "POST", json: ["name": "  "], headers: [:])
@@ -365,6 +370,18 @@ struct ServerChecks {
         return HTTPResult(status: (response as! HTTPURLResponse).statusCode, body: data, etag: nil)
     }
 
+    /// A GET that doesn't follow redirects, to check where one points.
+    static func noRedirect(_ url: URL, headers: [String: String] = [:]) async throws -> (status: Int, location: String?) {
+        final class Stop: NSObject, URLSessionTaskDelegate {
+            func urlSession(_ session: URLSession, task: URLSessionTask, willPerformHTTPRedirection response: HTTPURLResponse, newRequest request: URLRequest) async -> URLRequest? { nil }
+        }
+        var request = URLRequest(url: url)
+        for (name, value) in headers { request.setValue(value, forHTTPHeaderField: name) }
+        let (_, response) = try await Self.session.data(for: request, delegate: Stop())
+        let http = response as! HTTPURLResponse
+        return (http.statusCode, http.value(forHTTPHeaderField: "Location"))
+    }
+
     private static func wait(base: URL, token: String, id: String) async throws -> JobWire {
         let deadline = Date().addingTimeInterval(90)
         while Date() < deadline {
@@ -481,7 +498,7 @@ private struct PlanStatusWire: Decodable {
 }
 
 private enum BookRendererFooter {
-    static let free = "Made free with Photocore"
+    static let free = "Made free with Bound"
 }
 
 /// Signs fake App Store transactions with the test-only chain in

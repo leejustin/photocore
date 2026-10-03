@@ -35,7 +35,7 @@ struct SetAsideView: View {
             } header: {
                 Text("Set aside · \(setAside.count)")
             } footer: {
-                Text("Set-aside photos are gathered in the \u{201C}\(PhotoLibrarySafety.albumTitle)\u{201D} album so you can look them over. They stay in your library until you delete them, at most \(SetAsidePlanner.deleteBatchLimit) at a time.")
+                Text("Set-aside photos are gathered in \u{201C}\(PhotoLibrarySafety.albumTitle)\u{201D} in Photos so you can look them over. They stay in your library until you delete them, at most \(SetAsidePlanner.deleteBatchLimit) at a time.")
             }
 
             if !deleted.isEmpty {
@@ -58,7 +58,7 @@ struct SetAsideView: View {
         } message: {
             Text("iOS will ask you to confirm. Deleted photos move to Recently Deleted in the Photos app, where you can recover them for 30 days.")
         }
-        .alert("Photocore", isPresented: Binding(get: { message != nil }, set: { if !$0 { message = nil } })) {
+        .alert("Bound", isPresented: Binding(get: { message != nil }, set: { if !$0 { message = nil } })) {
             Button("OK", role: .cancel) {}
         } message: { Text(message ?? "") }
     }

@@ -46,7 +46,7 @@ struct HomeView: View {
         guard let run = queue.runs[trip.id] else { return nil }
         switch run.stage {
         case .queued: return "Up next"
-        case .analyzing, .deciding, .paused: return "Culling"
+        case .analyzing, .deciding, .paused: return "Picking"
         case .ready: return "\(run.keepers.count) kept"
         default: return nil
         }
@@ -57,7 +57,7 @@ struct HomeView: View {
             Text("Finish the trip.")
                 .font(.display(38))
                 .foregroundStyle(Color.ink)
-            Text("Photocore picks the best photos from each trip. Culling runs on this iPhone; nothing leaves it unless you choose to finish a trip into a book.")
+            Text("Bound picks your best photos from each trip, right on this iPhone. Nothing leaves it unless you make a book.")
                 .font(.body)
                 .foregroundStyle(Color.ink.opacity(0.65))
         }
@@ -128,8 +128,8 @@ struct AccessCard: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            Text("Photocore needs your photos").font(.display(22))
-            Text("Allow access in Settings so Photocore can find your trips. Culling happens on this iPhone.")
+            Text("Bound needs your photos").font(.display(22))
+            Text("Allow access in Settings so Bound can find your trips. Picking happens on this iPhone.")
                 .foregroundStyle(Color.ink.opacity(0.65))
             Button("Open Settings") {
                 if let url = URL(string: UIApplication.openSettingsURLString) { openURL(url) }

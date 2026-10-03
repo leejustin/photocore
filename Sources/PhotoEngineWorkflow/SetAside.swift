@@ -129,14 +129,23 @@ public struct SetAsideLog: Codable, Sendable, Equatable {
 
 /// The Photos side of set aside, restore and delete.
 public enum PhotoLibrarySafety {
-    public static let albumTitle = "Photocore · Set aside"
+    public static let albumTitle = "Bound · Set aside"
+    /// The title before the consumer app was named Bound. An album with this
+    /// title is renamed the next time something is set aside.
+    public static let legacyAlbumTitle = "Photocore · Set aside"
+
+    /// Albums the app made itself, which don't count as the person sorting a photo.
+    static func isOwnAlbum(_ title: String?) -> Bool {
+        guard let title else { return false }
+        return title.hasPrefix("Bound · ") || title.hasPrefix("Photocore")
+    }
 
     public static func protection(for identifiers: [String]) -> [String: LibraryProtection] {
         var result: [String: LibraryProtection] = [:]
         PHAsset.fetchAssets(withLocalIdentifiers: identifiers, options: nil).enumerateObjects { asset, _, _ in
             var inOtherAlbum = false
             PHAssetCollection.fetchAssetCollectionsContaining(asset, with: .album, options: nil).enumerateObjects { collection, _, stop in
-                if collection.localizedTitle != albumTitle && !(collection.localizedTitle ?? "").hasPrefix("Photocore") {
+                if !isOwnAlbum(collection.localizedTitle) {
                     inOtherAlbum = true
                     stop.pointee = true
                 }
@@ -154,7 +163,7 @@ public enum PhotoLibrarySafety {
     /// Gathers the photos in the set-aside album. Nothing else changes: the
     /// photos stay in the library and in every other album.
     ///
-    /// Photocore never hides photos. iOS keeps hidden photos away from apps
+    /// Bound never hides photos. iOS keeps hidden photos away from apps
     /// (the Hidden album is locked), so an app that hides a photo cannot unhide
     /// it; that was measured on 2026-10-01 and is why set aside is album-only.
     public static func setAside(_ identifiers: [String]) async throws {
@@ -164,6 +173,7 @@ public enum PhotoLibrarySafety {
         try await PHPhotoLibrary.shared().performChanges {
             let request = album.flatMap { PHAssetCollectionChangeRequest(for: $0) }
                 ?? PHAssetCollectionChangeRequest.creationRequestForAssetCollection(withTitle: albumTitle)
+            if album?.localizedTitle == legacyAlbumTitle { request.title = albumTitle }
             request.addAssets(assets)
         }
     }
@@ -230,8 +240,13 @@ public enum PhotoLibrarySafety {
     }
 
     private static func existingAlbum() -> PHAssetCollection? {
-        let options = PHFetchOptions()
-        options.predicate = NSPredicate(format: "title == %@", albumTitle)
-        return PHAssetCollection.fetchAssetCollections(with: .album, subtype: .albumRegular, options: options).firstObject
+        for title in [albumTitle, legacyAlbumTitle] {
+            let options = PHFetchOptions()
+            options.predicate = NSPredicate(format: "title == %@", title)
+            if let album = PHAssetCollection.fetchAssetCollections(with: .album, subtype: .albumRegular, options: options).firstObject {
+                return album
+            }
+        }
+        return nil
     }
 }

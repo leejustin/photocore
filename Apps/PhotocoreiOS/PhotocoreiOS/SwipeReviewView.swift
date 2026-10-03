@@ -23,7 +23,7 @@ struct SwipeReviewView: View {
                     Spacer()
                     Image(systemName: "checkmark.circle").font(.system(size: 56)).foregroundStyle(Color.accentColor)
                     Text("All close calls done").font(.display(26))
-                    Text("\(run.keepers.count) keepers").foregroundStyle(Color.ink.opacity(0.6))
+                    Text("\(run.keepers.count) picks").foregroundStyle(Color.ink.opacity(0.6))
                     Spacer()
                     Button("Done") { dismiss() }.buttonStyle(PrimaryButtonStyle())
                 }

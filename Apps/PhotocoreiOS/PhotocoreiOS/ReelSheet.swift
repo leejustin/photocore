@@ -8,7 +8,7 @@ import SwiftUI
 struct ReelSheet: View {
     let run: TripRun
     @Environment(\.dismiss) private var dismiss
-    @State private var stage = "Gathering your keepers"
+    @State private var stage = "Gathering your picks"
     @State private var reel: URL?
     @State private var player: AVPlayer?
     @State private var failed: String?
@@ -62,7 +62,7 @@ struct ReelSheet: View {
         for photo in run.keepers.prefix(Self.clipLimit) {
             guard let identifier = run.identifier(photo.id),
                   let asset = PHAsset.fetchAssets(withLocalIdentifiers: [identifier], options: nil).firstObject else { continue }
-            stage = "Gathering your keepers · \(clips.count + 1) of \(min(run.keepers.count, Self.clipLimit))"
+            stage = "Gathering your picks · \(clips.count + 1) of \(min(run.keepers.count, Self.clipLimit))"
             if asset.mediaSubtypes.contains(.photoLive), let motion = await Self.liveMotion(asset) {
                 clips.append(ReelClip(.video(motion)))
             } else if let data = await TripFinish.jpeg(identifier: identifier, maxPixel: 1920),
@@ -71,7 +71,7 @@ struct ReelSheet: View {
                 clips.append(ReelClip(.still(image), focus: SaliencyCropper.salientRegion(in: image)))
             }
         }
-        guard !clips.isEmpty else { failed = "None of the keepers could be read."; return }
+        guard !clips.isEmpty else { failed = "None of your picks could be read."; return }
         stage = "Making the reel"
         let url = FileManager.default.temporaryDirectory.appendingPathComponent("reel-\(run.trip.id).mp4")
         let options = HighlightReel.Options(title: run.trip.title, subtitle: run.trip.place == nil ? nil : run.trip.dates)

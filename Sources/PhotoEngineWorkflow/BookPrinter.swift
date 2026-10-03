@@ -35,7 +35,7 @@ public enum BookPrinter {
         var mediaBox = CGRect(x: 0, y: 0, width: page, height: page)
         guard let context = CGContext(url as CFURL, mediaBox: &mediaBox, [
             kCGPDFContextTitle: book.title,
-            kCGPDFContextCreator: "Photocore"
+            kCGPDFContextCreator: "Bound"
         ] as CFDictionary) else { throw PrintError.cannotCreate }
 
         let trimBox = CGRect(x: options.bleed, y: options.bleed, width: options.trim, height: options.trim)

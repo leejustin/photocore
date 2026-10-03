@@ -46,7 +46,7 @@ struct TripRunView: View {
         } message: { _ in
             Text(setAsideMessage)
         }
-        .alert("Photocore", isPresented: Binding(get: { message != nil }, set: { if !$0 { message = nil } })) {
+        .alert("Bound", isPresented: Binding(get: { message != nil }, set: { if !$0 { message = nil } })) {
             Button("OK", role: .cancel) {}
         } message: {
             Text(message ?? "")
@@ -82,7 +82,7 @@ struct TripRunView: View {
         switch run.stage {
         case .queued: "Up next"
         case .paused: "Taking a break"
-        case .deciding: "Choosing keepers"
+        case .deciding: "Choosing your best"
         default: "Picking the best"
         }
     }
@@ -141,7 +141,7 @@ struct TripRunView: View {
             Button {
                 saving = true
                 Task {
-                    do { try await run.saveAlbum() } catch { message = "Could not save the album. \(error.localizedDescription)" }
+                    do { try await run.saveAlbum() } catch { message = "Couldn't save to Photos. \(error.localizedDescription)" }
                     saving = false
                 }
             } label: {
@@ -150,7 +150,7 @@ struct TripRunView: View {
                 } else if run.albumSaved {
                     Label("Saved to Photos", systemImage: "checkmark")
                 } else {
-                    Text("Save \(run.keepers.count) to a Photos album")
+                    Text("Save your \(run.keepers.count) picks to Photos")
                 }
             }
             .buttonStyle(SecondaryButtonStyle())
@@ -186,7 +186,7 @@ struct TripRunView: View {
 
     private var summary: some View {
         VStack(alignment: .leading, spacing: 6) {
-            Text("\(run.keepers.count) keepers").font(.display(34)).foregroundStyle(Color.ink)
+            Text("\(run.keepers.count) picks").font(.display(34)).foregroundStyle(Color.ink)
             Text(summaryLine).font(.subheadline).foregroundStyle(Color.ink.opacity(0.6))
         }
     }
@@ -203,10 +203,10 @@ struct TripRunView: View {
                 .font(.footnote.weight(.semibold)).textCase(.uppercase).tracking(1)
                 .foregroundStyle(Color.ink.opacity(0.5))
             if run.setAsideCount > 0 {
-                Text("\(run.setAsideCount) gathered in the \u{201C}\(PhotoLibrarySafety.albumTitle)\u{201D} album. Nothing was deleted. Review and delete them from the archive button on the home screen when you're ready.")
+                Text("\(run.setAsideCount) gathered in \u{201C}\(PhotoLibrarySafety.albumTitle)\u{201D} in Photos. Nothing was deleted. Review and delete them from the archive button on the home screen when you're ready.")
                     .font(.subheadline).foregroundStyle(Color.ink.opacity(0.7))
                 if run.protectedCount > 0 {
-                    Text("\(run.protectedCount) favorites, edited, shared or album photos were left where they are.")
+                    Text("\(run.protectedCount) favorites, edited, shared or already-sorted photos were left where they are.")
                         .font(.footnote).foregroundStyle(Color.ink.opacity(0.55))
                 }
                 Button("Restore all \(run.setAsideCount)") {
@@ -214,7 +214,7 @@ struct TripRunView: View {
                 }
                 .buttonStyle(.bordered)
             } else {
-                Text("They stay in your library. To tidy up, set them aside: they're gathered in one album to look over, and deleting is a separate step you confirm.")
+                Text("They stay in your library. To tidy up, set them aside: they're gathered in one place in Photos to look over, and deleting is a separate step you confirm.")
                     .font(.subheadline).foregroundStyle(Color.ink.opacity(0.7))
                 Button {
                     guard !planning else { return }
@@ -239,9 +239,9 @@ struct TripRunView: View {
 
     private var setAsideMessage: String {
         guard let plan = pendingSetAside else { return "" }
-        var text = "They'll be gathered in the \u{201C}\(PhotoLibrarySafety.albumTitle)\u{201D} album. Nothing changes in your library, and you can undo it anytime."
+        var text = "They'll be gathered in \u{201C}\(PhotoLibrarySafety.albumTitle)\u{201D} in Photos. Nothing else changes in your library, and you can undo it anytime."
         if !plan.protected.isEmpty {
-            text += " \(plan.protected.count) favorites, edited, shared or album photos will be left alone."
+            text += " \(plan.protected.count) favorites, edited, shared or already-sorted photos will be left alone."
         }
         return text
     }
@@ -259,7 +259,7 @@ struct KeeperGrid: View {
                         .aspectRatio(1, contentMode: .fit)
                         .clipShape(.rect(cornerRadius: 6))
                         .contextMenu {
-                            Button("Remove from keepers", systemImage: "minus.circle") { run.toggle(photo.id) }
+                            Button("Remove from picks", systemImage: "minus.circle") { run.toggle(photo.id) }
                         }
                 }
             }

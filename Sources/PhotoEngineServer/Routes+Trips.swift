@@ -131,7 +131,8 @@ enum TripPaths {
             invitePath: record.inviteOpen ? invite(record) : nil,
             printInterestEndpoint: "/b/\(record.slug)/print-interest",
             footer: limits.branded ? BookRenderer.Options.freeFooter : "",
-            footerLink: limits.branded ? siteURL : nil
+            footerLink: limits.branded ? siteURL : nil,
+            makeOnePath: "/b/\(record.slug)/make"
         )
     }
 }
@@ -213,7 +214,7 @@ func registerTripRoutes(_ router: Router<BasicRequestContext>, env: ServerEnviro
         let book = BookEdits.load(from: folder).applied(to: try TripBook.load(from: folder))
         let output = await trips.folder(tid).appendingPathComponent("work/print.pdf")
         try FileManager.default.createDirectory(at: output.deletingLastPathComponent(), withIntermediateDirectories: true)
-        _ = try BookPrinter.pdf(book: book, folder: folder, to: output, options: .init(footer: record.limits.branded ? "Made with Photocore" : nil))
+        _ = try BookPrinter.pdf(book: book, folder: folder, to: output, options: .init(footer: record.limits.branded ? BookRenderer.Options.freeFooter : nil))
         var headers = HTTPFields()
         headers[.contentType] = "application/pdf"
         headers[.contentDisposition] = "attachment; filename=\"book.pdf\""
@@ -385,6 +386,24 @@ func registerTripRoutes(_ router: Router<BasicRequestContext>, env: ServerEnviro
         return try APIJSON.response(["ok": true])
     }
 
+    /// "Make one for your trip": counts the tap by platform, then sends iPhone
+    /// visitors to the App Store and everyone else to the web.
+    router.get("b/{slug}/make") { request, context in
+        let slug = try context.parameters.require("slug")
+        guard await trips.record(slug: slug) != nil else { throw APIError.notFound("No book.") }
+        let platform = TripStore.platform(userAgent: request.headers[.userAgent])
+        try? await trips.noteMakeOne(platform: platform)
+        var headers = HTTPFields()
+        headers[.location] = platform == "ios" ? (env.configuration.appStoreURL ?? "/new") : "/new"
+        headers[.cacheControl] = "no-store"
+        return Response(status: .found, headers: headers)
+    }
+
+    /// Make-one taps by platform and month.
+    router.get("v2/metrics/growth") { _, _ in
+        try APIJSON.response(await trips.growth())
+    }
+
     router.post("b/{slug}/print-interest") { _, context in
         let slug = try context.parameters.require("slug")
         guard let record = await trips.record(slug: slug) else { throw APIError.notFound("No book.") }
@@ -437,7 +456,12 @@ func registerTripRoutes(_ router: Router<BasicRequestContext>, env: ServerEnviro
         headers[HTTPField.Name("X-Content-Type-Options")!] = "nosniff"
         headers[HTTPField.Name("Referrer-Policy")!] = "no-referrer"
         headers[HTTPField.Name("Content-Security-Policy")!] = "default-src 'self'; img-src 'self' data:; style-src 'unsafe-inline'; script-src 'unsafe-inline'; connect-src 'self'; frame-ancestors 'none'"
-        return APIJSON.bytes(Data(InvitePage.html(code: code, title: record.title, ownerName: record.ownerName).utf8), headers: headers)
+        var cover: String?
+        if record.finishedAt != nil, record.isHosted(), let book = try? TripBook.load(from: await trips.bookFolder(record.id)),
+           let photo = book.allPhotos.first(where: { $0.id == book.coverPhotoID }) ?? book.allPhotos.first {
+            cover = TripPaths.book(record.slug) + BookRenderer.photoPath(photo)
+        }
+        return APIJSON.bytes(Data(InvitePage.html(code: code, title: record.title, ownerName: record.ownerName, cover: cover).utf8), headers: headers)
     }
 
     router.get("j/{code}/status") { request, context in
