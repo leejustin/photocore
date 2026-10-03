@@ -714,7 +714,7 @@ func registerTripRoutes(
         headers[.cacheControl] = "no-store"
         headers[HTTPField.Name("X-Content-Type-Options")!] = "nosniff"
         headers[HTTPField.Name("Referrer-Policy")!] = "no-referrer"
-        headers[HTTPField.Name("Content-Security-Policy")!] = "default-src 'self'; img-src 'self' data:; style-src 'unsafe-inline'; script-src 'unsafe-inline'; connect-src 'self'; frame-ancestors 'none'"
+        headers[HTTPField.Name("Content-Security-Policy")!] = "default-src 'self'; img-src 'self' data: blob:; style-src 'unsafe-inline'; script-src 'unsafe-inline'; connect-src 'self'; frame-ancestors 'none'"
         var cover: String?
         if record.finishedAt != nil, record.isHosted(), let book = try? TripBook.load(from: await trips.bookFolder(record.id)),
            let photo = book.allPhotos.first(where: { $0.id == book.coverPhotoID }) ?? book.allPhotos.first {

@@ -90,13 +90,16 @@ public struct ServerConfiguration: Sendable {
             generated = true
         }
         let port = Int(environment["PHOTO_ENGINE_PORT"] ?? "") ?? 8787
-        let security = WorkerSecurity.fromEnvironment(token: token, environment: environment)
-        let cache = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
+        var security = WorkerSecurity.fromEnvironment(token: token, environment: environment)
+        // One folder for everything the server writes, for development and deploys.
+        let dataDirectory = environment["PHOTOCORE_DATA_DIR"].flatMap { $0.isEmpty ? nil : URL(fileURLWithPath: $0, isDirectory: true) }
+        if let dataDirectory { security.outputRoot = dataDirectory.appendingPathComponent("worker-runs", isDirectory: true) }
+        let cache = dataDirectory?.appendingPathComponent("media", isDirectory: true) ?? FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
             .appendingPathComponent("Photocore/media", isDirectory: true)
         return ServerConfiguration(
             port: port,
             security: security,
-            catalogURL: PhotoCatalog.defaultURL(),
+            catalogURL: dataDirectory?.appendingPathComponent("catalog.sqlite") ?? PhotoCatalog.defaultURL(),
             mediaCacheDirectory: cache,
             tokenWasGenerated: generated,
             bundleID: environment["PHOTOCORE_BUNDLE_ID"] ?? "com.photocore.trip",

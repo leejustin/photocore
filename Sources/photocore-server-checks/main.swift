@@ -229,6 +229,10 @@ struct ServerChecks {
         try expect(make.status == 302 && make.location == "/new", "make-one for Android returned \(make.status) \(make.location ?? "")")
         let growth = text(try await data(base.appendingPathComponent("v2/metrics/growth"), token: token).body)
         try expect(growth.contains("\"android\":1"), "the make-one tap wasn't counted: \(growth)")
+        let inviteHTML = text(invitePage.body)
+        try expect(inviteHTML.contains("window.BoundPrefilter") && inviteHTML.contains("add-skipped"), "the invite page has no pre-filter")
+        let policy = try await headerValue(base.appendingPathComponent(invite), "Content-Security-Policy")
+        try expect(policy?.contains("img-src 'self' data: blob:") == true, "the invite page can't read chosen photos: \(policy ?? "")")
         let badInvite = try await data(base.appendingPathComponent("j/notarealcode"))
         try expect(badInvite.status == 404, "an unknown invite returned \(badInvite.status)")
         let noName = try await send(base.appendingPathComponent(invite + "/join"), method: "POST", json: ["name": "  "], headers: [:])
@@ -421,6 +425,11 @@ struct ServerChecks {
         if let token { request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization") }
         let (data, response) = try await Self.session.data(for: request)
         return HTTPResult(status: (response as! HTTPURLResponse).statusCode, body: data, etag: nil)
+    }
+
+    static func headerValue(_ url: URL, _ name: String) async throws -> String? {
+        let (_, response) = try await Self.session.data(for: URLRequest(url: url))
+        return (response as? HTTPURLResponse)?.value(forHTTPHeaderField: name)
     }
 
     /// A GET that doesn't follow redirects, to check where one points.

@@ -47,7 +47,10 @@ enum InvitePage {
         <section id="add" hidden>
           <p class="who">Adding as <strong id="me"></strong> · <button type="button" class="link" id="not-me">Not you?</button></p>
           <label class="pick">Choose photos<input id="files" type="file" accept="image/*" multiple></label>
-          <div id="progress" hidden><div class="bar"><span id="bar"></span></div><p id="status" aria-live="polite"></p></div>
+          <p class="hint">Bound looks through them on your phone first and skips repeats and blurry ones, so less goes up.</p>
+          <div id="progress" hidden><div class="bar"><span id="bar"></span></div><p id="status" aria-live="polite"></p>
+            <p id="skipped" class="hint" hidden></p>
+            <button type="button" class="link" id="add-skipped" hidden></button></div>
           <p id="mine" class="hint"></p>
           <form id="mail" class="inline" hidden>
             <input id="later-email" type="email" maxlength="254" autocomplete="email" placeholder="Email me when the book is ready">
@@ -60,6 +63,7 @@ enum InvitePage {
         <p class="fine">Only people with this link can add photos. Photos stay private until they're picked for the book, and the ones that aren't picked are deleted.</p>
         <p class="brand">Bound · Finish the trip.</p>
         </main>
+        <script>\(Prefilter.script)</script>
         <script>window.BOUND_INVITE = \(json(code));\(script)</script></body></html>
         """
     }
@@ -157,17 +161,16 @@ enum InvitePage {
           .catch(function(e){ alert((e && e.error && e.error.message) || 'Couldn\\u2019t save that.'); });
       });
       $('not-me').addEventListener('click', function(){ me = null; save(null); refresh(); });
-      $('files').addEventListener('change', function(){
-        var files = Array.prototype.slice.call(this.files || []); this.value = '';
-        if (!files.length || !me) return;
+      var leftOut = [];
+      function upload(files, note){
         var done = 0, failed = 0, full = false;
         $('progress').hidden = false;
         function show(){
-          $('bar').style.width = Math.round(100 * (done + failed) / files.length) + '%';
+          $('bar').style.width = Math.round(100 * (done + failed) / Math.max(files.length, 1)) + '%';
           $('status').textContent = 'Adding ' + (done + failed) + ' of ' + files.length + '\\u2026';
         }
         show();
-        files.reduce(function(chain, file, i){
+        return files.reduce(function(chain, file, i){
           return chain.then(function(){
             if (full) { failed++; show(); return; }
             var name = Date.now().toString(36) + i;
@@ -179,9 +182,32 @@ enum InvitePage {
           $('bar').style.width = '100%';
           $('status').textContent = done
             ? 'Thanks, ' + me.name + '! ' + plural(done, 'photo') + ' added.' + (failed ? ' ' + plural(failed, 'photo') + ' couldn\\u2019t be added' + (full ? ': that\\u2019s the limit.' : ' (JPEG or HEIC only).') : '')
-            : 'Those photos couldn\\u2019t be added. JPEG and HEIC photos work.';
+            : (files.length ? 'Those photos couldn\\u2019t be added. JPEG and HEIC photos work.' : 'Nothing new to add.');
           refresh();
         });
+      }
+      $('files').addEventListener('change', function(){
+        var files = Array.prototype.slice.call(this.files || []); this.value = '';
+        if (!files.length || !me) return;
+        $('progress').hidden = false; $('skipped').hidden = true; $('add-skipped').hidden = true;
+        var looking = function(i, n){
+          $('bar').style.width = Math.round(100 * i / n) + '%';
+          $('status').textContent = 'Looking through your photos\\u2026 ' + i + ' of ' + n;
+        };
+        var filter = window.BoundPrefilter ? window.BoundPrefilter.run(files, looking) : Promise.resolve({ keep: files, skipped: [] });
+        filter.catch(function(){ return { keep: files, skipped: [] }; }).then(function(result){
+          leftOut = result.skipped.filter(function(s){ return s.reason !== 'other'; }).map(function(s){ return s.file; });
+          var note = window.BoundPrefilter ? window.BoundPrefilter.summary(result) : '';
+          upload(result.keep).then(function(){
+            if (note) { $('skipped').textContent = note; $('skipped').hidden = false; }
+            if (leftOut.length) { $('add-skipped').textContent = 'Add the ' + plural(leftOut.length, 'skipped photo') + ' anyway'; $('add-skipped').hidden = false; }
+          });
+        });
+      });
+      $('add-skipped').addEventListener('click', function(){
+        var files = leftOut; leftOut = [];
+        $('add-skipped').hidden = true; $('skipped').hidden = true;
+        upload(files);
       });
       $('remove').addEventListener('click', function(){
         if (!confirm('Remove all the photos you added? They won\\u2019t be in the book.')) return;
