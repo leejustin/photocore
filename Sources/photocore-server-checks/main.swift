@@ -260,7 +260,8 @@ struct ServerChecks {
 
         // Sam takes their photos back; then the owner closes the invite.
         let removed = try await data(base.appendingPathComponent(invite + "/photos"), method: "DELETE", headers: ["X-Photocore-Contributor": sam.token])
-        try expect(removed.status == 200 && text(removed.body).contains("1"), "removing Sam's photos returned \(removed.status) \(text(removed.body))")
+        // Sam's photo was a repeat of the owner's frames, so the finish already deleted it.
+        try expect(removed.status == 200 && text(removed.body).contains("\"removed\":0"), "removing Sam's photos returned \(removed.status) \(text(removed.body))")
         let otherRemove = try await data(base.appendingPathComponent(invite + "/photos"), method: "DELETE", headers: ["X-Photocore-Contributor": "nottherealtoken"])
         try expect(otherRemove.status == 401, "removing photos with a wrong token returned \(otherRemove.status)")
         let close = try await postJSON(base.appendingPathComponent("v2/trips/\(trip.id)/invite"), token: token, body: ["open": false])
@@ -304,9 +305,26 @@ struct ServerChecks {
         let credited = groupPage.contains("class=\"credit\">Priya<") || groupPage.contains("class=\"credit\">Leo<")
         try expect(credited && (groupPage.contains("Photos by Mo and Priya") || groupPage.contains("Photos by Leo and Mo")), "group book credits are wrong")
 
+        // The repeat that lost was deleted; the picked photos stay, and download.
+        let afterGroup = try decode(TripStatusWire.self, from: try await data(base.appendingPathComponent("v2/trips/\(group.id)"), token: token).body)
+        let left = Dictionary(uniqueKeysWithValues: afterGroup.contributors.map { ($0.name, $0.photos) })
+        try expect(left["Mo"] == 1 && (left["Priya"] ?? 0) + (left["Leo"] ?? 0) == 1 && afterGroup.newSinceFinish == 0, "after the finish, friends' photos are \(left), new \(afterGroup.newSinceFinish ?? -1)")
+        let zip = try await data(base.appendingPathComponent("b/\(group.slug)/photos.zip"))
+        try expect(zip.status == 200 && zip.body.starts(with: [0x50, 0x4B, 0x03, 0x04]), "the download returned \(zip.status)")
+        let zipFile = FileManager.default.temporaryDirectory.appendingPathComponent("bound-check-\(UUID().uuidString).zip")
+        try zip.body.write(to: zipFile)
+        defer { try? FileManager.default.removeItem(at: zipFile) }
+        let listing = try run("/usr/bin/unzip", ["-l", zipFile.path])
+        let tested = try run("/usr/bin/unzip", ["-tq", zipFile.path])
+        try expect(tested.contains("No errors") && listing.contains("001 Mo.jpg") && listing.contains("2 files"), "the zip didn't check out: \(tested) \(listing)")
+        let late = try await raw(base.appendingPathComponent(groupInvite + "/photos/late"), method: "PUT", token: nil, body: try Data(contentsOf: source.appendingPathComponent(files[1])), headers: ["X-Photocore-Contributor": people["Mo"]!.token])
+        try expect(late.status == 201, "a photo after the finish returned \(late.status)")
+        let pending = try decode(TripStatusWire.self, from: try await data(base.appendingPathComponent("v2/trips/\(group.id)"), token: token).body)
+        try expect(pending.newSinceFinish == 1, "a photo after the finish counted \(pending.newSinceFinish ?? -1) new")
+
         let preview = try await raw(base.appendingPathComponent("v2/preview"), method: "POST", token: token, body: try Data(contentsOf: source.appendingPathComponent(files[0])))
         try expect(preview.status == 200 && preview.body.starts(with: [0xFF, 0xD8]), "preview returned \(preview.status)")
-        print("✓ trips: create, upload, finish, public book, owner edits, guest notes, invite join and upload, refinish keeps edits, remove and close, group finish with repeats and credits, preview")
+        print("✓ trips: create, upload, finish, public book, owner edits, guest notes, invite join and upload, refinish keeps edits, remove and close, group finish with repeats and credits, unpicked photos deleted, full-size download, new-photo count, preview")
     }
 
     /// The plans: forged, foreign and expired purchases are refused; a pass is
@@ -460,6 +478,20 @@ struct ServerChecks {
 
     static func text(_ data: Data) -> String { String(data: data, encoding: .utf8) ?? "" }
 
+    /// Runs a tool and returns what it printed.
+    static func run(_ tool: String, _ arguments: [String]) throws -> String {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: tool)
+        process.arguments = arguments
+        let pipe = Pipe()
+        process.standardOutput = pipe
+        process.standardError = pipe
+        try process.run()
+        let output = pipe.fileHandleForReading.readDataToEndOfFile()
+        process.waitUntilExit()
+        return String(decoding: output, as: UTF8.self)
+    }
+
     static func expect(_ condition: Bool, _ message: String) throws {
         if !condition { throw CheckFailure(message) }
     }
@@ -523,6 +555,7 @@ struct TripStatusWire: Decodable {
     struct Person: Decodable { var name: String; var photos: Int }
     var inviteOpen: Bool
     var contributors: [Person]
+    var newSinceFinish: Int?
 }
 
 struct PlanStatusWire: Decodable {

@@ -44,6 +44,8 @@ struct TripRecord: Codable, Sendable {
     var purgedAt: Date?
     /// The first name of whoever kept the book on the web, for the thank-you.
     var keptBy: String?
+    /// When the latest finish began reading photos.
+    var finishStartedAt: Date?
 
     var inviteOpen: Bool { inviteCode != nil && inviteClosed != true }
     var currentPlan: Plan { plan ?? .free }
@@ -265,6 +267,91 @@ actor TripStore {
         order.updatedAt = Date()
         try saveOrder(order)
         return order
+    }
+
+    // MARK: Sources, downloads and unpicked photos
+
+    /// The original behind each photo in the book, relative to the trip folder.
+    struct Source: Codable, Sendable {
+        var photo: String
+        var path: String
+        var credit: String?
+    }
+
+    func saveSources(_ id: String, _ sources: [(id: PhotoID, url: URL, credit: String?)]) throws {
+        let base = folder(id).resolvingSymlinksInPath().standardizedFileURL.path + "/"
+        let list = sources.compactMap { item -> Source? in
+            let path = item.url.resolvingSymlinksInPath().standardizedFileURL.path
+            guard path.hasPrefix(base) else { return nil }
+            return Source(photo: item.id.description, path: String(path.dropFirst(base.count)), credit: item.credit)
+        }
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        try encoder.encode(list).write(to: folder(id).appendingPathComponent("sources.json"), options: .atomic)
+    }
+
+    func sources(_ id: String) -> [Source] {
+        (try? JSONDecoder().decode([Source].self, from: Data(contentsOf: folder(id).appendingPathComponent("sources.json")))) ?? []
+    }
+
+    /// Everyone's full-size photos in the book as one zip, made once per
+    /// version of the book. Names run in book order with who took each photo.
+    func download(_ id: String) throws -> URL {
+        let list = sources(id)
+        guard !list.isEmpty else { throw APIError.notFound("This book has no photos to download yet.") }
+        let key = Self.hash(list.map { $0.photo + $0.path }.joined(separator: "|")).prefix(16)
+        let work = folder(id).appendingPathComponent("work", isDirectory: true)
+        let url = work.appendingPathComponent("photos-\(key).zip")
+        if FileManager.default.fileExists(atPath: url.path) { return url }
+        try FileManager.default.createDirectory(at: work, withIntermediateDirectories: true)
+        for old in ((try? FileManager.default.contentsOfDirectory(atPath: work.path)) ?? []) where old.hasPrefix("photos-") && old.hasSuffix(".zip") {
+            try? FileManager.default.removeItem(at: work.appendingPathComponent(old))
+        }
+        var entries: [ZipWriter.Entry] = []
+        for (index, source) in list.enumerated() {
+            let file = folder(id).appendingPathComponent(source.path)
+            guard FileManager.default.fileExists(atPath: file.path) else { continue }
+            let who = (source.credit ?? "").filter { $0.isLetter || $0.isNumber || $0 == " " || $0 == "-" }.trimmingCharacters(in: .whitespaces)
+            let ext = file.pathExtension.lowercased().isEmpty ? "jpg" : file.pathExtension.lowercased()
+            entries.append(.init(name: String(format: "%03d", index + 1) + (who.isEmpty ? "" : " " + who) + "." + ext, source: file))
+        }
+        let partial = work.appendingPathComponent("photos-\(key).partial")
+        try ZipWriter.write(entries, to: partial)
+        try FileManager.default.moveItem(at: partial, to: url)
+        return url
+    }
+
+    /// Deletes friends' uploads a finish read but didn't pick. Only files in
+    /// friends' folders (and the owner's, when the owner's photos were culled
+    /// on the server) that the finish read are touched, so photos added while
+    /// it ran wait for the next one. Matching is by file name, which is unique
+    /// in a trip, so a path spelled two ways can never delete a picked photo.
+    @discardableResult
+    func deleteUnpicked(_ id: String, considered: [URL], picked: [URL]) -> Int {
+        let keep = Set(picked.map(\.lastPathComponent))
+        let allowed = [folder(id).appendingPathComponent("contributors"), guestFolder(id), folder(id).appendingPathComponent("owner")]
+            .map { $0.resolvingSymlinksInPath().standardizedFileURL.path + "/" }
+        var deleted = 0
+        for file in considered where !keep.contains(file.lastPathComponent) {
+            let path = file.resolvingSymlinksInPath().standardizedFileURL.path
+            guard allowed.contains(where: { path.hasPrefix($0) }) else { continue }
+            if (try? FileManager.default.removeItem(atPath: path)) != nil { deleted += 1 }
+        }
+        return deleted
+    }
+
+    /// Friends' photos added since the book was last made.
+    func newSinceFinish(_ id: String) -> Int {
+        guard let finished = records[id]?.finishStartedAt ?? records[id]?.finishedAt else { return contributedCount(id) }
+        var count = 0
+        let folders = contributors(id).map { contributorFolder(id, $0.id) } + [guestFolder(id)]
+        for folder in folders {
+            for name in ((try? FileManager.default.contentsOfDirectory(atPath: folder.path)) ?? []) where !name.hasPrefix(".") {
+                let date = (try? FileManager.default.attributesOfItem(atPath: folder.appendingPathComponent(name).path)[.creationDate] as? Date) ?? .distantPast
+                if date > finished { count += 1 }
+            }
+        }
+        return count
     }
 
     // MARK: Growth

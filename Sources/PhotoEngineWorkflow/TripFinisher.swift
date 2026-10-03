@@ -48,6 +48,12 @@ public enum TripFinisher {
         public var guestOverBudget: Int
         /// Photos in the book per contributor name.
         public var keptPerContributor: [String: Int]
+        /// The original file behind each photo in the book, in book order, with
+        /// who took it.
+        public var sources: [(id: PhotoID, url: URL, credit: String?)]
+        /// Every friend's file this finish read, picked or not. Files added
+        /// while it ran aren't here.
+        public var considered: [URL]
     }
 
     /// Visual distance under which two frames count as the same shot
@@ -91,6 +97,10 @@ public enum TripFinisher {
         var picks: [GroupCuration.Candidate] = []
         var byID: [PhotoID: AnalyzedPhoto] = [:]
         let people = folders.contributors.filter { photos(in: $0.folder) > 0 }
+        var considered: [URL] = []
+        for person in people {
+            considered += ((try? fm.contentsOfDirectory(at: person.folder, includingPropertiesForKeys: nil)) ?? []).filter { !$0.lastPathComponent.hasPrefix(".") }
+        }
         for (index, person) in people.enumerated() {
             progress("Picking the best of everyone's photos", index, people.count)
             var profile = ScoringProfile.default(for: .trip)
@@ -150,7 +160,8 @@ public enum TripFinisher {
         progress("Finishing photos", 0, keepers.count)
         let edits = BookEdits.load(from: folders.book)
         let report = try BookPublisher.publish(book: book, edits: edits, facts: facts, source: { sources[$0.id] }, to: folders.book, options: options, instagram: instagram)
-        return Outcome(book: book, report: report, ownerCount: owner.count, guestKept: guestKept, guestDuplicates: guestDuplicates, guestOverBudget: guestOverBudget, keptPerContributor: keptPerContributor)
+        let inBook = edits.applied(to: book).allPhotos.compactMap { photo in sources[photo.id].map { (id: photo.id, url: $0, credit: credits[photo.id]) } }
+        return Outcome(book: book, report: report, ownerCount: owner.count, guestKept: guestKept, guestDuplicates: guestDuplicates, guestOverBudget: guestOverBudget, keptPerContributor: keptPerContributor, sources: inBook, considered: considered)
     }
 
     /// Applies one owner edit and re-renders the page without touching photos.

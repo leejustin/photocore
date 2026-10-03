@@ -14,6 +14,8 @@ extension ServerChecks {
         let page = text(try await data(base.appendingPathComponent("b/\(trip.slug)/")).body)
         try expect(page.contains("id=\"keep\"") && page.contains("Online until") && page.contains("/b/\(trip.slug)/keep"), "a free book has no keep button")
         try expect(!page.contains("photos.zip"), "a free book offers the full-size download")
+        let freeZip = try await data(base.appendingPathComponent("b/\(trip.slug)/photos.zip"))
+        try expect(freeZip.status == 402, "a free book's download returned \(freeZip.status)")
 
         // Keep: a Stripe checkout for $4.99 with the trip in its metadata.
         let keep = try await send(base.appendingPathComponent("b/\(trip.slug)/keep"), method: "POST", json: [:], headers: [:])

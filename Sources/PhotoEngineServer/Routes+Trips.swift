@@ -101,6 +101,8 @@ struct TripDTO: Encodable, Sendable {
     /// Always true: every book is free to make. Kept for older apps.
     var freeBookAvailable: Bool
     var printInterest: Int
+    /// Friends' photos added since the book was last made.
+    var newSinceFinish: Int
 }
 
 struct UploadDTO: Encodable, Sendable {
@@ -246,7 +248,8 @@ func registerTripRoutes(
             bookPath: TripPaths.book(record.slug), invitePath: TripPaths.invite(record),
             inviteOpen: record.inviteOpen, contributors: people,
             plan: record.currentPlan, limits: record.limits, hostedUntil: record.hostedUntil,
-            freeBookAvailable: await trips.freeBookAvailable(record), printInterest: record.printInterest ?? 0
+            freeBookAvailable: await trips.freeBookAvailable(record), printInterest: record.printInterest ?? 0,
+            newSinceFinish: await trips.newSinceFinish(tid)
         ))
     }
 
@@ -353,6 +356,7 @@ func registerTripRoutes(
         )
         let jobs = env.jobs
         let stored = try await env.jobs.enqueue(job) {
+            try await trips.update(tid) { $0.finishStartedAt = Date() }
             let writer = DiaryWriters.make()
             let outcome = try await TripFinisher.finish(
                 folders: folders,
@@ -368,6 +372,9 @@ func registerTripRoutes(
             ) { stage, done, total in
                 Task { await jobs.noteProgress(id: job.id, stage: "finish", completed: done, total: total, message: stage) }
             }
+            try await trips.saveSources(tid, outcome.sources)
+            // Friends' photos that weren't picked are deleted now; only the book's stay.
+            await trips.deleteUnpicked(tid, considered: outcome.considered, picked: outcome.sources.map(\.url))
             let firstFinish = await trips.record(id: tid)?.finishedAt == nil
             try await trips.update(tid) {
                 let first = $0.finishedAt ?? Date()
@@ -474,6 +481,23 @@ func registerTripRoutes(
     /// Make-one taps by platform and month.
     router.get("v2/metrics/growth") { _, _ in
         try APIJSON.response(await trips.growth())
+    }
+
+    /// Everyone's full-size photos in a kept book, as one zip.
+    router.get("b/{slug}/photos.zip") { _, context in
+        let slug = try context.parameters.require("slug")
+        guard let record = await trips.record(slug: slug) else { throw APIError.notFound("No book.") }
+        try ensureHosted(record)
+        guard record.limits.download else { throw APIError.paymentRequired("Downloading everyone's photos comes with keeping the book.") }
+        let zip = try await trips.download(record.id)
+        let size = (try? FileManager.default.attributesOfItem(atPath: zip.path)[.size] as? Int) ?? 0
+        let title = (record.title.flatMap { $0.isEmpty ? nil : $0 } ?? "Bound").filter { $0.isLetter || $0.isNumber || $0 == " " || $0 == "-" }
+        var headers = HTTPFields()
+        headers[.contentType] = "application/zip"
+        headers[.contentLength] = String(size)
+        headers[.contentDisposition] = "attachment; filename=\"\(title) photos.zip\""
+        headers[.cacheControl] = "private, no-store"
+        return Response(status: .ok, headers: headers, body: try await FileIO().loadFile(path: zip.path, context: context))
     }
 
     router.post("b/{slug}/print-interest") { _, context in
