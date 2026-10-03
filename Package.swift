@@ -51,7 +51,7 @@ let package = Package(
             resources: [.copy("openapi.yaml")]
         ),
         .executableTarget(name: "photocore-server", dependencies: ["PhotoEngineServer"]),
-        .executableTarget(name: "photocore-server-checks", dependencies: ["PhotoEngineServer", "PhotoEngineCore"]),
+        .executableTarget(name: "photocore-server-checks", dependencies: ["PhotoEngineServer", "PhotoEngineCore", "PhotoEngineWorkflow", .product(name: "Hummingbird", package: "hummingbird")]),
         .testTarget(name: "PhotoEngineAppleTests", dependencies: ["PhotoEngineApple", "PhotoEngineCore", "PhotoEngineWorkflow"])
     ]
 )

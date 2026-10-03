@@ -42,6 +42,8 @@ struct TripRecord: Codable, Sendable {
     var remindersSent: [Int]?
     /// When an offline free book's photos were deleted.
     var purgedAt: Date?
+    /// The first name of whoever kept the book on the web, for the thank-you.
+    var keptBy: String?
 
     var inviteOpen: Bool { inviteCode != nil && inviteClosed != true }
     var currentPlan: Plan { plan ?? .free }
@@ -57,6 +59,9 @@ struct EntitlementLedger: Codable, Sendable {
     var passes: [String: String] = [:]
     /// Plus original transaction ID to trip IDs and when each was started.
     var plusBooks: [String: [String: Date]] = [:]
+    /// Web checkout sessions already applied, to the trip they were for, so a
+    /// repeated webhook never applies twice.
+    var webSessions: [String: String]? = [:]
     /// Install hash to the trip that used the free book, from when each phone
     /// had one free book. No longer enforced; kept so old ledgers still load.
     var freeBooks: [String: String] = [:]
@@ -196,6 +201,71 @@ actor TripStore {
     /// Every book is free to make, so a trip can always be finished on the
     /// free plan. Kept for apps that still read the field.
     func freeBookAvailable(_ record: TripRecord) -> Bool { true }
+
+    // MARK: Web purchases
+
+    /// Applies a paid web checkout once. Returns the trip and whether anything
+    /// changed (false for a repeated webhook).
+    func applyWeb(_ completion: CheckoutCompletion) throws -> (TripRecord, Bool) {
+        guard var record = records[completion.tripID] else { throw APIError.notFound("No trip \(completion.tripID)") }
+        if ledger.webSessions?[completion.sessionID] != nil { return (record, false) }
+        switch completion.kind {
+        case .keep, .event:
+            let plan: Plan = completion.kind == .keep ? .tripPass : .eventPass
+            if plan.rank > record.currentPlan.rank {
+                record.plan = plan
+                record.planTransactionID = completion.sessionID
+                record.subscriptionExpires = nil
+                record.hostedUntil = nil
+            }
+            if record.keptBy == nil, let name = completion.name?.split(separator: " ").first { record.keptBy = String(name.prefix(TripLimits.nameLength)) }
+            try save(record)
+        case .print:
+            guard let product = completion.product, let shipping = completion.shipping else {
+                throw APIError.invalid("A print order needs a product and an address.")
+            }
+            let order = PrintOrder(
+                id: Self.randomToken(length: 12), tripID: record.id, slug: record.slug, product: product,
+                sessionID: completion.sessionID, email: completion.email, shipping: shipping,
+                status: .paid, createdAt: Date(), updatedAt: Date(), cents: completion.cents
+            )
+            try saveOrder(order)
+        }
+        if ledger.webSessions == nil { ledger.webSessions = [:] }
+        ledger.webSessions?[completion.sessionID] = record.id
+        try saveLedger()
+        return (record, true)
+    }
+
+    // MARK: Print orders
+
+    var ordersFolder: URL { root.appendingPathComponent("orders", isDirectory: true) }
+
+    func saveOrder(_ order: PrintOrder) throws {
+        try FileManager.default.createDirectory(at: ordersFolder, withIntermediateDirectories: true)
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .iso8601
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        try encoder.encode(order).write(to: ordersFolder.appendingPathComponent(order.id + ".json"), options: .atomic)
+    }
+
+    func orders() -> [PrintOrder] {
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        let names = ((try? FileManager.default.contentsOfDirectory(atPath: ordersFolder.path)) ?? []).filter { $0.hasSuffix(".json") }
+        return names.compactMap { try? decoder.decode(PrintOrder.self, from: Data(contentsOf: ordersFolder.appendingPathComponent($0))) }
+            .sorted { $0.createdAt < $1.createdAt }
+    }
+
+    func order(_ id: String) -> PrintOrder? { orders().first { $0.id == id } }
+
+    func changeOrder(_ id: String, _ change: (inout PrintOrder) -> Void) throws -> PrintOrder? {
+        guard var order = order(id) else { return nil }
+        change(&order)
+        order.updatedAt = Date()
+        try saveOrder(order)
+        return order
+    }
 
     // MARK: Growth
 

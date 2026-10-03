@@ -133,21 +133,47 @@ struct FinishResult: Codable, Sendable {
     var contributors: [String: Int]?
 }
 
+/// What this server can sell from a book page.
+struct PageFeatures: Sendable {
+    /// Keeping a book from its page (needs web payments).
+    var keep: Bool
+    /// Ordering printed copies (needs web payments and a printer).
+    var prints: Bool
+
+    static let none = PageFeatures(keep: false, prints: false)
+}
+
 enum TripPaths {
     static func book(_ slug: String) -> String { "/b/\(slug)/" }
     static func invite(_ record: TripRecord) -> String? { record.inviteCode.map { "/j/\($0)" } }
-    /// What the page offers follows the plan: editing and no footer are paid.
-    static func options(_ record: TripRecord, siteURL: String?) -> BookRenderer.Options {
+    /// What the page offers follows the plan: editing, downloads and no footer
+    /// are paid; a free book shows when it goes offline and how to keep it.
+    static func options(_ record: TripRecord, siteURL: String?, features: PageFeatures = .none, now: Date = Date()) -> BookRenderer.Options {
         let limits = record.limits
+        let free = record.currentPlan == .free
         return BookRenderer.Options(
             editEndpoint: limits.editing ? "/b/\(record.slug)/edits" : nil,
             guestEndpoint: "/b/\(record.slug)/guest",
             invitePath: record.inviteOpen ? invite(record) : nil,
-            printInterestEndpoint: "/b/\(record.slug)/print-interest",
+            printInterestEndpoint: features.prints ? nil : "/b/\(record.slug)/print-interest",
             footer: limits.branded ? BookRenderer.Options.freeFooter : "",
             footerLink: limits.branded ? siteURL : nil,
+            keepEndpoint: features.keep && free && record.purgedAt == nil ? "/b/\(record.slug)/keep" : nil,
+            hostedUntil: free ? (record.hostedUntil ?? now.addingTimeInterval(PlanPolicy.freeHosting)) : nil,
+            downloadPath: limits.download ? "/b/\(record.slug)/photos.zip" : nil,
+            printOrderEndpoint: features.prints ? "/b/\(record.slug)/print" : nil,
             makeOnePath: "/b/\(record.slug)/make"
         )
+    }
+
+    /// Writes a finished book's page again, for a new plan or setting.
+    static func rerender(_ record: TripRecord, trips: TripStore, options: BookRenderer.Options) async {
+        guard record.finishedAt != nil, record.purgedAt == nil else { return }
+        let folder = await trips.bookFolder(record.id)
+        guard let book = try? TripBook.load(from: folder) else { return }
+        let edits = BookEdits.load(from: folder)
+        try? Data(BookRenderer.html(edits.applied(to: book), options: options).utf8)
+            .write(to: folder.appendingPathComponent("index.html"), options: .atomic)
     }
 }
 
@@ -169,8 +195,21 @@ private func contributorToken(_ request: Request) -> String? {
     request.headers[HTTPField.Name("X-Photocore-Contributor")!]
 }
 
-func registerTripRoutes(_ router: Router<BasicRequestContext>, env: ServerEnvironment, trips: TripStore, storeKit: StoreKitVerifier, lifecycle: BookLifecycle, address: PublicAddress) {
+func registerTripRoutes(
+    _ router: Router<BasicRequestContext>,
+    env: ServerEnvironment,
+    trips: TripStore,
+    storeKit: StoreKitVerifier,
+    lifecycle: BookLifecycle,
+    address: PublicAddress,
+    payments: (any PaymentProvider)?,
+    printsEnabled: Bool
+) {
     let siteURL = env.configuration.siteURL
+    let features = PageFeatures(keep: payments != nil, prints: payments != nil && printsEnabled)
+    @Sendable func pageOptions(_ record: TripRecord) -> BookRenderer.Options {
+        TripPaths.options(record, siteURL: siteURL, features: features)
+    }
     // MARK: Owner API (server token)
 
     router.post("v2/trips") { request, context in
@@ -223,11 +262,7 @@ func registerTripRoutes(_ router: Router<BasicRequestContext>, env: ServerEnviro
         }
         let record = try await trips.apply(transaction, to: tid)
         // Re-render a finished book so its page matches the plan at once.
-        if record.finishedAt != nil, let book = try? TripBook.load(from: await trips.bookFolder(tid)) {
-            let edits = BookEdits.load(from: await trips.bookFolder(tid))
-            try? Data(BookRenderer.html(edits.applied(to: book), options: TripPaths.options(record, siteURL: siteURL)).utf8)
-                .write(to: await trips.bookFolder(tid).appendingPathComponent("index.html"), options: .atomic)
-        }
+        await TripPaths.rerender(record, trips: trips, options: pageOptions(record))
         return try APIJSON.response(PlanDTO(plan: record.currentPlan, limits: record.limits, hostedUntil: record.hostedUntil, subscriptionExpires: record.subscriptionExpires))
     }
 
@@ -326,7 +361,7 @@ func registerTripRoutes(_ router: Router<BasicRequestContext>, env: ServerEnviro
                 theme: theme,
                 ownerName: record.ownerName,
                 writer: writer,
-                options: TripPaths.options(record, siteURL: siteURL),
+                options: pageOptions(record),
                 lookUpPlaces: ProcessInfo.processInfo.environment["PHOTOCORE_OFFLINE"] != "1",
                 instagram: limits.instagram
             ) { stage, done, total in
@@ -413,7 +448,7 @@ func registerTripRoutes(_ router: Router<BasicRequestContext>, env: ServerEnviro
         guard record.limits.editing else { throw APIError.paymentRequired("Editing the words comes with a Trip Pass.") }
         let body = try await request.decode(as: EditBody.self, context: context)
         do {
-            try TripFinisher.applyEdit(key: body.key, value: body.value, bookFolder: await trips.bookFolder(record.id), options: TripPaths.options(record, siteURL: siteURL))
+            try TripFinisher.applyEdit(key: body.key, value: body.value, bookFolder: await trips.bookFolder(record.id), options: pageOptions(record))
         } catch TripFinisher.EditError.notEditable {
             throw APIError.invalid("That part of the book can't be edited.")
         } catch TripFinisher.EditError.tooLong {
@@ -481,6 +516,120 @@ func registerTripRoutes(_ router: Router<BasicRequestContext>, env: ServerEnviro
         return try APIJSON.response(activity, status: .created)
     }
 
+    // MARK: Web purchases (Stripe, or the test checkout)
+
+    /// Applies a paid checkout: the plan and a fresh page for passes, an order
+    /// for prints. Safe to call twice for the same checkout.
+    @Sendable func complete(_ completion: CheckoutCompletion) async throws {
+        let (record, changed) = try await trips.applyWeb(completion)
+        guard changed else { return }
+        switch completion.kind {
+        case .keep, .event:
+            await TripPaths.rerender(record, trips: trips, options: pageOptions(record))
+            let title = record.title.flatMap { $0.isEmpty ? nil : $0 } ?? "your trip"
+            let bookURL = address.base + TripPaths.book(record.slug)
+            let buyer = completion.email?.lowercased()
+            let others = await trips.recipients(record.id).filter { $0.email.lowercased() != buyer }
+            _ = await lifecycle.send({ MailTemplates.kept(to: $0.email, title: title, bookURL: bookURL, keptBy: record.keptBy) }, to: others)
+        case .print:
+            await lifecycle.printOrdersChanged()
+        }
+    }
+
+    /// Starts a checkout for something on a book's page.
+    @Sendable func checkout(_ kind: CheckoutKind, record: TripRecord, product: PrintProduct? = nil, returnTo: String? = nil) async throws -> Response {
+        guard let payments else { throw APIError.busy("Payments aren't set up on this server yet.") }
+        let cents: Int
+        switch kind {
+        case .keep: cents = WebPrice.tripPass
+        case .event: cents = WebPrice.eventPass
+        case .print: cents = product?.cents ?? 0
+        }
+        let book = address.base + TripPaths.book(record.slug)
+        let request = CheckoutRequest(
+            kind: kind, tripID: record.id, slug: record.slug,
+            title: record.title.flatMap { $0.isEmpty ? nil : $0 } ?? "Our trip",
+            cents: cents, product: product,
+            successURL: address.base + "/b/\(record.slug)/thanks?kind=\(kind.rawValue)",
+            cancelURL: returnTo.map { address.base + $0 } ?? book
+        )
+        let session = try await payments.createCheckout(request)
+        return try APIJSON.response(["url": session.url, "id": session.id])
+    }
+
+    /// "Keep it for $4.99": anyone with the book link can keep a free book,
+    /// including after it went offline, until its photos are deleted.
+    router.post("b/{slug}/keep") { _, context in
+        let slug = try context.parameters.require("slug")
+        guard let record = await trips.record(slug: slug) else { throw APIError.notFound("No book.") }
+        guard record.purgedAt == nil else { throw APIError.gone("This book's photos have been deleted.") }
+        guard record.currentPlan == .free else { throw APIError.conflict("This book is already kept.") }
+        return try await checkout(.keep, record: record)
+    }
+
+    struct PrintBody: Decodable { var product: String }
+
+    /// A printed copy for whoever asks, shipped to them.
+    router.post("b/{slug}/print") { request, context in
+        let slug = try context.parameters.require("slug")
+        guard let record = await trips.record(slug: slug), record.finishedAt != nil else { throw APIError.notFound("No book.") }
+        try ensureHosted(record)
+        guard features.prints else { throw APIError.busy("Printed copies aren't available yet.") }
+        let body = try await request.decode(as: PrintBody.self, context: context)
+        guard let product = PrintProduct(rawValue: body.product) else { throw APIError.invalid("Pick softcover or hardcover.") }
+        return try await checkout(.print, record: record, product: product)
+    }
+
+    router.get("b/{slug}/thanks") { request, context in
+        let slug = try context.parameters.require("slug")
+        guard let record = await trips.record(slug: slug) else { throw APIError.notFound("No book.") }
+        let kind = queryValue(request, "kind").flatMap(CheckoutKind.init(rawValue:)) ?? .keep
+        return Pages.response(Pages.thanks(kind: kind, title: record.title, bookPath: TripPaths.book(record.slug)))
+    }
+
+    /// Stripe's webhook. Only signed events are read; anything but a paid
+    /// checkout is acknowledged and ignored.
+    router.post("stripe/webhook") { request, _ in
+        guard let secret = env.configuration.stripeWebhookSecret, !secret.isEmpty else { throw APIError.notFound("Not found.") }
+        let payload = Data(buffer: try await request.body.collect(upTo: 1_024 * 1_024))
+        guard StripeWebhook.verify(payload: payload, header: request.headers[HTTPField.Name("Stripe-Signature")!], secret: secret) else {
+            throw APIError.invalid("Bad signature.")
+        }
+        if let completion = StripeWebhook.completion(from: payload) {
+            try await complete(completion)
+        }
+        return try APIJSON.response(["received": true])
+    }
+
+    /// The test checkout's page: no card, one button, and an address for prints.
+    router.get("checkout/dev/{id}") { _, context in
+        guard let dev = payments as? DevPayments else { throw APIError.notFound("Not found.") }
+        let id = try context.parameters.require("id")
+        guard let pending = await dev.request(id) else { throw APIError.notFound("This checkout has ended.") }
+        return Pages.response(Pages.devCheckout(pending))
+    }
+
+    router.post("checkout/dev/{id}") { request, context in
+        guard let dev = payments as? DevPayments else { throw APIError.notFound("Not found.") }
+        let id = try context.parameters.require("id")
+        let form = FormFields(Data(buffer: try await request.body.collect(upTo: 64 * 1_024)))
+        guard let pending = await dev.take(id) else { throw APIError.notFound("This checkout has ended.") }
+        var shipping: ShippingAddress?
+        if pending.kind == .print {
+            shipping = ShippingAddress(
+                name: form["name"] ?? "", line1: form["line1"] ?? "", line2: form["line2"], city: form["city"] ?? "",
+                state: form["state"], postalCode: form["postal"] ?? "", country: (form["country"] ?? "US").uppercased()
+            )
+        }
+        try await complete(CheckoutCompletion(
+            sessionID: id, kind: pending.kind, tripID: pending.tripID, product: pending.product,
+            email: form["email"].flatMap { $0.isEmpty ? nil : $0 }, name: form["name"], shipping: shipping, cents: pending.cents
+        ))
+        var headers = HTTPFields()
+        headers[.location] = pending.successURL
+        return Response(status: .seeOther, headers: headers)
+    }
+
     // MARK: Emails (one-click unsubscribe, no account)
 
     router.get("u/{token}") { _, context in
@@ -500,6 +649,11 @@ func registerTripRoutes(_ router: Router<BasicRequestContext>, env: ServerEnviro
     /// Runs the lifecycle now: reminders, purges and the rest.
     router.post("v2/admin/lifecycle") { _, _ in
         try APIJSON.response(await lifecycle.tick())
+    }
+
+    /// Every print order, newest last.
+    router.get("v2/admin/orders") { _, _ in
+        try APIJSON.response(await trips.orders())
     }
 
     /// Moves a trip back in time, only when the server allows it (the checks).

@@ -26,8 +26,16 @@ public struct ServerConfiguration: Sendable {
     public var mailFrom: String?
     /// Lets the checks move a trip back in time. Never set in production.
     public var allowClockShift: Bool
+    /// Stripe secret key and webhook signing secret for web purchases.
+    public var stripeSecretKey: String?
+    public var stripeWebhookSecret: String?
+    /// Another Stripe API address; only for the checks' stand-in.
+    public var stripeAPIBase: String?
+    /// A checkout that charges nothing, for local development. Ignored when a
+    /// Stripe key is set.
+    public var devCheckout: Bool
 
-    public init(port: Int, security: WorkerSecurity, catalogURL: URL, mediaCacheDirectory: URL, tokenWasGenerated: Bool, bundleID: String = "com.photocore.trip", storeKitTestRoot: URL? = nil, allowXcodePurchases: Bool = false, siteURL: String? = nil, appStoreURL: String? = nil, publicURL: String? = nil, resendAPIKey: String? = nil, mailFrom: String? = nil, allowClockShift: Bool = false) {
+    public init(port: Int, security: WorkerSecurity, catalogURL: URL, mediaCacheDirectory: URL, tokenWasGenerated: Bool, bundleID: String = "com.photocore.trip", storeKitTestRoot: URL? = nil, allowXcodePurchases: Bool = false, siteURL: String? = nil, appStoreURL: String? = nil, publicURL: String? = nil, resendAPIKey: String? = nil, mailFrom: String? = nil, allowClockShift: Bool = false, stripeSecretKey: String? = nil, stripeWebhookSecret: String? = nil, stripeAPIBase: String? = nil, devCheckout: Bool = false) {
         self.port = port
         self.security = security
         self.catalogURL = catalogURL
@@ -42,6 +50,10 @@ public struct ServerConfiguration: Sendable {
         self.resendAPIKey = resendAPIKey
         self.mailFrom = mailFrom
         self.allowClockShift = allowClockShift
+        self.stripeSecretKey = stripeSecretKey
+        self.stripeWebhookSecret = stripeWebhookSecret
+        self.stripeAPIBase = stripeAPIBase
+        self.devCheckout = devCheckout
     }
 
     /// The base for absolute links, with no trailing slash.
@@ -76,7 +88,10 @@ public struct ServerConfiguration: Sendable {
             appStoreURL: environment["PHOTOCORE_APP_STORE_URL"],
             publicURL: environment["PHOTOCORE_PUBLIC_URL"],
             resendAPIKey: environment["RESEND_API_KEY"],
-            mailFrom: environment["PHOTOCORE_MAIL_FROM"]
+            mailFrom: environment["PHOTOCORE_MAIL_FROM"],
+            stripeSecretKey: environment["STRIPE_SECRET_KEY"],
+            stripeWebhookSecret: environment["STRIPE_WEBHOOK_SECRET"],
+            devCheckout: environment["PHOTOCORE_DEV_CHECKOUT"] == "1"
         )
     }
 

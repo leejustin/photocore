@@ -32,6 +32,14 @@ actor BookLifecycle {
         extraWork.append((name, work))
     }
 
+    /// Called when a print order is paid, so it's sent to the printer without
+    /// waiting for the next tick.
+    private var onPrintOrders: (@Sendable () async -> Void)?
+
+    func whenPrintOrdersChange(_ work: @escaping @Sendable () async -> Void) { onPrintOrders = work }
+
+    func printOrdersChanged() async { await onPrintOrders?() }
+
     func bookURL(_ record: TripRecord) -> String { publicBase + TripPaths.book(record.slug) }
     func unsubscribeURL(_ token: String) -> String { publicBase + "/u/" + token }
 

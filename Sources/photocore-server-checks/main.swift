@@ -23,27 +23,56 @@ struct ServerChecks {
             try writeJPEG(source.appendingPathComponent("frame-\(index).jpg"), red: CGFloat(index) / 6)
         }
         let token = "server-check-token"
-        let configuration = ServerConfiguration(
-            port: 0,
-            security: WorkerSecurity(token: token, allowedRoots: [root], allowedOrigins: [], outputRoot: output),
-            catalogURL: root.appendingPathComponent("catalog.sqlite"),
-            mediaCacheDirectory: cache,
-            tokenWasGenerated: false,
-            storeKitTestRoot: TestStore.fixtures.appendingPathComponent("root.der"),
-            allowClockShift: true
-        )
-        let portBox = PortBox()
-        let application = try PhotocoreApplication.make(configuration: configuration) { portBox.set($0) }
+        let mockLog = MockLog()
+        let mockPort = PortBox()
+        let mock = MockServices.make(log: mockLog) { mockPort.set($0) }
         try await withThrowingTaskGroup(of: Void.self) { group in
+            group.addTask {
+                do { try await mock.runService(gracefulShutdownSignals: []) }
+                catch is CancellationError {}
+            }
+            let mockBase = "http://127.0.0.1:\(await mockPort.wait())"
+            let configuration = ServerConfiguration(
+                port: 0,
+                security: WorkerSecurity(token: token, allowedRoots: [root], allowedOrigins: [], outputRoot: output),
+                catalogURL: root.appendingPathComponent("catalog.sqlite"),
+                mediaCacheDirectory: cache,
+                tokenWasGenerated: false,
+                storeKitTestRoot: TestStore.fixtures.appendingPathComponent("root.der"),
+                allowClockShift: true,
+                stripeSecretKey: "sk_test_checks",
+                stripeWebhookSecret: Self.webhookSecret,
+                stripeAPIBase: mockBase
+            )
+            // A second server with the no-charge test checkout instead of Stripe.
+            let devOutput = root.appendingPathComponent("dev-output", isDirectory: true)
+            let devConfiguration = ServerConfiguration(
+                port: 0,
+                security: WorkerSecurity(token: token, allowedRoots: [root], allowedOrigins: [], outputRoot: devOutput),
+                catalogURL: root.appendingPathComponent("dev-catalog.sqlite"),
+                mediaCacheDirectory: cache.appendingPathComponent("dev"),
+                tokenWasGenerated: false,
+                devCheckout: true
+            )
+            let portBox = PortBox()
+            let devPortBox = PortBox()
+            let application = try PhotocoreApplication.make(configuration: configuration) { portBox.set($0) }
+            let devApplication = try PhotocoreApplication.make(configuration: devConfiguration) { devPortBox.set($0) }
             group.addTask {
                 do { try await application.runService(gracefulShutdownSignals: []) }
                 catch is CancellationError {}
             }
+            group.addTask {
+                do { try await devApplication.runService(gracefulShutdownSignals: []) }
+                catch is CancellationError {}
+            }
             let port = await portBox.wait()
+            let devPort = await devPortBox.wait()
             try await exercise(port: port, token: token, source: source)
             try await exerciseTrips(port: port, token: token, source: source)
             try await exercisePlans(port: port, token: token, source: source)
             try await exerciseLifecycle(port: port, token: token, source: source, outbox: output.appendingPathComponent("trips/outbox"))
+            try await exercisePayments(port: port, devPort: devPort, token: token, source: source, mock: mockLog, outbox: output.appendingPathComponent("trips/outbox"))
             group.cancelAll()
         }
         print("All server checks passed")

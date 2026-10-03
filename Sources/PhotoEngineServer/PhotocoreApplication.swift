@@ -40,7 +40,9 @@ public enum PhotocoreApplication {
             trips: trips,
             storeKit: StoreKitVerifier.make(configuration),
             lifecycle: lifecycle,
-            address: address
+            address: address,
+            payments: Payments.make(configuration, address: address),
+            printsEnabled: configuration.devCheckout
         )
         return Application(
             router: router,

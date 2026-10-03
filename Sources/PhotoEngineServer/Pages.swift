@@ -1,6 +1,7 @@
 import Foundation
 import HTTPTypes
 import Hummingbird
+import PhotoEngineWorkflow
 
 /// Small server pages in the Bound look: a book that went offline, an
 /// unsubscribe confirmation, a checkout result.
@@ -82,4 +83,55 @@ enum Pages {
             : "<span class=\"ribbon\" aria-hidden=\"true\"></span><h1>Stop emails?</h1><p class=\"muted\">Stop emails about \(book). Nothing else changes.</p><form method=\"post\"><button type=\"submit\">Stop emails</button></form>"
         return shell(title: "Emails · Bound", body: body)
     }
+
+    static func thanks(kind: CheckoutKind, title: String?, bookPath: String) -> String {
+        let book = InvitePage.escape(title.flatMap { $0.isEmpty ? nil : $0 } ?? "the book")
+        let words: String
+        switch kind {
+        case .keep: words = "<h1>Kept for good</h1><p class=\"muted\">\(book) stays online now, for everyone in it. Everyone's full-size photos can be downloaded from the book.</p>"
+        case .event: words = "<h1>Event Pass added</h1><p class=\"muted\">\(book) has room for 100 friends and is kept for good.</p>"
+        case .print: words = "<h1>It's being printed</h1><p class=\"muted\">Your copy of \(book) is on its way to the printer. Printing and shipping usually take one to two weeks, and we'll email you when it ships.</p>"
+        }
+        let body = "<span class=\"ribbon\" aria-hidden=\"true\"></span>\(words)<p class=\"fine\">It can take a minute to show on the book.</p><p><a class=\"button\" href=\"\(InvitePage.escape(bookPath))\">Back to the book</a></p>"
+        return shell(title: "Thank you · Bound", body: body)
+    }
+
+    /// The no-charge checkout used in development and the checks.
+    static func devCheckout(_ request: CheckoutRequest) -> String {
+        let price = String(format: "$%.2f", Double(request.cents) / 100)
+        var fields = "<label for=\"email\">Email</label><input id=\"email\" name=\"email\" type=\"email\" placeholder=\"Optional\">"
+        fields += "<label for=\"name\">Name</label><input id=\"name\" name=\"name\" value=\"Test Buyer\">"
+        if request.collectShipping {
+            fields += """
+            <label for="line1">Address</label><input id="line1" name="line1" value="1 Infinite Loop" required>
+            <label for="city">City</label><input id="city" name="city" value="Cupertino" required>
+            <label for="state">State</label><input id="state" name="state" value="CA">
+            <label for="postal">Postal code</label><input id="postal" name="postal" value="95014" required>
+            <label for="country">Country</label><input id="country" name="country" value="US" maxlength="2" required>
+            """
+        }
+        let body = """
+        <span class="ribbon" aria-hidden="true"></span><h1>Test checkout</h1>
+        <p class="muted">No card is charged. This page stands in for Stripe on a development server.</p>
+        <form method="post" class="card"><p><strong>\(InvitePage.escape(request.itemName))</strong><br><span class="muted">\(InvitePage.escape(request.itemDescription))</span></p>
+        \(fields)<p style="margin-top:18px"><button type="submit">Pay \(price) (test)</button></p></form>
+        """
+        return shell(title: "Test checkout · Bound", body: body)
+    }
+}
+
+/// Fields from an `application/x-www-form-urlencoded` body.
+struct FormFields {
+    private var values: [String: String] = [:]
+
+    init(_ data: Data) {
+        let text = String(decoding: data, as: UTF8.self)
+        for pair in text.split(separator: "&") {
+            let parts = pair.split(separator: "=", maxSplits: 1).map(String.init)
+            let decode: (String) -> String = { ($0.replacingOccurrences(of: "+", with: " ")).removingPercentEncoding ?? $0 }
+            values[decode(parts[0])] = parts.count > 1 ? decode(parts[1]) : ""
+        }
+    }
+
+    subscript(_ key: String) -> String? { values[key] }
 }
