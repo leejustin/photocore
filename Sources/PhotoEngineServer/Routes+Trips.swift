@@ -18,6 +18,15 @@ struct CreateTripBody: Decodable, Sendable {
     var installID: String?
     /// Where to send the owner reminders and the book link; empty clears it.
     var ownerEmail: String?
+    /// The trip's time zone (an IANA name), for the nightly refinish.
+    var timeZone: String?
+    /// Whether the book is made again each night while friends add photos.
+    var live: Bool?
+}
+
+struct DeviceBody: Decodable, Sendable {
+    /// An APNs device token, hex.
+    var token: String
 }
 
 struct PlanBody: Decodable, Sendable {
@@ -105,6 +114,9 @@ struct TripDTO: Encodable, Sendable {
     var printInterest: Int
     /// Friends' photos added since the book was last made.
     var newSinceFinish: Int
+    /// Whether the book is made again each night while the invite is open.
+    var live: Bool
+    var lastNightly: Date?
 }
 
 struct UploadDTO: Encodable, Sendable {
@@ -232,6 +244,7 @@ func registerTripRoutes(
         let ownerEmail = try optionalEmail(body.ownerEmail)
         let (record, token) = try await trips.create(title: title, context: context, tone: tone, theme: theme, ownerName: ownerName, installID: installID)
         if case .some(let email?) = ownerEmail { try await trips.setOwnerEmail(record.id, email: email) }
+        if let zone = body.timeZone, TimeZone(identifier: zone) != nil { try await trips.update(record.id) { $0.timeZone = zone } }
         let dto = TripCreatedDTO(id: record.id, slug: record.slug, ownerToken: token, bookPath: TripPaths.book(record.slug), editPath: TripPaths.book(record.slug) + "#edit=" + token, invitePath: TripPaths.invite(record))
         return try APIJSON.response(dto, status: .created)
     }
@@ -252,7 +265,8 @@ func registerTripRoutes(
             inviteOpen: record.inviteOpen, contributors: people,
             plan: record.currentPlan, limits: record.limits, hostedUntil: record.hostedUntil,
             freeBookAvailable: await trips.freeBookAvailable(record), printInterest: record.printInterest ?? 0,
-            newSinceFinish: await trips.newSinceFinish(tid)
+            newSinceFinish: await trips.newSinceFinish(tid),
+            live: record.live != false, lastNightly: record.lastNightly
         ))
     }
 
@@ -300,6 +314,8 @@ func registerTripRoutes(
             throw APIError.paymentRequired("\(theme.displayName) comes with a Trip Pass.")
         }
         try await trips.update(tid) { record in
+            if let zone = body.timeZone, TimeZone(identifier: zone) != nil { record.timeZone = zone }
+            if let live = body.live { record.live = live }
             if let title = body.title { record.title = String(title.prefix(120)) }
             if let tone = body.tone.flatMap(DiaryTone.init(rawValue:)) { record.tone = tone }
             if let theme = body.theme.flatMap({ BookTheme(name: $0) }) { record.theme = theme }
@@ -312,6 +328,21 @@ func registerTripRoutes(
                 if let events = body.calendarEvents { context.calendarEvents = events.prefix(5).map { String($0.prefix(120)) } }
                 record.context = context
             }
+        }
+        return try APIJSON.response(["ok": true])
+    }
+
+    /// The owner's iPhone, for "Day 2 is in" notifications.
+    router.post("v2/trips/{tid}/device") { request, context in
+        let tid = try context.parameters.require("tid")
+        guard await trips.record(id: tid) != nil else { throw APIError.notFound("No trip \(tid)") }
+        let body = try await request.decode(as: DeviceBody.self, context: context)
+        let token = body.token.lowercased()
+        guard (32...200).contains(token.count), token.allSatisfy(\.isHexDigit) else { throw APIError.invalid("That isn't a device token.") }
+        try await trips.update(tid) { record in
+            var devices = record.ownerDevices ?? []
+            if !devices.contains(token) { devices.append(token) }
+            record.ownerDevices = Array(devices.suffix(5))
         }
         return try APIJSON.response(["ok": true])
     }
@@ -335,8 +366,8 @@ func registerTripRoutes(
         return try APIJSON.response(UploadDTO(stored: url.lastPathComponent, count: count), status: .created)
     }
 
-    router.post("v2/trips/{tid}/finish") { _, context in
-        let tid = try context.parameters.require("tid")
+    /// Queues a finish: the owner's button, or the nightly refinish during the trip.
+    @Sendable func startFinish(_ tid: String, nightly: Bool = false) async throws -> JobRecord {
         guard let record = await trips.record(id: tid) else { throw APIError.notFound("No trip \(tid)") }
         let ownerFolder = await trips.ownerFolder(tid)
         let total = await trips.photoCount(ownerFolder) + (await trips.photoCount(await trips.guestFolder(tid))) + (await trips.contributedCount(tid))
@@ -358,6 +389,7 @@ func registerTripRoutes(
             work: await trips.folder(tid).appendingPathComponent("work", isDirectory: true)
         )
         let jobs = env.jobs
+        let newBefore = await trips.newSinceFinish(tid)
         let stored = try await env.jobs.enqueue(job) {
             try await trips.update(tid) { $0.finishStartedAt = Date() }
             let writer = DiaryWriters.make()
@@ -388,6 +420,16 @@ func registerTripRoutes(
                 $0.bookWriter = outcome.book.writer
                 $0.hostedUntil = PlanPolicy.hostedUntil(plan: $0.currentPlan, firstFinished: first, subscriptionExpires: $0.subscriptionExpires)
             }
+            if nightly, !firstFinish {
+                let title = record.title.flatMap { $0.isEmpty ? nil : $0 } ?? outcome.book.title
+                let day = Set(outcome.book.sections.map(\.dateLine)).count
+                let bookURL = address.base + TripPaths.book(record.slug)
+                let fresh = newBefore
+                _ = await lifecycle.send({ recipient in
+                    MailTemplates.dayIsIn(to: recipient.email, title: title, day: max(day, 1), newPhotos: fresh, bookURL: bookURL, unsubscribe: address.base + "/u/" + recipient.unsubscribeToken)
+                }, to: await trips.recipients(tid))
+                await lifecycle.push(to: record.id, title: "Day \(max(day, 1)) is in", body: "\(title) has \(fresh == 1 ? "one new photo" : "\(fresh) new photos") from everyone.")
+            }
             if firstFinish {
                 // Friends who gave an email hear the book is ready, once.
                 let title = record.title.flatMap { $0.isEmpty ? nil : $0 } ?? outcome.book.title
@@ -411,8 +453,32 @@ func registerTripRoutes(
             ))
         }
         try await trips.update(tid) { $0.lastJobID = stored.id }
+        return stored
+    }
+
+    router.post("v2/trips/{tid}/finish") { _, context in
+        let tid = try context.parameters.require("tid")
+        let stored = try await startFinish(tid)
         return try APIJSON.response(JobDTO(stored), status: .accepted)
     }
+
+    /// While friends are still adding photos, the book is made again each
+    /// night around 3 a.m. where the trip is, if anything new came in, and
+    /// everyone hears "Day 2 is in".
+    @Sendable func nightly(_ now: Date) async -> Int {
+        var started = 0
+        for record in await trips.allRecords() where record.finishedAt != nil && record.inviteOpen && record.live != false && record.purgedAt == nil && record.isHosted(at: now) {
+            var calendar = Calendar(identifier: .gregorian)
+            calendar.timeZone = record.timeZone.flatMap(TimeZone.init(identifier:)) ?? .current
+            guard calendar.component(.hour, from: now) == NightlyRefinish.hour else { continue }
+            if let last = record.lastNightly, calendar.isDate(last, inSameDayAs: now) { continue }
+            guard await trips.newSinceFinish(record.id) > 0 else { continue }
+            try? await trips.update(record.id) { $0.lastNightly = now }
+            if (try? await startFinish(record.id, nightly: true)) != nil { started += 1 }
+        }
+        return started
+    }
+    Task { await lifecycle.add("nightly", nightly) }
 
     /// The upsell preview: one small photo in, the paid finish out. Cheap enough
     /// to run on thumbnails before anyone pays.
@@ -707,8 +773,10 @@ func registerTripRoutes(
     // MARK: Operations (server token)
 
     /// Runs the lifecycle now: reminders, purges and the rest.
-    router.post("v2/admin/lifecycle") { _, _ in
-        try APIJSON.response(await lifecycle.tick())
+    router.post("v2/admin/lifecycle") { request, _ in
+        // The checks can run a tick at another time.
+        let at = env.configuration.allowClockShift ? queryValue(request, "at").flatMap { ISO8601DateFormatter().date(from: $0) } : nil
+        return try APIJSON.response(await lifecycle.tick(now: at ?? Date()))
     }
 
     /// Every print order, newest last.

@@ -32,6 +32,8 @@ struct ServerChecks {
                 catch is CancellationError {}
             }
             let mockBase = "http://127.0.0.1:\(await mockPort.wait())"
+            let apnsKey = root.appendingPathComponent("apns-test.p8")
+            try Self.apnsTestKey.pemRepresentation.write(to: apnsKey, atomically: true, encoding: .utf8)
             let configuration = ServerConfiguration(
                 port: 0,
                 security: WorkerSecurity(token: token, allowedRoots: [root], allowedOrigins: [], outputRoot: output),
@@ -46,7 +48,11 @@ struct ServerChecks {
                 luluClientKey: "lulu-key",
                 luluClientSecret: "lulu-secret",
                 luluAPIBase: mockBase,
-                printContactEmail: "prints@example.com"
+                printContactEmail: "prints@example.com",
+                appleTeamID: "TEAMCHECK1",
+                apnsKeyFile: apnsKey.path,
+                apnsKeyID: "KEYCHECK01",
+                apnsBase: mockBase
             )
             // A second server with the no-charge test checkout instead of Stripe.
             let devOutput = root.appendingPathComponent("dev-output", isDirectory: true)
@@ -77,6 +83,7 @@ struct ServerChecks {
             try await exercisePlans(port: port, token: token, source: source)
             try await exerciseLifecycle(port: port, token: token, source: source, outbox: output.appendingPathComponent("trips/outbox"))
             try await exerciseOffers(port: port, token: token, source: source)
+            try await exerciseNightly(port: port, token: token, source: source, mock: mockLog, outbox: output.appendingPathComponent("trips/outbox"))
             try await exercisePayments(port: port, devPort: devPort, token: token, source: source, mock: mockLog, outbox: output.appendingPathComponent("trips/outbox"))
             group.cancelAll()
         }

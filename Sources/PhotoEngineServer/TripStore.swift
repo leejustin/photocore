@@ -48,6 +48,14 @@ struct TripRecord: Codable, Sendable {
     var keptBy: String?
     /// When the latest finish began reading photos.
     var finishStartedAt: Date?
+    /// The trip's time zone, for the nightly refinish; the server's when unset.
+    var timeZone: String?
+    /// False when the owner turned the nightly refinish off.
+    var live: Bool?
+    /// When the nightly refinish last ran.
+    var lastNightly: Date?
+    /// The owner's iPhones (APNs tokens), for "Day 2 is in".
+    var ownerDevices: [String]?
 
     var inviteOpen: Bool { inviteCode != nil && inviteClosed != true }
     var currentPlan: Plan { plan ?? .free }

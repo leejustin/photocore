@@ -43,6 +43,16 @@ enum MockServices {
             let n = await log.record("/print-jobs", body, ["authorization": request.headers[.authorization] ?? ""])
             return try json(["id": 9000 + n, "status": ["name": "CREATED"]])
         }
+        router.post("3/device/{token}") { request, context in
+            let token = try context.parameters.require("token")
+            let body = Data(buffer: try await request.body.collect(upTo: 64 * 1_024))
+            _ = await log.record("/apns/" + token, body, [
+                "authorization": request.headers[.authorization] ?? "",
+                "apns-topic": request.headers.first { $0.name.canonicalName == "apns-topic" }?.value ?? "",
+                "apns-push-type": request.headers.first { $0.name.canonicalName == "apns-push-type" }?.value ?? ""
+            ])
+            return try json([:])
+        }
         router.get("print-jobs/{id}") { request, context in
             let id = try context.parameters.require("id")
             _ = await log.record("/print-jobs/status", Data(id.utf8), ["authorization": request.headers[.authorization] ?? ""])

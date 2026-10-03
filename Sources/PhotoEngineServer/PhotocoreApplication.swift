@@ -35,7 +35,7 @@ public enum PhotocoreApplication {
         let mailer = Mailers.make(configuration, outbox: tripsRoot.appendingPathComponent("outbox", isDirectory: true))
         let embedder = FaceIndexer.defaultEmbedder()
         let printing = PrintPartners.make(configuration).map { PrintFulfillment(partner: $0, trips: trips, mailer: mailer, address: address) }
-        let lifecycle = BookLifecycle(trips: trips, mailer: mailer, address: address, printing: printing)
+        let lifecycle = BookLifecycle(trips: trips, mailer: mailer, address: address, printing: printing, pusher: APNsPusher.make(configuration))
         registerTripRoutes(
             router,
             env: env,

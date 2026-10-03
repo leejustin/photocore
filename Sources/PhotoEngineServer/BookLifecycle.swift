@@ -23,12 +23,29 @@ actor BookLifecycle {
     private var extraWork: [(String, @Sendable (Date) async -> Int)] = []
 
     let printing: PrintFulfillment?
+    let pusher: APNsPusher?
 
-    init(trips: TripStore, mailer: any Mailer, address: PublicAddress, printing: PrintFulfillment? = nil) {
+    init(trips: TripStore, mailer: any Mailer, address: PublicAddress, printing: PrintFulfillment? = nil, pusher: APNsPusher? = nil) {
         self.trips = trips
         self.mailer = mailer
         self.address = address
         self.printing = printing
+        self.pusher = pusher
+    }
+
+    /// Notifies the owner's iPhones; tokens APNs no longer knows are dropped.
+    func push(to tripID: String, title: String, body: String) async {
+        guard let pusher, let devices = await trips.record(id: tripID)?.ownerDevices, !devices.isEmpty else { return }
+        var gone: Set<String> = []
+        for device in devices {
+            do {
+                let status = try await pusher.send(device: device, title: title, body: body, threadID: tripID)
+                if status == 410 || status == 400 { gone.insert(device) }
+            } catch {
+                logger.error("Push failed", metadata: ["error": "\(error)"])
+            }
+        }
+        if !gone.isEmpty { try? await trips.update(tripID) { $0.ownerDevices = $0.ownerDevices?.filter { !gone.contains($0) } } }
     }
 
     func add(_ name: String, _ work: @escaping @Sendable (Date) async -> Int) {
@@ -121,4 +138,9 @@ final class PublicAddress: @unchecked Sendable {
     func listening(on port: Int) { lock.withLock { self.port = port } }
 
     var base: String { configured ?? lock.withLock { "http://127.0.0.1:\(port)" } }
+}
+
+enum NightlyRefinish {
+    /// The local hour the book is made again while friends add photos.
+    static let hour = 3
 }
