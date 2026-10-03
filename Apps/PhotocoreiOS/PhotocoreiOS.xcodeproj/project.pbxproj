@@ -10,6 +10,10 @@
 		A1000000000000000000B001 /* PhotoEngineApple in Frameworks */ = {isa = PBXBuildFile; productRef = A1000000000000000000C001 /* PhotoEngineApple */; };
 		A1000000000000000000B002 /* PhotoEngineCore in Frameworks */ = {isa = PBXBuildFile; productRef = A1000000000000000000C002 /* PhotoEngineCore */; };
 		A1000000000000000000B003 /* PhotoEngineWorkflow in Frameworks */ = {isa = PBXBuildFile; productRef = A1000000000000000000C003 /* PhotoEngineWorkflow */; };
+		A1000000000000000000B004 /* PhotoEngineApple in Frameworks */ = {isa = PBXBuildFile; productRef = A1000000000000000000C004 /* PhotoEngineApple */; };
+		A1000000000000000000B005 /* PhotoEngineCore in Frameworks */ = {isa = PBXBuildFile; productRef = A1000000000000000000C005 /* PhotoEngineCore */; };
+		A1000000000000000000B006 /* PhotoEngineWorkflow in Frameworks */ = {isa = PBXBuildFile; productRef = A1000000000000000000C006 /* PhotoEngineWorkflow */; };
+		A1000000000000000000B007 /* BoundClip.app in Embed App Clips */ = {isa = PBXBuildFile; fileRef = A1000000000000000000F003 /* BoundClip.app */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -20,11 +24,33 @@
 			remoteGlobalIDString = A10000000000000000007001;
 			remoteInfo = PhotocoreiOS;
 		};
+		A1000000000000000000B103 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = A10000000000000000005001 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = A10000000000000000007003;
+			remoteInfo = BoundClip;
+		};
 /* End PBXContainerItemProxy section */
+
+/* Begin PBXCopyFilesBuildPhase section */
+		A1000000000000000000E00A /* Embed App Clips */ = {
+			isa = PBXCopyFilesBuildPhase;
+			buildActionMask = 2147483647;
+			dstPath = "$(CONTENTS_FOLDER_PATH)/AppClips";
+			dstSubfolderSpec = 16;
+			files = (
+				A1000000000000000000B007 /* BoundClip.app in Embed App Clips */,
+			);
+			name = "Embed App Clips";
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXCopyFilesBuildPhase section */
 
 /* Begin PBXFileReference section */
 		A1000000000000000000F001 /* Photocore.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Photocore.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		A1000000000000000000F002 /* PhotocoreUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = PhotocoreUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		A1000000000000000000F003 /* BoundClip.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = BoundClip.app; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
@@ -36,6 +62,11 @@
 		A1000000000000000000D002 /* PhotocoreUITests */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
 			path = PhotocoreUITests;
+			sourceTree = "<group>";
+		};
+		A1000000000000000000D003 /* BoundClip */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			path = BoundClip;
 			sourceTree = "<group>";
 		};
 /* End PBXFileSystemSynchronizedRootGroup section */
@@ -58,6 +89,16 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		A1000000000000000000E008 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				A1000000000000000000B004 /* PhotoEngineApple in Frameworks */,
+				A1000000000000000000B005 /* PhotoEngineCore in Frameworks */,
+				A1000000000000000000B006 /* PhotoEngineWorkflow in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXFrameworksBuildPhase section */
 
 /* Begin PBXGroup section */
@@ -66,6 +107,7 @@
 			children = (
 				A1000000000000000000D001 /* PhotocoreiOS */,
 				A1000000000000000000D002 /* PhotocoreUITests */,
+				A1000000000000000000D003 /* BoundClip */,
 				A1000000000000000000A002 /* Products */,
 			);
 			sourceTree = "<group>";
@@ -75,6 +117,7 @@
 			children = (
 				A1000000000000000000F001 /* Photocore.app */,
 				A1000000000000000000F002 /* PhotocoreUITests.xctest */,
+				A1000000000000000000F003 /* BoundClip.app */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -89,10 +132,12 @@
 				A1000000000000000000E002 /* Sources */,
 				A1000000000000000000E001 /* Frameworks */,
 				A1000000000000000000E003 /* Resources */,
+				A1000000000000000000E00A /* Embed App Clips */,
 			);
 			buildRules = (
 			);
 			dependencies = (
+				A1000000000000000000B104 /* PBXTargetDependency */,
 			);
 			fileSystemSynchronizedGroups = (
 				A1000000000000000000D001 /* PhotocoreiOS */,
@@ -128,6 +173,31 @@
 			productReference = A1000000000000000000F002 /* PhotocoreUITests.xctest */;
 			productType = "com.apple.product-type.bundle.ui-testing";
 		};
+		A10000000000000000007003 /* BoundClip */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = A10000000000000000008004 /* Build configuration list for PBXNativeTarget "BoundClip" */;
+			buildPhases = (
+				A1000000000000000000E007 /* Sources */,
+				A1000000000000000000E008 /* Frameworks */,
+				A1000000000000000000E009 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			fileSystemSynchronizedGroups = (
+				A1000000000000000000D003 /* BoundClip */,
+			);
+			name = BoundClip;
+			packageProductDependencies = (
+				A1000000000000000000C004 /* PhotoEngineApple */,
+				A1000000000000000000C005 /* PhotoEngineCore */,
+				A1000000000000000000C006 /* PhotoEngineWorkflow */,
+			);
+			productName = BoundClip;
+			productReference = A1000000000000000000F003 /* BoundClip.app */;
+			productType = "com.apple.product-type.application.on-demand-install-capable";
+		};
 /* End PBXNativeTarget section */
 
 /* Begin PBXProject section */
@@ -157,6 +227,7 @@
 			targets = (
 				A10000000000000000007001 /* PhotocoreiOS */,
 				A10000000000000000007002 /* PhotocoreUITests */,
+				A10000000000000000007003 /* BoundClip */,
 			);
 		};
 /* End PBXProject section */
@@ -170,6 +241,13 @@
 			runOnlyForDeploymentPostprocessing = 0;
 		};
 		A1000000000000000000E006 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		A1000000000000000000E009 /* Resources */ = {
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
@@ -193,6 +271,13 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		A1000000000000000000E007 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXSourcesBuildPhase section */
 
 /* Begin PBXTargetDependency section */
@@ -201,9 +286,68 @@
 			target = A10000000000000000007001 /* PhotocoreiOS */;
 			targetProxy = A1000000000000000000B101 /* PBXContainerItemProxy */;
 		};
+		A1000000000000000000B104 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = A10000000000000000007003 /* BoundClip */;
+			targetProxy = A1000000000000000000B103 /* PBXContainerItemProxy */;
+		};
 /* End PBXTargetDependency section */
 
 /* Begin XCBuildConfiguration section */
+		A10000000000000000006007 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				BOUND_DOMAIN = bound.example;
+				CODE_SIGN_ENTITLEMENTS = Support/BoundClip.entitlements;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = Support/BoundClip-Info.plist;
+				INFOPLIST_KEY_CFBundleDisplayName = Bound;
+				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
+				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
+				INFOPLIST_KEY_UISupportedInterfaceOrientations = UIInterfaceOrientationPortrait;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				MARKETING_VERSION = 0.1;
+				PRODUCT_BUNDLE_IDENTIFIER = com.photocore.trip.Clip;
+				PRODUCT_NAME = BoundClip;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_VERSION = 6.0;
+				TARGETED_DEVICE_FAMILY = 1;
+			};
+			name = Debug;
+		};
+		A10000000000000000006008 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				BOUND_DOMAIN = bound.example;
+				CODE_SIGN_ENTITLEMENTS = Support/BoundClip.entitlements;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = Support/BoundClip-Info.plist;
+				INFOPLIST_KEY_CFBundleDisplayName = Bound;
+				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
+				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
+				INFOPLIST_KEY_UISupportedInterfaceOrientations = UIInterfaceOrientationPortrait;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				MARKETING_VERSION = 0.1;
+				PRODUCT_BUNDLE_IDENTIFIER = com.photocore.trip.Clip;
+				PRODUCT_NAME = BoundClip;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_VERSION = 6.0;
+				TARGETED_DEVICE_FAMILY = 1;
+			};
+			name = Release;
+		};
 		A10000000000000000006001 /* Debug */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
@@ -239,6 +383,8 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				BOUND_DOMAIN = bound.example;
+				CODE_SIGN_ENTITLEMENTS = Support/Bound.entitlements;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
@@ -267,6 +413,8 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				BOUND_DOMAIN = bound.example;
+				CODE_SIGN_ENTITLEMENTS = Support/Bound.entitlements;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
@@ -324,6 +472,15 @@
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
+		A10000000000000000008004 /* Build configuration list for PBXNativeTarget "BoundClip" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				A10000000000000000006007 /* Debug */,
+				A10000000000000000006008 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
 		A10000000000000000008001 /* Build configuration list for PBXProject "PhotocoreiOS" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (
@@ -361,6 +518,18 @@
 /* End XCLocalSwiftPackageReference section */
 
 /* Begin XCSwiftPackageProductDependency section */
+		A1000000000000000000C004 /* PhotoEngineApple */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = PhotoEngineApple;
+		};
+		A1000000000000000000C005 /* PhotoEngineCore */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = PhotoEngineCore;
+		};
+		A1000000000000000000C006 /* PhotoEngineWorkflow */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = PhotoEngineWorkflow;
+		};
 		A1000000000000000000C001 /* PhotoEngineApple */ = {
 			isa = XCSwiftPackageProductDependency;
 			productName = PhotoEngineApple;
