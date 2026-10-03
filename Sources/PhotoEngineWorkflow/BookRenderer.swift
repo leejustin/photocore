@@ -63,7 +63,7 @@ public enum BookRenderer {
     }
 
     /// "January 3", in the reader's language where the server knows it.
-    static func longDate(_ date: Date) -> String {
+    public static func longDate(_ date: Date) -> String {
         let formatter = DateFormatter()
         formatter.locale = Locale(identifier: "en_US")
         formatter.setLocalizedDateFormatFromTemplate("MMMMd")

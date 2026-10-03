@@ -29,17 +29,26 @@ public enum PhotocoreApplication {
         registerPhotoRoutes(router, env: env)
         registerMediaRoutes(router, env: env)
         registerLookRoutes(router, env: env)
+        let tripsRoot = configuration.security.outputRoot.appendingPathComponent("trips", isDirectory: true)
+        let trips = TripStore(root: tripsRoot)
+        let address = PublicAddress(configuration.publicURL)
+        let mailer = Mailers.make(configuration, outbox: tripsRoot.appendingPathComponent("outbox", isDirectory: true))
+        let lifecycle = BookLifecycle(trips: trips, mailer: mailer, address: address)
         registerTripRoutes(
             router,
             env: env,
-            trips: TripStore(root: configuration.security.outputRoot.appendingPathComponent("trips", isDirectory: true)),
-            storeKit: StoreKitVerifier.make(configuration)
+            trips: trips,
+            storeKit: StoreKitVerifier.make(configuration),
+            lifecycle: lifecycle,
+            address: address
         )
         return Application(
             router: router,
             configuration: .init(address: .hostname("127.0.0.1", port: configuration.port), serverName: "Photocore"),
+            services: [LifecycleService(lifecycle: lifecycle)],
             onServerRunning: { channel in
                 if let port = channel.localAddress?.port {
+                    address.listening(on: port)
                     onPort?(port)
                 }
             }

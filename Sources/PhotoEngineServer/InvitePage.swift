@@ -39,6 +39,8 @@ enum InvitePage {
         <form id="join" hidden>
           <label for="name">Your first name</label>
           <input id="name" maxlength="40" autocomplete="given-name" required>
+          <label for="email">Email <span class="optional">(optional)</span></label>
+          <input id="email" type="email" maxlength="254" autocomplete="email" placeholder="To hear when the book is ready">
           <button type="submit">Continue</button>
         </form>
 
@@ -47,6 +49,10 @@ enum InvitePage {
           <label class="pick">Choose photos<input id="files" type="file" accept="image/*" multiple></label>
           <div id="progress" hidden><div class="bar"><span id="bar"></span></div><p id="status" aria-live="polite"></p></div>
           <p id="mine" class="hint"></p>
+          <form id="mail" class="inline" hidden>
+            <input id="later-email" type="email" maxlength="254" autocomplete="email" placeholder="Email me when the book is ready">
+            <button type="submit" class="small">Save</button>
+          </form>
           <button type="button" class="link danger" id="remove" hidden>Remove my photos</button>
         </section>
 
@@ -98,6 +104,10 @@ enum InvitePage {
     .danger { color:var(--muted); font-size:14px; }
     .hint, .fine { font-size:14px; color:var(--muted); margin:0; }
     .fine { margin-top:8px; text-align:center; }
+    .optional { font-weight:400; color:var(--muted); }
+    form.inline { display:flex; gap:8px; padding:0; border:0; background:none; margin:0; }
+    form.inline input { flex:1; min-width:0; }
+    button.small { font:inherit; font-weight:600; padding:10px 16px; border:0; border-radius:999px; background:var(--ink); color:var(--paper); cursor:pointer; }
     .brand { text-align:center; font-family:var(--serif); font-size:14px; color:var(--muted); margin:26px 0 0; letter-spacing:.02em; }
     .bar { height:8px; border-radius:99px; background:var(--line); overflow:hidden; }
     .bar span { display:block; height:100%; width:0; background:var(--accent); transition:width .2s; }
@@ -122,6 +132,7 @@ enum InvitePage {
             $('join').hidden = true; $('add').hidden = false; $('me').textContent = s.me;
             $('mine').textContent = s.mine ? 'You\\u2019ve added ' + plural(s.mine, 'photo') + '.' : '';
             $('remove').hidden = !s.mine;
+            $('mail').hidden = !!s.emailSet;
           } else {
             if (me && !s.me) { me = null; save(null); }
             $('join').hidden = false; $('add').hidden = true;
@@ -131,10 +142,19 @@ enum InvitePage {
       $('join').addEventListener('submit', function(e){
         e.preventDefault();
         var name = $('name').value.trim(); if (!name) return;
-        fetch(base + '/join', { method:'POST', headers:{ 'Content-Type':'application/json' }, body: JSON.stringify({ name: name }) })
-          .then(function(r){ if (!r.ok) throw r; return r.json(); })
+        var email = $('email').value.trim();
+        fetch(base + '/join', { method:'POST', headers:{ 'Content-Type':'application/json' }, body: JSON.stringify({ name: name, email: email || null }) })
+          .then(function(r){ return r.json().then(function(d){ if (!r.ok) throw d; return d; }); })
           .then(function(d){ me = { token: d.token, name: d.name }; save(me); refresh(); })
-          .catch(function(){ alert('Couldn\\u2019t join. Check the link and try again.'); });
+          .catch(function(e){ alert((e && e.error && e.error.message) || 'Couldn\\u2019t join. Check the link and try again.'); });
+      });
+      $('mail').addEventListener('submit', function(e){
+        e.preventDefault();
+        var email = $('later-email').value.trim(); if (!email || !me) return;
+        fetch(base + '/email', { method:'POST', headers: Object.assign({ 'Content-Type':'application/json' }, headers()), body: JSON.stringify({ email: email }) })
+          .then(function(r){ return r.json().then(function(d){ if (!r.ok) throw d; return d; }); })
+          .then(function(){ $('mail').hidden = true; })
+          .catch(function(e){ alert((e && e.error && e.error.message) || 'Couldn\\u2019t save that.'); });
       });
       $('not-me').addEventListener('click', function(){ me = null; save(null); refresh(); });
       $('files').addEventListener('change', function(){

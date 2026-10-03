@@ -33,6 +33,15 @@ struct TripRecord: Codable, Sendable {
     var installHash: String?
     /// Visitors who tapped "I'd love a printed copy".
     var printInterest: Int?
+    /// Where to send the owner reminders and updates, if they gave an address.
+    var ownerEmail: String?
+    /// The owner's one-click unsubscribe token (`<trip id>.<secret>`).
+    var ownerMailToken: String?
+    var ownerUnsubscribed: Bool?
+    /// Which of `PlanPolicy.reminders` have gone out.
+    var remindersSent: [Int]?
+    /// When an offline free book's photos were deleted.
+    var purgedAt: Date?
 
     var inviteOpen: Bool { inviteCode != nil && inviteClosed != true }
     var currentPlan: Plan { plan ?? .free }
@@ -60,6 +69,20 @@ struct Contributor: Codable, Sendable {
     var name: String
     var tokenHash: String
     var joinedAt: Date
+    /// Where to send "the book is ready" and reminders, if they gave an address.
+    var email: String?
+    /// Their one-click unsubscribe token (`<trip id>.<secret>`).
+    var mailToken: String?
+    var unsubscribed: Bool?
+}
+
+/// Someone to email about a book.
+struct Recipient: Sendable, Equatable {
+    var email: String
+    var name: String?
+    var unsubscribeToken: String
+    /// Nil for the owner.
+    var contributorID: String?
 }
 
 /// Guest activity on a published book.
@@ -274,15 +297,107 @@ actor TripStore {
     }
 
     /// Adds a person to a trip and returns them with their token, shown once.
-    func join(_ id: String, name: String) throws -> (Contributor, String) {
+    func join(_ id: String, name: String, email: String? = nil) throws -> (Contributor, String) {
         var list = contributors(id)
         guard list.count < TripLimits.contributors else { throw APIError.conflict("This trip already has as many people as it can take.") }
         let token = Self.randomToken(length: 32)
-        let person = Contributor(id: Self.randomToken(length: 10), name: name, tokenHash: Self.hash(token), joinedAt: Date())
+        let person = Contributor(
+            id: Self.randomToken(length: 10), name: name, tokenHash: Self.hash(token), joinedAt: Date(),
+            email: email, mailToken: email == nil ? nil : Self.mailToken(id)
+        )
         try FileManager.default.createDirectory(at: contributorFolder(id, person.id), withIntermediateDirectories: true)
         list.append(person)
         try saveContributors(id, list)
         return (person, token)
+    }
+
+    static func mailToken(_ tripID: String) -> String { tripID + "." + randomToken(length: 24) }
+
+    /// Sets or clears a person's email.
+    func setEmail(_ id: String, contributor: String, email: String?) throws {
+        var list = contributors(id)
+        guard let index = list.firstIndex(where: { $0.id == contributor }) else { return }
+        list[index].email = email
+        if email != nil, list[index].mailToken == nil { list[index].mailToken = Self.mailToken(id) }
+        if email != nil { list[index].unsubscribed = nil }
+        try saveContributors(id, list)
+    }
+
+    func setOwnerEmail(_ id: String, email: String?) throws {
+        try update(id) { record in
+            record.ownerEmail = email
+            if email != nil, record.ownerMailToken == nil { record.ownerMailToken = Self.mailToken(id) }
+            if email != nil { record.ownerUnsubscribed = nil }
+        }
+    }
+
+    /// Everyone who gave an address for this book and hasn't stopped emails.
+    func recipients(_ id: String) -> [Recipient] {
+        guard let record = records[id] else { return [] }
+        var list: [Recipient] = []
+        if let email = record.ownerEmail, let token = record.ownerMailToken, record.ownerUnsubscribed != true {
+            list.append(Recipient(email: email, name: record.ownerName, unsubscribeToken: token, contributorID: nil))
+        }
+        for person in contributors(id) {
+            guard let email = person.email, let token = person.mailToken, person.unsubscribed != true else { continue }
+            if list.contains(where: { $0.email.lowercased() == email.lowercased() }) { continue }
+            list.append(Recipient(email: email, name: person.name, unsubscribeToken: token, contributorID: person.id))
+        }
+        return list
+    }
+
+    /// The book an unsubscribe token belongs to, if the token is real.
+    func unsubscribeTarget(_ token: String) -> TripRecord? {
+        guard let id = token.split(separator: ".").first.map(String.init), let record = records[id] else { return nil }
+        if let own = record.ownerMailToken, Self.constantTimeEqual(own, token) { return record }
+        return contributors(id).contains { $0.mailToken.map { Self.constantTimeEqual($0, token) } ?? false } ? record : nil
+    }
+
+    /// Stops emails for whoever holds this token. Returns the book, or nil.
+    @discardableResult
+    func unsubscribe(_ token: String) throws -> TripRecord? {
+        guard let record = unsubscribeTarget(token) else { return nil }
+        if let own = record.ownerMailToken, Self.constantTimeEqual(own, token) {
+            try update(record.id) { $0.ownerUnsubscribed = true }
+        } else {
+            var list = contributors(record.id)
+            for index in list.indices where list[index].mailToken.map({ Self.constantTimeEqual($0, token) }) ?? false {
+                list[index].unsubscribed = true
+            }
+            try saveContributors(record.id, list)
+        }
+        return record
+    }
+
+    func allRecords() -> [TripRecord] { Array(records.values) }
+
+    /// Deletes an offline book's photos, uploads, notes and friends' details,
+    /// keeping only the trip record so its links say what happened.
+    func purge(_ id: String, now: Date = Date()) throws {
+        let fm = FileManager.default
+        for name in ["owner", "guests", "book", "contributors", "work", "offers"] {
+            try? fm.removeItem(at: folder(id).appendingPathComponent(name, isDirectory: true))
+        }
+        for name in ["guest.json", "contributors.json"] {
+            try? fm.removeItem(at: folder(id).appendingPathComponent(name))
+        }
+        people[id] = []
+        guest[id] = GuestActivity()
+        try update(id) { record in
+            record.purgedAt = now
+            record.inviteClosed = true
+            record.ownerEmail = nil
+        }
+    }
+
+    /// Moves a trip's dates back, so the checks can see a book age. Only
+    /// reachable when the server allows it.
+    func shift(_ id: String, by interval: TimeInterval) throws {
+        try update(id) { record in
+            record.createdAt -= interval
+            record.finishedAt = record.finishedAt.map { $0 - interval }
+            record.hostedUntil = record.hostedUntil.map { $0 - interval }
+        }
     }
 
     func contributor(_ id: String, token: String?) -> Contributor? {

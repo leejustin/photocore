@@ -14,8 +14,10 @@ struct CreateTripBody: Decodable, Sendable {
     var tone: String?
     var theme: String?
     var ownerName: String?
-    /// The phone's install ID, so each phone gets one free book.
+    /// The phone's install ID, kept for counting phones.
     var installID: String?
+    /// Where to send the owner reminders and the book link; empty clears it.
+    var ownerEmail: String?
 }
 
 struct PlanBody: Decodable, Sendable {
@@ -36,6 +38,16 @@ struct InviteBody: Decodable, Sendable {
 
 struct JoinBody: Decodable, Sendable {
     var name: String
+    /// Optional: to hear when the book is ready, and before it goes offline.
+    var email: String?
+}
+
+struct EmailBody: Decodable, Sendable {
+    var email: String?
+}
+
+struct ShiftBody: Decodable, Sendable {
+    var days: Double
 }
 
 struct JoinedDTO: Encodable, Sendable {
@@ -58,6 +70,8 @@ struct InviteStatusDTO: Encodable, Sendable {
     var bookPath: String?
     var me: String?
     var mine: Int?
+    /// Whether this person gave an email.
+    var emailSet: Bool?
 }
 
 struct TripCreatedDTO: Encodable, Sendable {
@@ -137,6 +151,15 @@ enum TripPaths {
     }
 }
 
+/// An optional email from a form: nil when empty, refused when it isn't an address.
+private func optionalEmail(_ raw: String?) throws -> String?? {
+    guard let raw else { return .none }
+    let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+    if trimmed.isEmpty { return .some(nil) }
+    guard Mailers.isAddress(trimmed) else { throw APIError.invalid("That email doesn't look right.") }
+    return .some(trimmed)
+}
+
 private func ensureHosted(_ record: TripRecord) throws {
     guard record.isHosted() else { throw APIError.gone("This book is no longer online.") }
 }
@@ -146,7 +169,7 @@ private func contributorToken(_ request: Request) -> String? {
     request.headers[HTTPField.Name("X-Photocore-Contributor")!]
 }
 
-func registerTripRoutes(_ router: Router<BasicRequestContext>, env: ServerEnvironment, trips: TripStore, storeKit: StoreKitVerifier) {
+func registerTripRoutes(_ router: Router<BasicRequestContext>, env: ServerEnvironment, trips: TripStore, storeKit: StoreKitVerifier, lifecycle: BookLifecycle, address: PublicAddress) {
     let siteURL = env.configuration.siteURL
     // MARK: Owner API (server token)
 
@@ -161,7 +184,9 @@ func registerTripRoutes(_ router: Router<BasicRequestContext>, env: ServerEnviro
             calendarEvents: (body.calendarEvents ?? []).prefix(5).map { String($0.prefix(120)) }
         )
         let installID = body.installID.map { String($0.prefix(64)) }
+        let ownerEmail = try optionalEmail(body.ownerEmail)
         let (record, token) = try await trips.create(title: title, context: context, tone: tone, theme: theme, ownerName: ownerName, installID: installID)
+        if case .some(let email?) = ownerEmail { try await trips.setOwnerEmail(record.id, email: email) }
         let dto = TripCreatedDTO(id: record.id, slug: record.slug, ownerToken: token, bookPath: TripPaths.book(record.slug), editPath: TripPaths.book(record.slug) + "#edit=" + token, invitePath: TripPaths.invite(record))
         return try APIJSON.response(dto, status: .created)
     }
@@ -228,6 +253,7 @@ func registerTripRoutes(_ router: Router<BasicRequestContext>, env: ServerEnviro
         let tid = try context.parameters.require("tid")
         guard await trips.record(id: tid) != nil else { throw APIError.notFound("No trip \(tid)") }
         let body = try await request.decode(as: CreateTripBody.self, context: context)
+        if case .some(let email) = try optionalEmail(body.ownerEmail) { try await trips.setOwnerEmail(tid, email: email) }
         if let theme = body.theme.flatMap({ BookTheme(name: $0) }), let record = await trips.record(id: tid), !record.limits.allows(theme) {
             throw APIError.paymentRequired("\(theme.displayName) comes with a Trip Pass.")
         }
@@ -306,11 +332,21 @@ func registerTripRoutes(_ router: Router<BasicRequestContext>, env: ServerEnviro
             ) { stage, done, total in
                 Task { await jobs.noteProgress(id: job.id, stage: "finish", completed: done, total: total, message: stage) }
             }
+            let firstFinish = await trips.record(id: tid)?.finishedAt == nil
             try await trips.update(tid) {
                 let first = $0.finishedAt ?? Date()
                 $0.finishedAt = Date()
                 $0.bookWriter = outcome.book.writer
                 $0.hostedUntil = PlanPolicy.hostedUntil(plan: $0.currentPlan, firstFinished: first, subscriptionExpires: $0.subscriptionExpires)
+            }
+            if firstFinish {
+                // Friends who gave an email hear the book is ready, once.
+                let title = record.title.flatMap { $0.isEmpty ? nil : $0 } ?? outcome.book.title
+                let bookURL = address.base + TripPaths.book(record.slug)
+                let friends = await trips.recipients(tid).filter { $0.contributorID != nil }
+                _ = await lifecycle.send({ recipient in
+                    MailTemplates.bookReady(to: recipient.email, name: recipient.name, title: title, yours: recipient.name.flatMap { outcome.keptPerContributor[$0] } ?? 0, bookURL: bookURL, youURL: nil, unsubscribe: address.base + "/u/" + recipient.unsubscribeToken)
+                }, to: friends)
             }
             return try APIJSON.data(FinishResult(
                 bookPath: TripPaths.book(record.slug),
@@ -445,6 +481,36 @@ func registerTripRoutes(_ router: Router<BasicRequestContext>, env: ServerEnviro
         return try APIJSON.response(activity, status: .created)
     }
 
+    // MARK: Emails (one-click unsubscribe, no account)
+
+    router.get("u/{token}") { _, context in
+        let token = try context.parameters.require("token")
+        guard let record = await trips.unsubscribeTarget(token) else { throw APIError.notFound("This link doesn't work.") }
+        return Pages.response(Pages.unsubscribe(title: record.title, done: false))
+    }
+
+    router.post("u/{token}") { _, context in
+        let token = try context.parameters.require("token")
+        guard let record = try await trips.unsubscribe(token) else { throw APIError.notFound("This link doesn't work.") }
+        return Pages.response(Pages.unsubscribe(title: record.title, done: true))
+    }
+
+    // MARK: Operations (server token)
+
+    /// Runs the lifecycle now: reminders, purges and the rest.
+    router.post("v2/admin/lifecycle") { _, _ in
+        try APIJSON.response(await lifecycle.tick())
+    }
+
+    /// Moves a trip back in time, only when the server allows it (the checks).
+    router.post("v2/admin/trips/{tid}/shift") { request, context in
+        guard env.configuration.allowClockShift else { throw APIError.notFound("Not found.") }
+        let tid = try context.parameters.require("tid")
+        let body = try await request.decode(as: ShiftBody.self, context: context)
+        try await trips.shift(tid, by: body.days * 86_400)
+        return try APIJSON.response(["ok": true])
+    }
+
     // MARK: Invite link (no server token; each person gets their own token)
 
     router.get("j/{code}") { _, context in
@@ -477,7 +543,8 @@ func registerTripRoutes(_ router: Router<BasicRequestContext>, env: ServerEnviro
             photos: await trips.contributedCount(record.id),
             bookPath: record.finishedAt == nil ? nil : TripPaths.book(record.slug),
             me: person?.name,
-            mine: mine
+            mine: mine,
+            emailSet: person.map { $0.email != nil }
         )
         return try APIJSON.response(status)
     }
@@ -492,8 +559,22 @@ func registerTripRoutes(_ router: Router<BasicRequestContext>, env: ServerEnviro
         guard await trips.contributors(record.id).count < record.limits.friends else {
             throw APIError.conflict("This book is full: it has room for \(record.limits.friends) people. Ask the person who invited you to make room.")
         }
-        let (person, token) = try await trips.join(record.id, name: name)
+        let email = try optionalEmail(body.email) ?? nil
+        let (person, token) = try await trips.join(record.id, name: name, email: email)
         return try APIJSON.response(JoinedDTO(name: person.name, token: token), status: .created)
+    }
+
+    /// A person adds, changes or removes their email.
+    router.post("j/{code}/email") { request, context in
+        let code = try context.parameters.require("code")
+        guard let record = await trips.record(invite: code) else { throw APIError.notFound("This invite link doesn't work.") }
+        guard let person = await trips.contributor(record.id, token: contributorToken(request)) else {
+            throw APIError.unauthorized("Join the trip first.")
+        }
+        let body = try await request.decode(as: EmailBody.self, context: context)
+        let email = try optionalEmail(body.email ?? "") ?? nil
+        try await trips.setEmail(record.id, contributor: person.id, email: email)
+        return try APIJSON.response(["emailSet": email != nil])
     }
 
     router.put("j/{code}/photos/{name}") { request, context in
@@ -523,7 +604,13 @@ func registerTripRoutes(_ router: Router<BasicRequestContext>, env: ServerEnviro
 
 private func bookFile(trips: TripStore, slug: String, relative: String) async throws -> Response {
     guard let record = await trips.record(slug: slug) else { throw APIError.notFound("No book.") }
-    try ensureHosted(record)
+    if !record.isHosted() {
+        guard relative == "index.html" else { throw APIError.gone("This book is no longer online.") }
+        let book = try? TripBook.load(from: await trips.bookFolder(record.id))
+        let title = record.title.flatMap { $0.isEmpty ? nil : $0 } ?? book?.title ?? "This book"
+        let canKeep = record.purgedAt == nil && record.currentPlan == .free
+        return Pages.response(Pages.offline(title: title, credit: book?.creditLine, keepEndpoint: canKeep ? "/b/\(record.slug)/keep" : nil), status: .gone)
+    }
     let parts = relative.split(separator: "/")
     guard !parts.isEmpty, parts.allSatisfy({ $0 != ".." && $0 != "." && !$0.hasPrefix(".") }) else { throw APIError.notFound("Not found.") }
     let allowed = ["html", "jpg", "txt"]

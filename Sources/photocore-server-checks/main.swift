@@ -29,7 +29,8 @@ struct ServerChecks {
             catalogURL: root.appendingPathComponent("catalog.sqlite"),
             mediaCacheDirectory: cache,
             tokenWasGenerated: false,
-            storeKitTestRoot: TestStore.fixtures.appendingPathComponent("root.der")
+            storeKitTestRoot: TestStore.fixtures.appendingPathComponent("root.der"),
+            allowClockShift: true
         )
         let portBox = PortBox()
         let application = try PhotocoreApplication.make(configuration: configuration) { portBox.set($0) }
@@ -42,12 +43,13 @@ struct ServerChecks {
             try await exercise(port: port, token: token, source: source)
             try await exerciseTrips(port: port, token: token, source: source)
             try await exercisePlans(port: port, token: token, source: source)
+            try await exerciseLifecycle(port: port, token: token, source: source, outbox: output.appendingPathComponent("trips/outbox"))
             group.cancelAll()
         }
-        print("All 11 server checks passed")
+        print("All server checks passed")
     }
 
-    private static func tokenFileIsPrivate() throws {
+    static func tokenFileIsPrivate() throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent("photocore-token-\(UUID().uuidString)", isDirectory: true)
         defer { try? FileManager.default.removeItem(at: directory) }
         let url = directory.appendingPathComponent("server-token")
@@ -61,7 +63,7 @@ struct ServerChecks {
         try expect(again.security.token == text, "existing token file was replaced")
     }
 
-    private static func exercise(port: Int, token: String, source: URL) async throws {
+    static func exercise(port: Int, token: String, source: URL) async throws {
         let base = URL(string: "http://127.0.0.1:\(port)")!
         let health = try await data(base.appendingPathComponent("healthz"))
         try expect(health.status == 200 && String(data: health.body, encoding: .utf8)?.contains("\"ok\":true") == true, "healthz failed \(health.status)")
@@ -114,7 +116,7 @@ struct ServerChecks {
         print("✓ health, auth, curate, cancel, photos, patch, thumb, delivery")
     }
 
-    private static func exerciseTrips(port: Int, token: String, source: URL) async throws {
+    static func exerciseTrips(port: Int, token: String, source: URL) async throws {
         let base = URL(string: "http://127.0.0.1:\(port)")!
         let created = try await postJSON(base.appendingPathComponent("v2/trips"), token: token, body: ["title": "Test trip", "tone": "dry", "installID": "check-phone-1"])
         try expect(created.status == 201, "create trip returned \(created.status) \(text(created.body))")
@@ -277,7 +279,7 @@ struct ServerChecks {
     /// The plans: forged, foreign and expired purchases are refused; a pass is
     /// spent once; Plus covers twelve books a year; each phone gets one free
     /// book; free books take five friends; print files and print interest work.
-    private static func exercisePlans(port: Int, token: String, source: URL) async throws {
+    static func exercisePlans(port: Int, token: String, source: URL) async throws {
         let base = URL(string: "http://127.0.0.1:\(port)")!
         func newTrip(_ title: String, phone: String) async throws -> TripWire {
             try decode(TripWire.self, from: try await postJSON(base.appendingPathComponent("v2/trips"), token: token, body: ["title": title, "installID": phone]).body)
@@ -359,7 +361,7 @@ struct ServerChecks {
     nonisolated(unsafe) static var firstTripID = ""
     nonisolated(unsafe) static var firstTripSlug = ""
 
-    private static func raw(_ url: URL, method: String, token: String?, body: Data, headers: [String: String] = [:]) async throws -> HTTPResult {
+    static func raw(_ url: URL, method: String, token: String?, body: Data, headers: [String: String] = [:]) async throws -> HTTPResult {
         var request = URLRequest(url: url)
         request.httpMethod = method
         request.httpBody = body
@@ -382,7 +384,7 @@ struct ServerChecks {
         return (http.statusCode, http.value(forHTTPHeaderField: "Location"))
     }
 
-    private static func wait(base: URL, token: String, id: String) async throws -> JobWire {
+    static func wait(base: URL, token: String, id: String) async throws -> JobWire {
         let deadline = Date().addingTimeInterval(90)
         while Date() < deadline {
             let response = try await data(base.appendingPathComponent("v2/jobs/\(id)"), token: token)
@@ -393,15 +395,15 @@ struct ServerChecks {
         throw CheckFailure("job \(id) did not finish")
     }
 
-    private static func postJSON(_ url: URL, token: String, body: [String: Any]) async throws -> HTTPResult {
+    static func postJSON(_ url: URL, token: String, body: [String: Any]) async throws -> HTTPResult {
         try await send(url, method: "POST", token: token, json: body, headers: [:])
     }
 
-    private static func data(_ url: URL, method: String = "GET", query: String? = nil, token: String? = nil, headers: [String: String] = [:]) async throws -> HTTPResult {
+    static func data(_ url: URL, method: String = "GET", query: String? = nil, token: String? = nil, headers: [String: String] = [:]) async throws -> HTTPResult {
         try await send(url, method: method, query: query, token: token, json: nil, headers: headers)
     }
 
-    private static func send(_ url: URL, method: String, query: String? = nil, token: String? = nil, json: [String: Any]?, headers: [String: String]) async throws -> HTTPResult {
+    static func send(_ url: URL, method: String, query: String? = nil, token: String? = nil, json: [String: Any]?, headers: [String: String]) async throws -> HTTPResult {
         var components = URLComponents(url: url, resolvingAgainstBaseURL: false)
         if let query { components?.percentEncodedQuery = query }
         var request = URLRequest(url: components?.url ?? url)
@@ -417,20 +419,20 @@ struct ServerChecks {
         return HTTPResult(status: http.statusCode, body: body, etag: http.value(forHTTPHeaderField: "Etag") ?? http.value(forHTTPHeaderField: "ETag"))
     }
 
-    private static func decode<T: Decodable>(_ type: T.Type, from data: Data) throws -> T {
+    static func decode<T: Decodable>(_ type: T.Type, from data: Data) throws -> T {
         let decoder = JSONDecoder()
         decoder.dateDecodingStrategy = .iso8601
         return try decoder.decode(type, from: data)
     }
 
-    private static func text(_ data: Data) -> String { String(data: data, encoding: .utf8) ?? "" }
+    static func text(_ data: Data) -> String { String(data: data, encoding: .utf8) ?? "" }
 
-    private static func expect(_ condition: Bool, _ message: String) throws {
+    static func expect(_ condition: Bool, _ message: String) throws {
         if !condition { throw CheckFailure(message) }
     }
 
     /// A busy, colorful picture that looks nothing like the flat test frames.
-    private static func writeDistinctJPEG(_ url: URL) throws {
+    static func writeDistinctJPEG(_ url: URL) throws {
         let width = 256
         let context = CGContext(data: nil, width: width, height: width, bitsPerComponent: 8, bytesPerRow: width * 4, space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)!
         for stripe in 0..<16 {
@@ -448,7 +450,7 @@ struct ServerChecks {
         guard CGImageDestinationFinalize(destination) else { throw CheckFailure("could not write \(url.lastPathComponent)") }
     }
 
-    private static func writeJPEG(_ url: URL, red: CGFloat) throws {
+    static func writeJPEG(_ url: URL, red: CGFloat) throws {
         let width = 128
         let context = CGContext(data: nil, width: width, height: width, bitsPerComponent: 8, bytesPerRow: width * 4, space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)!
         context.setFillColor(CGColor(red: red, green: 0.3, blue: 0.5, alpha: 1))
@@ -462,7 +464,7 @@ struct ServerChecks {
     }
 }
 
-private extension ServerChecks {
+extension ServerChecks {
     static let session: URLSession = {
         let configuration = URLSessionConfiguration.ephemeral
         configuration.requestCachePolicy = .reloadIgnoringLocalAndRemoteCacheData
@@ -471,33 +473,33 @@ private extension ServerChecks {
     }()
 }
 
-private struct HTTPResult {
+struct HTTPResult {
     var status: Int
     var body: Data
     var etag: String?
 }
 
-private struct TripWire: Decodable {
+struct TripWire: Decodable {
     var id: String
     var slug: String
     var ownerToken: String
     var invitePath: String?
 }
 
-private struct TripStatusWire: Decodable {
+struct TripStatusWire: Decodable {
     struct Person: Decodable { var name: String; var photos: Int }
     var inviteOpen: Bool
     var contributors: [Person]
 }
 
-private struct PlanStatusWire: Decodable {
+struct PlanStatusWire: Decodable {
     var plan: String
     var freeBookAvailable: Bool
     var printInterest: Int
     var hostedUntil: Date?
 }
 
-private enum BookRendererFooter {
+enum BookRendererFooter {
     static let free = "Made free with Bound"
 }
 
@@ -531,19 +533,20 @@ enum TestStore {
     }
 }
 
-private struct JoinedWire: Decodable {
+struct JoinedWire: Decodable {
     var name: String
     var token: String
 }
 
-private struct InviteStatusWire: Decodable {
+struct InviteStatusWire: Decodable {
     var open: Bool
     var people: Int
     var me: String?
     var mine: Int?
+    var emailSet: Bool?
 }
 
-private struct JobWire: Decodable {
+struct JobWire: Decodable {
     var id: String
     var state: String
     var sessionID: String?
@@ -554,21 +557,21 @@ private struct JobWire: Decodable {
     struct ErrorBody: Decodable { var message: String? }
 }
 
-private struct PhotoPage: Decodable {
+struct PhotoPage: Decodable {
     var items: [PhotoWire]
 }
 
-private struct PhotoWire: Decodable {
+struct PhotoWire: Decodable {
     var id: String
     var etag: String
 }
 
-private struct CheckFailure: Error, CustomStringConvertible {
+struct CheckFailure: Error, CustomStringConvertible {
     var description: String
     init(_ description: String) { self.description = description }
 }
 
-private final class PortBox: @unchecked Sendable {
+final class PortBox: @unchecked Sendable {
     private let lock = NSLock()
     private var port: Int?
     private var waiters: [CheckedContinuation<Int, Never>] = []

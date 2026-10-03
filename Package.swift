@@ -20,7 +20,8 @@ let package = Package(
         .executable(name: "photocore-server-checks", targets: ["photocore-server-checks"])
     ],
     dependencies: [
-        .package(url: "https://github.com/hummingbird-project/hummingbird.git", from: "2.0.0")
+        .package(url: "https://github.com/hummingbird-project/hummingbird.git", from: "2.0.0"),
+        .package(url: "https://github.com/swift-server/swift-service-lifecycle.git", from: "2.0.0")
     ],
     targets: [
         .target(name: "PhotoEngineCore"),
@@ -44,7 +45,8 @@ let package = Package(
                 "PhotoEngineApple",
                 "PhotoEngineCore",
                 "PhotoEnginePersistence",
-                .product(name: "Hummingbird", package: "hummingbird")
+                .product(name: "Hummingbird", package: "hummingbird"),
+                .product(name: "ServiceLifecycle", package: "swift-service-lifecycle")
             ],
             resources: [.copy("openapi.yaml")]
         ),

@@ -17,7 +17,7 @@ struct APIMiddleware<Context: RequestContext>: RouterMiddleware {
         // Shared books and invite links are public by link; book edits check the
         // owner's own token, invite uploads check each person's own token, and
         // both have their own size and count limits.
-        if path != "/healthz" && !path.hasPrefix("/b/") && !path.hasPrefix("/j/") {
+        if path != "/healthz" && !Self.isPublic(path) {
             let authorization = request.headers[.authorization]
             guard security.acceptsAuthorization(authorization) else {
                 throw APIError.unauthorized()
@@ -47,6 +47,11 @@ struct APIMiddleware<Context: RequestContext>: RouterMiddleware {
             context.logger.error("Request failed", metadata: ["error": "\(error)", "path": "\(path)"])
             throw APIError.internalError("Something went wrong.")
         }
+    }
+
+    /// Pages anyone with the link can open: books, invites, unsubscribe links.
+    static func isPublic(_ path: String) -> Bool {
+        ["/b/", "/j/", "/u/"].contains { path.hasPrefix($0) }
     }
 
     private func corsHeaders(_ origin: String) -> HTTPFields {

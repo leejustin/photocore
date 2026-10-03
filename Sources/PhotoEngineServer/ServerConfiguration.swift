@@ -18,8 +18,16 @@ public struct ServerConfiguration: Sendable {
     public var siteURL: String?
     /// Bound on the App Store, where "Make one for your trip" sends iPhone visitors.
     public var appStoreURL: String?
+    /// The public address of this server (`https://bound.example`), for links in
+    /// emails, checkout returns and print files. Nil uses the loopback address.
+    public var publicURL: String?
+    /// Resend API key and sender for email; without both, emails go to an outbox folder.
+    public var resendAPIKey: String?
+    public var mailFrom: String?
+    /// Lets the checks move a trip back in time. Never set in production.
+    public var allowClockShift: Bool
 
-    public init(port: Int, security: WorkerSecurity, catalogURL: URL, mediaCacheDirectory: URL, tokenWasGenerated: Bool, bundleID: String = "com.photocore.trip", storeKitTestRoot: URL? = nil, allowXcodePurchases: Bool = false, siteURL: String? = nil, appStoreURL: String? = nil) {
+    public init(port: Int, security: WorkerSecurity, catalogURL: URL, mediaCacheDirectory: URL, tokenWasGenerated: Bool, bundleID: String = "com.photocore.trip", storeKitTestRoot: URL? = nil, allowXcodePurchases: Bool = false, siteURL: String? = nil, appStoreURL: String? = nil, publicURL: String? = nil, resendAPIKey: String? = nil, mailFrom: String? = nil, allowClockShift: Bool = false) {
         self.port = port
         self.security = security
         self.catalogURL = catalogURL
@@ -30,6 +38,15 @@ public struct ServerConfiguration: Sendable {
         self.allowXcodePurchases = allowXcodePurchases
         self.siteURL = siteURL
         self.appStoreURL = appStoreURL
+        self.publicURL = publicURL.map { $0.hasSuffix("/") ? String($0.dropLast()) : $0 }
+        self.resendAPIKey = resendAPIKey
+        self.mailFrom = mailFrom
+        self.allowClockShift = allowClockShift
+    }
+
+    /// The base for absolute links, with no trailing slash.
+    public func publicBase(port: Int?) -> String {
+        publicURL ?? "http://127.0.0.1:\(port ?? self.port)"
     }
 
     public static func fromEnvironment(_ environment: [String: String] = ProcessInfo.processInfo.environment) throws -> ServerConfiguration {
@@ -56,7 +73,10 @@ public struct ServerConfiguration: Sendable {
             storeKitTestRoot: environment["PHOTOCORE_STOREKIT_TEST_ROOT"].map { URL(fileURLWithPath: $0) },
             allowXcodePurchases: environment["PHOTOCORE_STOREKIT_XCODE"] == "1",
             siteURL: environment["PHOTOCORE_SITE_URL"],
-            appStoreURL: environment["PHOTOCORE_APP_STORE_URL"]
+            appStoreURL: environment["PHOTOCORE_APP_STORE_URL"],
+            publicURL: environment["PHOTOCORE_PUBLIC_URL"],
+            resendAPIKey: environment["RESEND_API_KEY"],
+            mailFrom: environment["PHOTOCORE_MAIL_FROM"]
         )
     }
 
