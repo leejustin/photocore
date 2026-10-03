@@ -20,13 +20,14 @@ enum Pages {
         """
     }
 
-    static func response(_ html: String, status: HTTPResponse.Status = .ok) -> Response {
+    static func response(_ html: String, status: HTTPResponse.Status = .ok, allowTurnstile: Bool = false) -> Response {
         var headers = HTTPFields()
         headers[.contentType] = "text/html; charset=utf-8"
         headers[.cacheControl] = "no-store"
         headers[HTTPField.Name("X-Content-Type-Options")!] = "nosniff"
         headers[HTTPField.Name("Referrer-Policy")!] = "no-referrer"
-        headers[HTTPField.Name("Content-Security-Policy")!] = "default-src 'self'; img-src 'self' data: blob:; style-src 'unsafe-inline'; script-src 'unsafe-inline'; connect-src 'self'; form-action 'self'; frame-ancestors 'none'"
+        let turnstile = allowTurnstile ? " https://challenges.cloudflare.com" : ""
+        headers[HTTPField.Name("Content-Security-Policy")!] = "default-src 'self'; img-src 'self' data: blob:; style-src 'unsafe-inline'; script-src 'unsafe-inline'\(turnstile); frame-src\(turnstile.isEmpty ? " 'none'" : turnstile); connect-src 'self'; form-action 'self'; frame-ancestors 'none'"
         return APIJSON.bytes(Data(html.utf8), status: status, headers: headers)
     }
 

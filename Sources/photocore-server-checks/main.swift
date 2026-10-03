@@ -84,6 +84,7 @@ struct ServerChecks {
             try await exerciseLifecycle(port: port, token: token, source: source, outbox: output.appendingPathComponent("trips/outbox"))
             try await exerciseOffers(port: port, token: token, source: source)
             try await exerciseNightly(port: port, token: token, source: source, mock: mockLog, outbox: output.appendingPathComponent("trips/outbox"))
+            try await exerciseWeb(port: port, token: token, source: source, mock: mockLog, outbox: output.appendingPathComponent("trips/outbox"))
             try await exercisePayments(port: port, devPort: devPort, token: token, source: source, mock: mockLog, outbox: output.appendingPathComponent("trips/outbox"))
             group.cancelAll()
         }

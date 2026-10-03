@@ -56,6 +56,8 @@ struct TripRecord: Codable, Sendable {
     var lastNightly: Date?
     /// The owner's iPhones (APNs tokens), for "Day 2 is in".
     var ownerDevices: [String]?
+    /// Made on the web: the owner's photos weren't culled on a phone.
+    var webOwner: Bool?
 
     var inviteOpen: Bool { inviteCode != nil && inviteClosed != true }
     var currentPlan: Plan { plan ?? .free }
@@ -746,10 +748,10 @@ actor TripStore {
     }
 
     /// Stores an uploaded photo under a safe name. Returns the stored file.
-    func store(photo data: Data, name: String, id: String, guest: Bool) throws -> URL {
+    func store(photo data: Data, name: String, id: String, guest: Bool, limit: Int? = nil) throws -> URL {
         let folder = guest ? guestFolder(id) : ownerFolder(id)
         let count = (try? FileManager.default.contentsOfDirectory(atPath: folder.path).count) ?? 0
-        if count >= (guest ? TripLimits.guestPhotos : TripLimits.ownerPhotos) {
+        if count >= (limit ?? (guest ? TripLimits.guestPhotos : TripLimits.ownerPhotos)) {
             throw APIError.conflict(guest ? "This book already has as many guest photos as it can take." : "This trip already has the most photos a finish can take.")
         }
         guard Self.isImage(data) else { throw APIError.invalid("Upload a JPEG or HEIC photo.") }

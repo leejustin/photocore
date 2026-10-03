@@ -58,10 +58,14 @@ public struct ServerConfiguration: Sendable {
     /// Another APNs address; only for the checks' stand-in.
     public var apnsBase: String?
 
+    /// Cloudflare Turnstile on the page that starts a web book.
+    public var turnstileSiteKey: String?
+    public var turnstileSecret: String?
+
     /// The App Clip's bundle id.
     public var appClipBundleID: String { bundleID + ".Clip" }
 
-    public init(port: Int, security: WorkerSecurity, catalogURL: URL, mediaCacheDirectory: URL, tokenWasGenerated: Bool, bundleID: String = "com.photocore.trip", storeKitTestRoot: URL? = nil, allowXcodePurchases: Bool = false, siteURL: String? = nil, appStoreURL: String? = nil, publicURL: String? = nil, resendAPIKey: String? = nil, mailFrom: String? = nil, allowClockShift: Bool = false, stripeSecretKey: String? = nil, stripeWebhookSecret: String? = nil, stripeAPIBase: String? = nil, devCheckout: Bool = false, luluClientKey: String? = nil, luluClientSecret: String? = nil, luluAPIBase: String? = nil, luluSoftcoverPackage: String? = nil, luluHardcoverPackage: String? = nil, luluShippingLevel: String? = nil, printContactEmail: String? = nil, appleTeamID: String? = nil, appStoreID: String? = nil, apnsKeyFile: String? = nil, apnsKeyID: String? = nil, apnsSandbox: Bool = false, apnsBase: String? = nil) {
+    public init(port: Int, security: WorkerSecurity, catalogURL: URL, mediaCacheDirectory: URL, tokenWasGenerated: Bool, bundleID: String = "com.photocore.trip", storeKitTestRoot: URL? = nil, allowXcodePurchases: Bool = false, siteURL: String? = nil, appStoreURL: String? = nil, publicURL: String? = nil, resendAPIKey: String? = nil, mailFrom: String? = nil, allowClockShift: Bool = false, stripeSecretKey: String? = nil, stripeWebhookSecret: String? = nil, stripeAPIBase: String? = nil, devCheckout: Bool = false, luluClientKey: String? = nil, luluClientSecret: String? = nil, luluAPIBase: String? = nil, luluSoftcoverPackage: String? = nil, luluHardcoverPackage: String? = nil, luluShippingLevel: String? = nil, printContactEmail: String? = nil, appleTeamID: String? = nil, appStoreID: String? = nil, apnsKeyFile: String? = nil, apnsKeyID: String? = nil, apnsSandbox: Bool = false, apnsBase: String? = nil, turnstileSiteKey: String? = nil, turnstileSecret: String? = nil) {
         self.port = port
         self.security = security
         self.catalogURL = catalogURL
@@ -93,6 +97,8 @@ public struct ServerConfiguration: Sendable {
         self.apnsKeyID = apnsKeyID
         self.apnsSandbox = apnsSandbox
         self.apnsBase = apnsBase
+        self.turnstileSiteKey = turnstileSiteKey
+        self.turnstileSecret = turnstileSecret
     }
 
     /// The base for absolute links, with no trailing slash.
@@ -145,7 +151,9 @@ public struct ServerConfiguration: Sendable {
             appStoreID: environment["PHOTOCORE_APP_STORE_ID"],
             apnsKeyFile: environment["APNS_KEY_FILE"],
             apnsKeyID: environment["APNS_KEY_ID"],
-            apnsSandbox: environment["APNS_SANDBOX"] == "1"
+            apnsSandbox: environment["APNS_SANDBOX"] == "1",
+            turnstileSiteKey: environment["TURNSTILE_SITE_KEY"],
+            turnstileSecret: environment["TURNSTILE_SECRET"]
         )
     }
 

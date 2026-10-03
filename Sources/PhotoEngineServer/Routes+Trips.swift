@@ -403,6 +403,7 @@ func registerTripRoutes(
                 writer: writer,
                 options: pageOptions(record),
                 lookUpPlaces: ProcessInfo.processInfo.environment["PHOTOCORE_OFFLINE"] != "1",
+                ownerAlreadyCulled: record.webOwner != true,
                 instagram: limits.instagram
             ) { stage, done, total in
                 Task { await jobs.noteProgress(id: job.id, stage: "finish", completed: done, total: total, message: stage) }
@@ -479,6 +480,12 @@ func registerTripRoutes(
         return started
     }
     Task { await lifecycle.add("nightly", nightly) }
+
+    registerWebOwnerRoutes(
+        router, env: env, trips: trips, lifecycle: lifecycle, address: address, canBuy: payments != nil,
+        startFinish: { try await startFinish($0) },
+        checkout: { kind, record, returnTo in try await checkout(kind, record: record, returnTo: returnTo) }
+    )
 
     /// The upsell preview: one small photo in, the paid finish out. Cheap enough
     /// to run on thumbnails before anyone pays.

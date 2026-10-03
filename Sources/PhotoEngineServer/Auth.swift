@@ -50,9 +50,10 @@ struct APIMiddleware<Context: RequestContext>: RouterMiddleware {
     }
 
     /// Pages anyone with the link can open: books, invites, unsubscribe links,
-    /// the test checkout. Stripe's webhook checks its own signature.
+    /// the test checkout, starting a book on the web. Stripe's webhook and the
+    /// web owner's routes check their own signature or token.
     static func isPublic(_ path: String) -> Bool {
-        ["/b/", "/j/", "/u/", "/p/", "/checkout/", "/stripe/", "/.well-known/"].contains { path.hasPrefix($0) }
+        path == "/new" || ["/b/", "/j/", "/u/", "/p/", "/w/", "/checkout/", "/stripe/", "/.well-known/"].contains { path.hasPrefix($0) }
     }
 
     private func corsHeaders(_ origin: String) -> HTTPFields {

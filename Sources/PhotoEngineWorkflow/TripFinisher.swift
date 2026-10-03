@@ -75,6 +75,8 @@ public enum TripFinisher {
         options: BookRenderer.Options,
         lookUpPlaces: Bool = true,
         guestKeepPercent: Double = 30,
+        ownerAlreadyCulled: Bool = true,
+        ownerKeepPercent: Double = 40,
         instagram: Bool = true,
         progress: @escaping @Sendable (String, Int, Int) -> Void = { _, _, _ in }
     ) async throws -> Outcome {
@@ -90,8 +92,20 @@ public enum TripFinisher {
             ((try? fm.contentsOfDirectory(atPath: folder.path)) ?? []).filter { !$0.hasPrefix(".") }.count
         }
         var owner: [AnalyzedPhoto] = []
+        var considered: [URL] = []
         if photos(in: folders.owner) > 0 {
-            owner = try runner.run(folder: folders.owner, outputDirectory: folders.work.appendingPathComponent("owner", isDirectory: true), profile: everything, exportSpecification: ExportSpecification(preset: .compact)).analyzed
+            if ownerAlreadyCulled {
+                owner = try runner.run(folder: folders.owner, outputDirectory: folders.work.appendingPathComponent("owner", isDirectory: true), profile: everything, exportSpecification: ExportSpecification(preset: .compact)).analyzed
+            } else {
+                // Made on the web: nothing was culled on a phone, so the owner's
+                // photos get the same cull a phone would give them.
+                considered += ((try? fm.contentsOfDirectory(at: folders.owner, includingPropertiesForKeys: nil)) ?? []).filter { !$0.lastPathComponent.hasPrefix(".") }
+                var profile = ScoringProfile.default(for: .trip)
+                profile.sizingMode = .percentage
+                profile.keepPercentage = ownerKeepPercent
+                let result = try runner.run(folder: folders.owner, outputDirectory: folders.work.appendingPathComponent("owner", isDirectory: true), profile: profile, exportSpecification: ExportSpecification(preset: .compact))
+                owner = KeeperSelection(result: result).ordered(in: result)
+            }
         }
         var keepers = owner
         var credits: [PhotoID: String] = [:]
@@ -101,7 +115,6 @@ public enum TripFinisher {
         var picks: [GroupCuration.Candidate] = []
         var byID: [PhotoID: AnalyzedPhoto] = [:]
         let people = folders.contributors.filter { photos(in: $0.folder) > 0 }
-        var considered: [URL] = []
         for person in people {
             considered += ((try? fm.contentsOfDirectory(at: person.folder, includingPropertiesForKeys: nil)) ?? []).filter { !$0.lastPathComponent.hasPrefix(".") }
         }
